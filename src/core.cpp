@@ -6,6 +6,15 @@
 #include <iostream>
 
 namespace tundradb {
+    arrow::Result<std::shared_ptr<arrow::Array> > create_int64(const int64_t value) {
+        arrow::Int64Builder int64_builder;
+        ARROW_RETURN_NOT_OK(int64_builder.Reserve(1));
+        ARROW_RETURN_NOT_OK(int64_builder.Append(value));
+        std::shared_ptr<arrow::Array> int64_array;
+        ARROW_RETURN_NOT_OK(int64_builder.Finish(&int64_array));
+        return int64_array;
+    }
+
     arrow::Result<bool> demo_single_node() {
         std::cout << "demo_single_node:\n" << std::endl;
         arrow::Int64Builder int64_builder;
@@ -29,5 +38,21 @@ namespace tundradb {
         auto int64_field = node.get_field("int64").ValueOrDie();
         std::cout << "int64=" << std::static_pointer_cast<arrow::Int64Array>(int64_field)->Value(0) << std::endl;
         return {true};
+    }
+
+    arrow::Result<bool> demo_batch_update() {
+        int nodes_count = 2;
+        std::vector<std::shared_ptr<tundradb::Node> > nodes;
+        nodes.reserve(nodes_count);
+
+        for (int i = 0; i < nodes_count; i++) {
+            auto node = std::make_shared<Node>(i);
+            node->add_field("id", create_int64(i).ValueOrDie());
+            node->add_field("int64", create_int64(0).ValueOrDie());
+            nodes.emplace_back(node);
+        }
+
+        auto table = create_table(nodes, {"id", "int64"}).ValueOrDie();
+        print_table(table);
     }
 }

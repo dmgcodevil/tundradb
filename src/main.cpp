@@ -6,6 +6,7 @@
 
 
 int main() {
-    tundradb::demo_single_node();
+    // tundradb::demo_single_node();
+    tundradb::demo_batch_update();
     return 0;
 }
