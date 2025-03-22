@@ -102,7 +102,22 @@ namespace tundradb {
 
         std::cout << "Table Schema:" << std::endl;
         std::cout << table->schema()->ToString() << std::endl;
-        std::cout << "Table Data (" << table->num_rows() << " rows):" << std::endl;
+        
+        // Print chunk information
+        std::cout << "\nChunk Information:" << std::endl;
+        for (int j = 0; j < table->num_columns(); ++j) {
+            auto column = table->column(j);
+            std::cout << "Column '" << table->schema()->field(j)->name() << "': "
+                     << column->num_chunks() << " chunks [ ";
+            
+            for (int c = 0; c < column->num_chunks(); ++c) {
+                std::cout << column->chunk(c)->length();
+                if (c < column->num_chunks() - 1) std::cout << ", ";
+            }
+            std::cout << " ]" << std::endl;
+        }
+
+        std::cout << "\nTable Data (" << table->num_rows() << " rows):" << std::endl;
 
         try {
             for (int64_t i = 0; i < table->num_rows(); ++i) {
