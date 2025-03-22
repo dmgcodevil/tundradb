@@ -55,7 +55,9 @@ namespace tundradb {
     class Node {
     public:
         int64_t id;
-        explicit Node(const int64_t id) : id(id) {}
+
+        explicit Node(const int64_t id) : id(id) {
+        }
 
         ~Node() = default;
 
@@ -63,7 +65,7 @@ namespace tundradb {
             data.insert(std::make_pair(field_name, value));
         }
 
-        arrow::Result<std::shared_ptr<arrow::Array>> get_field(const std::string &field_name) const {
+        arrow::Result<std::shared_ptr<arrow::Array> > get_field(const std::string &field_name) const {
             auto it = data.find(field_name);
             if (it == data.end()) {
                 return arrow::Status::KeyError("Field not found: ", field_name);
@@ -87,6 +89,8 @@ namespace tundradb {
     private:
         std::pmr::unordered_map<std::string, std::shared_ptr<arrow::Array>> data;
     };
+
+    arrow::Result<bool> demo_single_node();
 }
 
 #endif //CORE_HPP
