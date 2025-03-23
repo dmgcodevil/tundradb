@@ -67,15 +67,15 @@ namespace tundradb {
         for (int i = 0; i < nodes_count; i++) {
             std::unordered_map<std::string, std::shared_ptr<arrow::Array>> fields =
             {
-                {"name", Database::create_str_array("*").ValueOrDie()},
-                {"count",  Database::create_int64_array(0).ValueOrDie()}
+                {"name", create_str_array("*").ValueOrDie()},
+                {"count", create_int64_array(0).ValueOrDie()}
             };
          nodes.push_back(database.create_node("test-schema", fields).ValueOrDie());
         }
         std::vector<std::string> count_field_name = {"count"};
         std::vector<std::string> name_field_name = {"name"};
-        auto update_count = std::make_shared<tundradb::SetOperation>(0,count_field_name, Database::create_int64_array(1).ValueOrDie());
-        auto update_name = std::make_shared<tundradb::SetOperation> (0, name_field_name, Database::create_str_array("tundra").ValueOrDie());
+        auto update_count = std::make_shared<tundradb::SetOperation>(0,count_field_name, create_int64_array(1).ValueOrDie());
+        auto update_name = std::make_shared<tundradb::SetOperation> (0, name_field_name, create_str_array("tundra").ValueOrDie());
 
         std::vector<std::shared_ptr<tundradb::BaseOperation>> updates = {update_count, update_name};
 

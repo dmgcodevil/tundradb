@@ -17,7 +17,50 @@
 #include <arrow/table.h>
 
 namespace tundradb {
+    class Database;
     class Node;
+
+    static arrow::Result<std::shared_ptr<arrow::Array> > create_int64_array(const int64_t value) {
+        arrow::Int64Builder int64_builder;
+        ARROW_RETURN_NOT_OK(int64_builder.Reserve(1));
+        ARROW_RETURN_NOT_OK(int64_builder.Append(value));
+        std::shared_ptr<arrow::Array> int64_array;
+        ARROW_RETURN_NOT_OK(int64_builder.Finish(&int64_array));
+        return int64_array;
+    }
+
+    static arrow::Result<std::shared_ptr<arrow::Array> > create_str_array(const std::string &value) {
+        arrow::StringBuilder builder;
+        ARROW_RETURN_NOT_OK(builder.Append(value));
+        std::shared_ptr<arrow::Array> string_arr;
+        ARROW_RETURN_NOT_OK(builder.Finish(&string_arr));
+        return string_arr;
+    }
+
+
+    static arrow::Result<std::shared_ptr<arrow::Array> > create_null_array(
+        const std::shared_ptr<arrow::DataType> &type) {
+        switch (type->id()) {
+            // Use type->id() which returns Type::type enum
+            case arrow::Type::INT64: {
+                // Use blocks {} to scope variables
+                arrow::Int64Builder builder;
+                ARROW_RETURN_NOT_OK(builder.AppendNull());
+                std::shared_ptr<arrow::Array> array;
+                ARROW_RETURN_NOT_OK(builder.Finish(&array));
+                return array;
+            }
+            case arrow::Type::STRING: {
+                arrow::StringBuilder builder;
+                ARROW_RETURN_NOT_OK(builder.AppendNull());
+                std::shared_ptr<arrow::Array> array;
+                ARROW_RETURN_NOT_OK(builder.Finish(&array));
+                return array;
+            }
+            default:
+                return arrow::Status::NotImplemented("Unsupported type: ", type->ToString());
+        }
+    }
 
     enum OperationType {
         SET
@@ -71,7 +114,9 @@ namespace tundradb {
             return value->type_id() == arrow::Type::STRING;
         }
         std::shared_ptr<arrow::Array> get_replacement_array() const override {
-            return value;
+            return value; // copying pointer is 2x faster than creating a new string array
+            //  1024590 UPS vs 2044989 UPS (copy ptr)
+            // return create_str_array(value->ToString()).ValueOrDie();
         }
     };
 
@@ -240,47 +285,7 @@ namespace tundradb {
             return names;
         }
 
-        static arrow::Result<std::shared_ptr<arrow::Array> > create_int64_array(const int64_t value) {
-            arrow::Int64Builder int64_builder;
-            ARROW_RETURN_NOT_OK(int64_builder.Reserve(1));
-            ARROW_RETURN_NOT_OK(int64_builder.Append(value));
-            std::shared_ptr<arrow::Array> int64_array;
-            ARROW_RETURN_NOT_OK(int64_builder.Finish(&int64_array));
-            return int64_array;
-        }
 
-        static arrow::Result<std::shared_ptr<arrow::Array> > create_str_array(const std::string &value) {
-            arrow::StringBuilder builder;
-            ARROW_RETURN_NOT_OK(builder.Append(value));
-            std::shared_ptr<arrow::Array> string_arr;
-            ARROW_RETURN_NOT_OK(builder.Finish(&string_arr));
-            return string_arr;
-        }
-
-
-        static arrow::Result<std::shared_ptr<arrow::Array> > create_null_array(
-            const std::shared_ptr<arrow::DataType> &type) {
-            switch (type->id()) {
-                // Use type->id() which returns Type::type enum
-                case arrow::Type::INT64: {
-                    // Use blocks {} to scope variables
-                    arrow::Int64Builder builder;
-                    ARROW_RETURN_NOT_OK(builder.AppendNull());
-                    std::shared_ptr<arrow::Array> array;
-                    ARROW_RETURN_NOT_OK(builder.Finish(&array));
-                    return array;
-                }
-                case arrow::Type::STRING: {
-                    arrow::StringBuilder builder;
-                    ARROW_RETURN_NOT_OK(builder.AppendNull());
-                    std::shared_ptr<arrow::Array> array;
-                    ARROW_RETURN_NOT_OK(builder.Finish(&array));
-                    return array;
-                }
-                default:
-                    return arrow::Status::NotImplemented("Unsupported type: ", type->ToString());
-            }
-        }
 
         arrow::Result<std::shared_ptr<Node> > create_node(const std::string &schema_name,
                                                           std::unordered_map<std::string, std::shared_ptr<
