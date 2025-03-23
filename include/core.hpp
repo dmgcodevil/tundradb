@@ -116,6 +116,33 @@ namespace tundradb {
         {
         }
 
+        arrow::Result<std::shared_ptr<arrow::Schema> > prepend_id_field(
+            const std::shared_ptr<arrow::Schema> &schema) {
+            // Create ID field (always non-nullable)
+            auto id_field = arrow::field("id", arrow::int64(), false);
+
+            // Get existing fields
+            auto fields = schema->fields();
+
+            // Check if ID field already exists
+            if (schema->GetFieldIndex("id") != -1) {
+                return arrow::Status::Invalid("Schema already contains 'id' field");
+            }
+
+            // Create new vector and reserve space
+            std::vector<std::shared_ptr<arrow::Field> > new_fields;
+            new_fields.reserve(fields.size() + 1);
+
+            // Add ID field first
+            new_fields.push_back(id_field);
+
+            // Add existing fields
+            new_fields.insert(new_fields.end(), fields.begin(), fields.end());
+
+            // Create new schema
+            return arrow::schema(new_fields);
+        }
+
         // Register a new schema
         arrow::Result<bool> register_schema(const std::string &name, const std::shared_ptr<arrow::Schema> &schema) {
             if (name.empty()) {
@@ -125,7 +152,11 @@ namespace tundradb {
                 return arrow::Status::Invalid("Schema cannot be null");
             }
 
-            auto [it, inserted] = schema_registry.try_emplace(name, schema);
+            if (schema->GetFieldIndex("id") != -1) {
+                return arrow::Status::Invalid("'id' field name is reserved");
+            }
+            ARROW_ASSIGN_OR_RAISE(auto final_schema, prepend_id_field(schema));
+            auto [it, inserted] = schema_registry.try_emplace(name, final_schema);
             if (!inserted) {
                 return arrow::Status::AlreadyExists("Schema '", name, "' already exists");
             }
@@ -186,7 +217,7 @@ namespace tundradb {
             return names;
         }
 
-        arrow::Result<std::shared_ptr<arrow::Array> > create_int64(const int64_t value) {
+        static arrow::Result<std::shared_ptr<arrow::Array> > create_int64_array(const int64_t value) {
             arrow::Int64Builder int64_builder;
             ARROW_RETURN_NOT_OK(int64_builder.Reserve(1));
             ARROW_RETURN_NOT_OK(int64_builder.Append(value));
@@ -195,9 +226,17 @@ namespace tundradb {
             return int64_array;
         }
 
+        static arrow::Result<std::shared_ptr<arrow::Array> > create_str_array(const std::string &value) {
+            arrow::StringBuilder builder;
+            ARROW_RETURN_NOT_OK(builder.Append(value));
+            std::shared_ptr<arrow::Array> string_arr;
+            ARROW_RETURN_NOT_OK(builder.Finish(&string_arr));
+            return string_arr;
+        }
 
-        arrow::Result<std::shared_ptr<arrow::Array> > create_null_array(
-            const std::shared_ptr<arrow::DataType> &type) const {
+
+        static arrow::Result<std::shared_ptr<arrow::Array> > create_null_array(
+            const std::shared_ptr<arrow::DataType> &type)  {
             switch (type->id()) {
                 // Use type->id() which returns Type::type enum
                 case arrow::Type::INT64: {
@@ -220,8 +259,9 @@ namespace tundradb {
             }
         }
 
-        arrow::Result<std::shared_ptr<Node>> create_node(const std::string &schema_name,
-                                        std::unordered_map<std::string, std::shared_ptr<arrow::Array> > &data) {
+        arrow::Result<std::shared_ptr<Node> > create_node(const std::string &schema_name,
+                                                          std::unordered_map<std::string, std::shared_ptr<
+                                                              arrow::Array> > &data) {
             if (schema_name.empty()) {
                 return arrow::Status::Invalid("Schema name cannot be empty");
             }
@@ -231,7 +271,7 @@ namespace tundradb {
             }
             std::unordered_map<std::string, std::shared_ptr<arrow::Array> > normalized_data;
             for (auto field: schema->fields()) {
-                if (!field->nullable() && (!data.contains(field->name()) ||
+                if (field->name() != "id" && !field->nullable() && (!data.contains(field->name()) ||
                                            data.find(field->name())->second->IsNull(0))) {
                     return arrow::Status::Invalid("Field '", field->name(), "' is required");
                 }
@@ -248,12 +288,23 @@ namespace tundradb {
                 }
             }
             auto id = id_counter.fetch_add(1);
-            normalized_data["id"] = create_int64(id).ValueOrDie();
+            normalized_data["id"] = create_int64_array(id).ValueOrDie();
             auto node = std::make_shared<Node>(id, schema_name, normalized_data);
             nodes[schema_name].insert(std::make_pair(id, node));
             return node;
         }
+
+        arrow::Result<std::vector<std::shared_ptr<Node> > > get_nodes(const std::string &schema_name) {
+            if (!has_schema(schema_name)) {
+                return arrow::Status::Invalid("Schema '", schema_name, "' not found");
+            }
+            std::vector<std::shared_ptr<Node> > result;
+            std::ranges::transform(nodes[schema_name], std::back_inserter(result),
+                                   [](const auto &pair) { return pair.second; });
+            return result;
+        }
     };
+
 
     // Helper function to print a single row
     inline void print_row(const std::shared_ptr<arrow::Table> &table, int64_t row_index) {
@@ -375,11 +426,11 @@ namespace tundradb {
     inline arrow::Result<std::shared_ptr<arrow::Table> > create_table(
         const std::shared_ptr<arrow::Schema> &schema,
         const std::vector<std::shared_ptr<Node> > &nodes,
-        const std::vector<std::string> &field_names,
         int64_t chunk_size = 0) {
         if (nodes.empty()) {
             return arrow::Status::Invalid("Empty nodes list");
         }
+        auto field_names = schema->field_names();
         if (field_names.empty()) {
             return arrow::Status::Invalid("Empty field names list");
         }

@@ -55,30 +55,31 @@ namespace tundradb {
     arrow::Result<bool> demo_batch_update() {
         int nodes_count = 1000000;
         int num_threads = 8;  // Number of threads to use
+        Database database;
 
-        std::vector<std::shared_ptr<tundradb::Node>> nodes;
-        nodes.reserve(nodes_count);
-
-        auto  id_field = arrow::field("id", arrow::int64());
-        auto int64_field = arrow::field("name", arrow::int64());
+        auto name_field = arrow::field("name", arrow::utf8());
+        auto count_field = arrow::field("count", arrow::int64());
 
         // Create schema
-        auto schema = arrow::schema({id_field, int64_field});
+        auto schema = arrow::schema({name_field, count_field});
+        ARROW_RETURN_NOT_OK(database.register_schema("test-schema", schema));
+        std::vector<std::shared_ptr<Node>> nodes;
+        nodes.reserve(nodes_count);
 
+        // creaate nodes with initial data
         for (int i = 0; i < nodes_count; i++) {
             std::unordered_map<std::string, std::shared_ptr<arrow::Array>> fields =
             {
-                {"id",  create_int64(i).ValueOrDie()},
-                {"int64",  create_int64(0).ValueOrDie()}
+                {"name", Database::create_str_array("*").ValueOrDie()},
+                {"count",  create_int64(0).ValueOrDie()}
             };
-            auto node = std::make_shared<Node>(i, "test-schema", fields);
-            nodes.emplace_back(node);
+         nodes.push_back(database.create_node("test-schema", fields).ValueOrDie());
         }
-        tundradb::SetOperation operation(0, {"int64"}, create_int64(1).ValueOrDie());
+        tundradb::SetOperation update_count(0, {"count"}, create_int64(1).ValueOrDie());
 
         // Measure time
         auto start = std::chrono::high_resolution_clock::now();
-        
+
         // Calculate batch size for each thread
         size_t batch_size = nodes_count / num_threads;
         std::vector<std::future<void>> futures;
@@ -87,14 +88,14 @@ namespace tundradb {
         for (int t = 0; t < num_threads; ++t) {
             size_t start_idx = t * batch_size;
             size_t end_idx = (t == num_threads - 1) ? nodes_count : (t + 1) * batch_size;
-            
+
             futures.push_back(
                 std::async(std::launch::async,
                           update_batch,
                           std::ref(nodes),
                           start_idx,
                           end_idx,
-                          std::ref(operation))
+                          std::ref(update_count))
             );
         }
 
@@ -117,7 +118,7 @@ namespace tundradb {
         std::cout << "Updates per second: " << static_cast<int64_t>(ups) << " UPS" << std::endl;
         std::cout << "Updates per second per thread: " << static_cast<int64_t>(ups/num_threads) << " UPS/thread" << std::endl;
 
-        auto table = create_table(schema, nodes, {"id", "int64"}, 10000).ValueOrDie();
+        auto table = create_table(database.get_schema("test-schema").ValueOrDie(), nodes, 10000).ValueOrDie();
         print_table(table);
         
         return true;
