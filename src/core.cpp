@@ -59,10 +59,17 @@ namespace tundradb {
         std::vector<std::shared_ptr<tundradb::Node>> nodes;
         nodes.reserve(nodes_count);
 
+        auto  id_field = arrow::field("id", arrow::int64());
+        auto int64_field = arrow::field("name", arrow::int64());
+
+        // Create schema
+        auto schema = arrow::schema({id_field, int64_field});
+
         for (int i = 0; i < nodes_count; i++) {
-            auto node = std::make_shared<Node>(i);
-            node->add_field("id", create_int64(i).ValueOrDie());
-            node->add_field("int64", create_int64(0).ValueOrDie());
+            auto node = std::make_shared<Node>(i, "test-schema", {
+                {"id",  create_int64(i).ValueOrDie()},
+                {"int64",  create_int64(0).ValueOrDie()}
+            });
             nodes.emplace_back(node);
         }
         tundradb::SetOperation operation(0, {"int64"}, create_int64(1).ValueOrDie());
@@ -108,7 +115,7 @@ namespace tundradb {
         std::cout << "Updates per second: " << static_cast<int64_t>(ups) << " UPS" << std::endl;
         std::cout << "Updates per second per thread: " << static_cast<int64_t>(ups/num_threads) << " UPS/thread" << std::endl;
 
-        auto table = create_table(nodes, {"id", "int64"}, 10000).ValueOrDie();
+        auto table = create_table(schema, nodes, {"id", "int64"}, 10000).ValueOrDie();
         print_table(table);
         
         return true;

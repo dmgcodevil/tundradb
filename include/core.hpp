@@ -17,6 +17,8 @@
 #include <arrow/table.h>
 
 namespace tundradb {
+    class Node;
+
     // Base operation class
     struct BaseOperation {
         int64_t node_id; // The node identifier to apply the operation to
@@ -58,8 +60,11 @@ namespace tundradb {
     class Node {
     public:
         int64_t id;
+        std::string schema_name;
 
-        explicit Node(const int64_t id) : id(id) {
+        explicit Node(const int64_t id, std::string schema_name,
+            std::pmr::unordered_map<std::string, std::shared_ptr<arrow::Array>> data) :
+        id(id), schema_name(std::move(schema_name)), data(std::move(data)) {
         }
 
         ~Node() = default;
@@ -90,9 +95,140 @@ namespace tundradb {
         }
 
     private:
-        std::pmr::unordered_map<std::string, std::shared_ptr<arrow::Array> > data;
+        std::pmr::unordered_map<std::string, std::shared_ptr<arrow::Array>> data;
     };
 
+
+    class Database {
+    public:
+        explicit Database(size_t nodes_buffer_size = 1024 * 1024 * 1024) // 1GB default
+            : nodes_memory_pool(nodes_buffer_size) // Fixed size pool for nodes
+              , nodes(&nodes_memory_pool), id_counter(0) // Use the pool for nodes map
+        {}
+
+        // Register a new schema
+        arrow::Result<bool> register_schema(const std::string &name, const std::shared_ptr<arrow::Schema> &schema) {
+            if (name.empty()) {
+                return arrow::Status::Invalid("Schema name cannot be empty");
+            }
+            if (!schema) {
+                return arrow::Status::Invalid("Schema cannot be null");
+            }
+
+            auto [it, inserted] = schema_registry.try_emplace(name, schema);
+            if (!inserted) {
+                return arrow::Status::AlreadyExists("Schema '", name, "' already exists");
+            }
+            return true;
+        }
+
+        // Check if a schema exists
+        bool has_schema(const std::string &name) const {
+            return schema_registry.contains(name);
+        }
+
+        // Get a schema by name
+        arrow::Result<std::shared_ptr<arrow::Schema> > get_schema(const std::string &name) const {
+            auto it = schema_registry.find(name);
+            if (it == schema_registry.end()) {
+                return arrow::Status::KeyError("Schema '", name, "' not found");
+            }
+            return it->second;
+        }
+
+        // Update existing schema
+        arrow::Result<bool> update_schema(const std::string &name, const std::shared_ptr<arrow::Schema> &schema) {
+            if (name.empty()) {
+                return arrow::Status::Invalid("Schema name cannot be empty");
+            }
+            if (!schema) {
+                return arrow::Status::Invalid("Schema cannot be null");
+            }
+
+            auto it = schema_registry.find(name);
+            if (it == schema_registry.end()) {
+                return arrow::Status::KeyError("Schema '", name, "' not found");
+            }
+
+            it->second = schema;
+            return true;
+        }
+
+        // Remove a schema
+        arrow::Result<bool> remove_schema(const std::string &name) {
+            if (name.empty()) {
+                return arrow::Status::Invalid("Schema name cannot be empty");
+            }
+
+            if (schema_registry.erase(name) == 0) {
+                return arrow::Status::KeyError("Schema '", name, "' not found");
+            }
+            return true;
+        }
+
+        // Get all schema names
+        [[nodiscard]] std::vector<std::string> get_schema_names() const {
+            std::vector<std::string> names;
+            names.reserve(schema_registry.size());
+            for (const auto &[name, _]: schema_registry) {
+                names.push_back(name);
+            }
+            return names;
+        }
+
+        arrow::Status<std::shared_ptr<arrow::Array> > create_null_array(const arrow::Type &t) const {
+            switch (t) {
+                case arrow::Type::INT64:
+                    arrow::Int64Builder int64_bbuilder;
+                    std::shared_ptr<arrow::Array> int64_arr;
+                    ARROW_RETURN_NOT_OK(int64_bbuilder.AppendNull());
+                    ARROW_RETURN_NOT_OK(int64_bbuilder.Finish(&int64_arr));
+                    return int64_arr;
+                case arrow::Type::STRING:
+                    arrow::StringBuilder string_builder;
+                    std::shared_ptr<arrow::Array> string_arr;
+                    ARROW_RETURN_NOT_OK(string_builder.AppendNull());
+                    ARROW_RETURN_NOT_OK(string_builder.Finish(&string_arr));
+                return string_arr;
+                default:
+                    return arrow::Status::Invalid("Cannot create null array for the given type");
+            }
+        }
+
+        arrow::Result<bool> create_node(const std::string &schema_name,
+                                        std::pmr::unordered_map<std::string, std::shared_ptr<arrow::Array> > &data) {
+            if (schema_name.empty()) {
+                return arrow::Status::Invalid("Schema name cannot be empty");
+            }
+            ARROW_ASSIGN_OR_RAISE(auto schema, get_schema(schema_name));
+            if (data.contains("id")) {
+                return arrow::Status::Invalid("'id' column is auto generated");
+            }
+            std::pmr::unordered_map<std::string, std::shared_ptr<arrow::Array> > normalized_data;
+            for (auto field: schema->fields()) {
+                if (!field->nullable() && (!data.contains(field->name()) ||
+                                           data.find(field->name())->second->IsNull(0))) {
+                    return arrow::Status::Invalid("Field '", field->name(), "' is required");
+                }
+                if (!data.contains(field->name())) {
+                    normalized_data.insert(std::make_pair(field->name(), create_null_array(field->type())));
+                }
+            }
+            auto id = id_counter.fetch_add(1);
+            auto node = std::make_shared<Node>(id, schema_name, normalized_data);
+            nodes[schema_name].insert(std::make_pair(id, node));
+
+        }
+
+    private:
+        std::unordered_map<std::string, std::shared_ptr<arrow::Schema> > schema_registry;
+        // Memory pool for nodes
+        std::pmr::monotonic_buffer_resource nodes_memory_pool;
+
+        // Nodes storage using the pool
+        std::pmr::unordered_map<std::string, std::pmr::unordered_map<int64_t, std::shared_ptr<Node>>> nodes;
+        std::atomic<int64_t> id_counter;
+    };
 
     // Helper function to print a single row
     inline void print_row(const std::shared_ptr<arrow::Table> &table, int64_t row_index) {
@@ -212,6 +348,7 @@ namespace tundradb {
 
     // Utility function to create a table from nodes
     inline arrow::Result<std::shared_ptr<arrow::Table> > create_table(
+        const std::shared_ptr<arrow::Schema> &schema,
         const std::vector<std::shared_ptr<Node> > &nodes,
         const std::vector<std::string> &field_names,
         int64_t chunk_size = 0) {
@@ -238,14 +375,6 @@ namespace tundradb {
                 field_arrays[field_idx].push_back(field_result.ValueOrDie());
             }
         }
-
-        // Create schema from the first node's fields
-        std::vector<std::shared_ptr<arrow::Field> > schema_fields;
-        for (size_t i = 0; i < field_names.size(); ++i) {
-            auto first_array = field_arrays[i][0];
-            schema_fields.push_back(arrow::field(field_names[i], first_array->type()));
-        }
-        auto schema = arrow::schema(schema_fields);
 
         // Concatenate arrays for each field
         std::vector<std::shared_ptr<arrow::ChunkedArray> > columns;
