@@ -27,7 +27,7 @@ namespace tundradb {
         std::shared_ptr<arrow::Array> int64_array;
         ARROW_RETURN_NOT_OK(int64_builder.Finish(&int64_array));
 
-        tundradb::Node node(0);
+        tundradb::Node node(0, "test-schema", {});
         node.add_field("int64", int64_array);
 
         arrow::Int64Builder int64_update_builder;
@@ -66,10 +66,12 @@ namespace tundradb {
         auto schema = arrow::schema({id_field, int64_field});
 
         for (int i = 0; i < nodes_count; i++) {
-            auto node = std::make_shared<Node>(i, "test-schema", {
+            std::unordered_map<std::string, std::shared_ptr<arrow::Array>> fields =
+            {
                 {"id",  create_int64(i).ValueOrDie()},
                 {"int64",  create_int64(0).ValueOrDie()}
-            });
+            };
+            auto node = std::make_shared<Node>(i, "test-schema", fields);
             nodes.emplace_back(node);
         }
         tundradb::SetOperation operation(0, {"int64"}, create_int64(1).ValueOrDie());

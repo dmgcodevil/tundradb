@@ -58,13 +58,16 @@ namespace tundradb {
 
 
     class Node {
+    private:
+        std::unordered_map<std::string, std::shared_ptr<arrow::Array> > data;
+
     public:
         int64_t id;
         std::string schema_name;
 
         explicit Node(const int64_t id, std::string schema_name,
-            std::pmr::unordered_map<std::string, std::shared_ptr<arrow::Array>> data) :
-        id(id), schema_name(std::move(schema_name)), data(std::move(data)) {
+                      std::unordered_map<std::string, std::shared_ptr<arrow::Array> > initial_data): id(id),
+            schema_name(std::move(schema_name)), data(std::move(initial_data)) {
         }
 
         ~Node() = default;
@@ -93,18 +96,25 @@ namespace tundradb {
 
             return update.apply(it->second, 0);
         }
-
-    private:
-        std::pmr::unordered_map<std::string, std::shared_ptr<arrow::Array>> data;
     };
 
 
     class Database {
+    private:
+        std::unordered_map<std::string, std::shared_ptr<arrow::Schema> > schema_registry;
+        // Memory pool for nodes
+        std::pmr::monotonic_buffer_resource nodes_memory_pool;
+
+        // Nodes storage using the pool
+        std::pmr::unordered_map<std::string, std::pmr::unordered_map<int64_t, std::shared_ptr<Node> > > nodes;
+        std::atomic<int64_t> id_counter;
+
     public:
         explicit Database(size_t nodes_buffer_size = 1024 * 1024 * 1024) // 1GB default
             : nodes_memory_pool(nodes_buffer_size) // Fixed size pool for nodes
               , nodes(&nodes_memory_pool), id_counter(0) // Use the pool for nodes map
-        {}
+        {
+        }
 
         // Register a new schema
         arrow::Result<bool> register_schema(const std::string &name, const std::shared_ptr<arrow::Schema> &schema) {
@@ -176,27 +186,42 @@ namespace tundradb {
             return names;
         }
 
-        arrow::Status<std::shared_ptr<arrow::Array> > create_null_array(const arrow::Type &t) const {
-            switch (t) {
-                case arrow::Type::INT64:
-                    arrow::Int64Builder int64_bbuilder;
-                    std::shared_ptr<arrow::Array> int64_arr;
-                    ARROW_RETURN_NOT_OK(int64_bbuilder.AppendNull());
-                    ARROW_RETURN_NOT_OK(int64_bbuilder.Finish(&int64_arr));
-                    return int64_arr;
-                case arrow::Type::STRING:
-                    arrow::StringBuilder string_builder;
-                    std::shared_ptr<arrow::Array> string_arr;
-                    ARROW_RETURN_NOT_OK(string_builder.AppendNull());
-                    ARROW_RETURN_NOT_OK(string_builder.Finish(&string_arr));
-                return string_arr;
+        arrow::Result<std::shared_ptr<arrow::Array> > create_int64(const int64_t value) {
+            arrow::Int64Builder int64_builder;
+            ARROW_RETURN_NOT_OK(int64_builder.Reserve(1));
+            ARROW_RETURN_NOT_OK(int64_builder.Append(value));
+            std::shared_ptr<arrow::Array> int64_array;
+            ARROW_RETURN_NOT_OK(int64_builder.Finish(&int64_array));
+            return int64_array;
+        }
+
+
+        arrow::Result<std::shared_ptr<arrow::Array> > create_null_array(
+            const std::shared_ptr<arrow::DataType> &type) const {
+            switch (type->id()) {
+                // Use type->id() which returns Type::type enum
+                case arrow::Type::INT64: {
+                    // Use blocks {} to scope variables
+                    arrow::Int64Builder builder;
+                    ARROW_RETURN_NOT_OK(builder.AppendNull());
+                    std::shared_ptr<arrow::Array> array;
+                    ARROW_RETURN_NOT_OK(builder.Finish(&array));
+                    return array;
+                }
+                case arrow::Type::STRING: {
+                    arrow::StringBuilder builder;
+                    ARROW_RETURN_NOT_OK(builder.AppendNull());
+                    std::shared_ptr<arrow::Array> array;
+                    ARROW_RETURN_NOT_OK(builder.Finish(&array));
+                    return array;
+                }
                 default:
-                    return arrow::Status::Invalid("Cannot create null array for the given type");
+                    return arrow::Status::NotImplemented("Unsupported type: ", type->ToString());
             }
         }
 
-        arrow::Result<bool> create_node(const std::string &schema_name,
-                                        std::pmr::unordered_map<std::string, std::shared_ptr<arrow::Array> > &data) {
+        arrow::Result<std::shared_ptr<Node>> create_node(const std::string &schema_name,
+                                        std::unordered_map<std::string, std::shared_ptr<arrow::Array> > &data) {
             if (schema_name.empty()) {
                 return arrow::Status::Invalid("Schema name cannot be empty");
             }
@@ -204,30 +229,30 @@ namespace tundradb {
             if (data.contains("id")) {
                 return arrow::Status::Invalid("'id' column is auto generated");
             }
-            std::pmr::unordered_map<std::string, std::shared_ptr<arrow::Array> > normalized_data;
+            std::unordered_map<std::string, std::shared_ptr<arrow::Array> > normalized_data;
             for (auto field: schema->fields()) {
                 if (!field->nullable() && (!data.contains(field->name()) ||
                                            data.find(field->name())->second->IsNull(0))) {
                     return arrow::Status::Invalid("Field '", field->name(), "' is required");
                 }
                 if (!data.contains(field->name())) {
-                    normalized_data.insert(std::make_pair(field->name(), create_null_array(field->type())));
+                    normalized_data[field->name()] = create_null_array(field->type()).ValueOrDie();
+                } else {
+                    auto array = data.find(field->name())->second;
+                    if (!array->type()->Equals(field->type())) {
+                        return arrow::Status::Invalid("Type mismatch for field '", field->name(),
+                                                      "'. Expected ", field->type()->ToString(),
+                                                      " but got ", array->type()->ToString());
+                    }
+                    normalized_data[field->name()] = array;
                 }
             }
             auto id = id_counter.fetch_add(1);
+            normalized_data["id"] = create_int64(id).ValueOrDie();
             auto node = std::make_shared<Node>(id, schema_name, normalized_data);
             nodes[schema_name].insert(std::make_pair(id, node));
-
+            return node;
         }
-
-    private:
-        std::unordered_map<std::string, std::shared_ptr<arrow::Schema> > schema_registry;
-        // Memory pool for nodes
-        std::pmr::monotonic_buffer_resource nodes_memory_pool;
-
-        // Nodes storage using the pool
-        std::pmr::unordered_map<std::string, std::pmr::unordered_map<int64_t, std::shared_ptr<Node>>> nodes;
-        std::atomic<int64_t> id_counter;
     };
 
     // Helper function to print a single row
