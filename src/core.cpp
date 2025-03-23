@@ -5,6 +5,9 @@
 #include "../include/core.hpp"
 #include <iostream>
 #include <chrono>
+#include <thread>
+#include <vector>
+#include <future>
 
 namespace tundradb {
     arrow::Result<std::shared_ptr<arrow::Array> > create_int64(const int64_t value) {
@@ -41,8 +44,18 @@ namespace tundradb {
         return {true};
     }
 
+    void update_batch(const std::vector<std::shared_ptr<Node>>& nodes, 
+                     size_t start, size_t end, 
+                     const SetOperation& operation) {
+        for (size_t i = start; i < end; ++i) {
+            nodes[i]->update(operation).ValueOrDie();
+        }
+    }
+
     arrow::Result<bool> demo_batch_update() {
         int nodes_count = 1000000;
+        int num_threads = 8;  // Number of threads to use
+
         std::vector<std::shared_ptr<tundradb::Node>> nodes;
         nodes.reserve(nodes_count);
 
@@ -57,8 +70,28 @@ namespace tundradb {
         // Measure time
         auto start = std::chrono::high_resolution_clock::now();
         
-        for (auto node: nodes) {
-            node->update(operation).ValueOrDie();
+        // Calculate batch size for each thread
+        size_t batch_size = nodes_count / num_threads;
+        std::vector<std::future<void>> futures;
+
+        // Launch threads
+        for (int t = 0; t < num_threads; ++t) {
+            size_t start_idx = t * batch_size;
+            size_t end_idx = (t == num_threads - 1) ? nodes_count : (t + 1) * batch_size;
+            
+            futures.push_back(
+                std::async(std::launch::async,
+                          update_batch,
+                          std::ref(nodes),
+                          start_idx,
+                          end_idx,
+                          std::ref(operation))
+            );
+        }
+
+        // Wait for all threads to complete
+        for (auto& future : futures) {
+            future.wait();
         }
         
         auto end = std::chrono::high_resolution_clock::now();
@@ -70,8 +103,10 @@ namespace tundradb {
         
         std::cout << "\nPerformance Metrics:" << std::endl;
         std::cout << "Total updates: " << nodes_count << std::endl;
+        std::cout << "Number of threads: " << num_threads << std::endl;
         std::cout << "Time taken: " << seconds << " seconds" << std::endl;
         std::cout << "Updates per second: " << static_cast<int64_t>(ups) << " UPS" << std::endl;
+        std::cout << "Updates per second per thread: " << static_cast<int64_t>(ups/num_threads) << " UPS/thread" << std::endl;
 
         auto table = create_table(nodes, {"id", "int64"}, 10000).ValueOrDie();
         print_table(table);
