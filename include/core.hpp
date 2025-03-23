@@ -19,10 +19,15 @@
 namespace tundradb {
     class Node;
 
+    enum OperationType {
+        SET
+    };
+
     // Base operation class
     struct BaseOperation {
         int64_t node_id; // The node identifier to apply the operation to
         std::vector<std::string> field_name; // Name of the field to update
+
 
         BaseOperation(int64_t id, const std::vector<std::string> &field)
             : node_id(id), field_name(field) {
@@ -31,6 +36,11 @@ namespace tundradb {
         virtual arrow::Result<bool> apply(
             const std::shared_ptr<arrow::Array> &array,
             int64_t row_index) const = 0;
+
+        virtual OperationType op_type() const = 0;
+
+        virtual bool should_replace_array() const { return false; }
+        virtual std::shared_ptr<arrow::Array> get_replacement_array() const { return nullptr; }
 
         virtual ~BaseOperation() = default;
     };
@@ -53,6 +63,15 @@ namespace tundradb {
                 default:
                     return arrow::Status::Invalid("not implemented");
             }
+        }
+        OperationType op_type() const override {
+            return OperationType::SET;
+        }
+        bool should_replace_array() const override {
+            return value->type_id() == arrow::Type::STRING;
+        }
+        std::shared_ptr<arrow::Array> get_replacement_array() const override {
+            return value;
         }
     };
 
@@ -84,17 +103,21 @@ namespace tundradb {
             return it->second;
         }
 
-        arrow::Result<bool> update(const BaseOperation &update) {
-            if (update.field_name.empty()) {
+        arrow::Result<bool> update(const std::shared_ptr<BaseOperation> &update) {
+            if (update->field_name.empty()) {
                 return arrow::Status::Invalid("Field name vector is empty");
             }
 
-            auto it = data.find(update.field_name[0]);
+            auto it = data.find(update->field_name[0]);
             if (it == data.end()) {
-                return arrow::Status::KeyError("Field not found: ", update.field_name[0]);
+                return arrow::Status::KeyError("Field not found: ", update->field_name[0]);
             }
+            if (update->should_replace_array()) {
+                data[update->field_name[0]] = update->get_replacement_array();
+                return true;
+            }
+            return update->apply(it->second, 0);
 
-            return update.apply(it->second, 0);
         }
     };
 
@@ -236,7 +259,7 @@ namespace tundradb {
 
 
         static arrow::Result<std::shared_ptr<arrow::Array> > create_null_array(
-            const std::shared_ptr<arrow::DataType> &type)  {
+            const std::shared_ptr<arrow::DataType> &type) {
             switch (type->id()) {
                 // Use type->id() which returns Type::type enum
                 case arrow::Type::INT64: {
@@ -272,7 +295,7 @@ namespace tundradb {
             std::unordered_map<std::string, std::shared_ptr<arrow::Array> > normalized_data;
             for (auto field: schema->fields()) {
                 if (field->name() != "id" && !field->nullable() && (!data.contains(field->name()) ||
-                                           data.find(field->name())->second->IsNull(0))) {
+                                                                    data.find(field->name())->second->IsNull(0))) {
                     return arrow::Status::Invalid("Field '", field->name(), "' is required");
                 }
                 if (!data.contains(field->name())) {

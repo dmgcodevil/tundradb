@@ -8,47 +8,44 @@
 #include <thread>
 #include <vector>
 #include <future>
+#include <memory>
 
 namespace tundradb {
-    arrow::Result<std::shared_ptr<arrow::Array> > create_int64(const int64_t value) {
-        arrow::Int64Builder int64_builder;
-        ARROW_RETURN_NOT_OK(int64_builder.Reserve(1));
-        ARROW_RETURN_NOT_OK(int64_builder.Append(value));
-        std::shared_ptr<arrow::Array> int64_array;
-        ARROW_RETURN_NOT_OK(int64_builder.Finish(&int64_array));
-        return int64_array;
-    }
 
-    arrow::Result<bool> demo_single_node() {
-        std::cout << "demo_single_node:\n" << std::endl;
-        arrow::Int64Builder int64_builder;
-        ARROW_RETURN_NOT_OK(int64_builder.Reserve(1));
-        ARROW_RETURN_NOT_OK(int64_builder.Append(0));
-        std::shared_ptr<arrow::Array> int64_array;
-        ARROW_RETURN_NOT_OK(int64_builder.Finish(&int64_array));
 
-        tundradb::Node node(0, "test-schema", {});
-        node.add_field("int64", int64_array);
-
-        arrow::Int64Builder int64_update_builder;
-        ARROW_RETURN_NOT_OK(int64_update_builder.Reserve(1));
-        ARROW_RETURN_NOT_OK(int64_update_builder.Append(1));
-        std::shared_ptr<arrow::Array> int64_update_array;
-        ARROW_RETURN_NOT_OK(int64_update_builder.Finish(&int64_update_array));
-
-        tundradb::SetOperation operation(0, {"int64"}, int64_update_array);
-
-        node.update(operation).ValueOrDie();
-        auto int64_field = node.get_field("int64").ValueOrDie();
-        std::cout << "int64=" << std::static_pointer_cast<arrow::Int64Array>(int64_field)->Value(0) << std::endl;
-        return {true};
-    }
+    // arrow::Result<bool> demo_single_node() {
+    //     std::cout << "demo_single_node:\n" << std::endl;
+    //     arrow::Int64Builder int64_builder;
+    //     ARROW_RETURN_NOT_OK(int64_builder.Reserve(1));
+    //     ARROW_RETURN_NOT_OK(int64_builder.Append(0));
+    //     std::shared_ptr<arrow::Array> int64_array;
+    //     ARROW_RETURN_NOT_OK(int64_builder.Finish(&int64_array));
+    //
+    //     tundradb::Node node(0, "test-schema", {});
+    //     node.add_field("int64", int64_array);
+    //
+    //     arrow::Int64Builder int64_update_builder;
+    //     ARROW_RETURN_NOT_OK(int64_update_builder.Reserve(1));
+    //     ARROW_RETURN_NOT_OK(int64_update_builder.Append(1));
+    //     std::shared_ptr<arrow::Array> int64_update_array;
+    //     ARROW_RETURN_NOT_OK(int64_update_builder.Finish(&int64_update_array));
+    //
+    //     tundradb::SetOperation operation(0, {"int64"}, int64_update_array);
+    //
+    //     node.update(operation).ValueOrDie();
+    //     auto int64_field = node.get_field("int64").ValueOrDie();
+    //     std::cout << "int64=" << std::static_pointer_cast<arrow::Int64Array>(int64_field)->Value(0) << std::endl;
+    //     return {true};
+    // }
 
     void update_batch(const std::vector<std::shared_ptr<Node>>& nodes, 
                      size_t start, size_t end, 
-                     const SetOperation& operation) {
+                     const std::vector<std::shared_ptr<tundradb::BaseOperation>> &updates) {
         for (size_t i = start; i < end; ++i) {
-            nodes[i]->update(operation).ValueOrDie();
+            for (const auto& operation : updates) {
+                nodes[i]->update(operation).ValueOrDie();
+            }
+
         }
     }
 
@@ -71,11 +68,16 @@ namespace tundradb {
             std::unordered_map<std::string, std::shared_ptr<arrow::Array>> fields =
             {
                 {"name", Database::create_str_array("*").ValueOrDie()},
-                {"count",  create_int64(0).ValueOrDie()}
+                {"count",  Database::create_int64_array(0).ValueOrDie()}
             };
          nodes.push_back(database.create_node("test-schema", fields).ValueOrDie());
         }
-        tundradb::SetOperation update_count(0, {"count"}, create_int64(1).ValueOrDie());
+        std::vector<std::string> count_field_name = {"count"};
+        std::vector<std::string> name_field_name = {"name"};
+        auto update_count = std::make_shared<tundradb::SetOperation>(0,count_field_name, Database::create_int64_array(1).ValueOrDie());
+        auto update_name = std::make_shared<tundradb::SetOperation> (0, name_field_name, Database::create_str_array("tundra").ValueOrDie());
+
+        std::vector<std::shared_ptr<tundradb::BaseOperation>> updates = {update_count, update_name};
 
         // Measure time
         auto start = std::chrono::high_resolution_clock::now();
@@ -95,7 +97,7 @@ namespace tundradb {
                           std::ref(nodes),
                           start_idx,
                           end_idx,
-                          std::ref(update_count))
+                          std::ref(updates))
             );
         }
 
