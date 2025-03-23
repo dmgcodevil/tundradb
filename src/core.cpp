@@ -4,6 +4,7 @@
 
 #include "../include/core.hpp"
 #include <iostream>
+#include <chrono>
 
 namespace tundradb {
     arrow::Result<std::shared_ptr<arrow::Array> > create_int64(const int64_t value) {
@@ -41,8 +42,8 @@ namespace tundradb {
     }
 
     arrow::Result<bool> demo_batch_update() {
-        int nodes_count = 2;
-        std::vector<std::shared_ptr<tundradb::Node> > nodes;
+        int nodes_count = 1000000;
+        std::vector<std::shared_ptr<tundradb::Node>> nodes;
         nodes.reserve(nodes_count);
 
         for (int i = 0; i < nodes_count; i++) {
@@ -51,8 +52,30 @@ namespace tundradb {
             node->add_field("int64", create_int64(0).ValueOrDie());
             nodes.emplace_back(node);
         }
+        tundradb::SetOperation operation(0, {"int64"}, create_int64(1).ValueOrDie());
 
-        auto table = create_table(nodes, {"id", "int64"}).ValueOrDie();
+        // Measure time
+        auto start = std::chrono::high_resolution_clock::now();
+        
+        for (auto node: nodes) {
+            node->update(operation).ValueOrDie();
+        }
+        
+        auto end = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+        
+        // Calculate and print metrics
+        double seconds = duration.count() / 1000.0;
+        double ups = nodes_count / seconds;
+        
+        std::cout << "\nPerformance Metrics:" << std::endl;
+        std::cout << "Total updates: " << nodes_count << std::endl;
+        std::cout << "Time taken: " << seconds << " seconds" << std::endl;
+        std::cout << "Updates per second: " << static_cast<int64_t>(ups) << " UPS" << std::endl;
+
+        auto table = create_table(nodes, {"id", "int64"}, 10000).ValueOrDie();
         print_table(table);
+        
+        return true;
     }
 }

@@ -94,7 +94,76 @@ namespace tundradb {
     };
 
 
-    inline void print_table(const std::shared_ptr<arrow::Table> &table) {
+    // Helper function to print a single row
+    inline void print_row(const std::shared_ptr<arrow::Table> &table, int64_t row_index) {
+        for (int j = 0; j < table->num_columns(); ++j) {
+            auto column = table->column(j);
+            if (!column || column->num_chunks() == 0) {
+                std::cout << "NULL\t";
+                continue;
+            }
+
+            // Find the chunk containing this row
+            int64_t accumulated_length = 0;
+            std::shared_ptr<arrow::Array> chunk;
+            int64_t chunk_offset = row_index;
+
+            for (int c = 0; c < column->num_chunks(); ++c) {
+                chunk = column->chunk(c);
+                if (accumulated_length + chunk->length() > row_index) {
+                    chunk_offset = row_index - accumulated_length;
+                    break;
+                }
+                accumulated_length += chunk->length();
+            }
+
+            if (!chunk || chunk_offset >= chunk->length() || chunk->IsNull(chunk_offset)) {
+                std::cout << "NULL\t";
+                continue;
+            }
+
+            switch (chunk->type_id()) {
+                case arrow::Type::INT32:
+                    std::cout << std::static_pointer_cast<arrow::Int32Array>(chunk)->Value(chunk_offset);
+                    break;
+                case arrow::Type::INT64:
+                    std::cout << std::static_pointer_cast<arrow::Int64Array>(chunk)->Value(chunk_offset);
+                    break;
+                case arrow::Type::FLOAT:
+                    std::cout << std::static_pointer_cast<arrow::FloatArray>(chunk)->Value(chunk_offset);
+                    break;
+                case arrow::Type::DOUBLE:
+                    std::cout << std::static_pointer_cast<arrow::DoubleArray>(chunk)->Value(chunk_offset);
+                    break;
+                case arrow::Type::BOOL:
+                    std::cout << (std::static_pointer_cast<arrow::BooleanArray>(chunk)->Value(chunk_offset)
+                                      ? "true"
+                                      : "false");
+                    break;
+                case arrow::Type::STRING:
+                    try {
+                        auto str_array = std::static_pointer_cast<arrow::StringArray>(chunk);
+                        if (chunk_offset < str_array->length()) {
+                            std::cout << str_array->GetString(chunk_offset);
+                        } else {
+                            std::cout << "NULL";
+                        }
+                    } catch (const std::exception &e) {
+                        std::cout << "ERROR";
+                    }
+                    break;
+                case arrow::Type::TIMESTAMP:
+                    std::cout << std::static_pointer_cast<arrow::TimestampArray>(chunk)->Value(chunk_offset);
+                    break;
+                default:
+                    std::cout << "Unsupported";
+            }
+            std::cout << "\t";
+        }
+        std::cout << std::endl;
+    }
+
+    inline void print_table(const std::shared_ptr<arrow::Table> &table, int64_t max_rows = 100) {
         if (!table) {
             std::cout << "Null table" << std::endl;
             return;
@@ -102,87 +171,44 @@ namespace tundradb {
 
         std::cout << "Table Schema:" << std::endl;
         std::cout << table->schema()->ToString() << std::endl;
-        
+
         // Print chunk information
         std::cout << "\nChunk Information:" << std::endl;
         for (int j = 0; j < table->num_columns(); ++j) {
             auto column = table->column(j);
             std::cout << "Column '" << table->schema()->field(j)->name() << "': "
-                     << column->num_chunks() << " chunks [ ";
-            
-            for (int c = 0; c < column->num_chunks(); ++c) {
-                std::cout << column->chunk(c)->length();
-                if (c < column->num_chunks() - 1) std::cout << ", ";
-            }
-            std::cout << " ]" << std::endl;
+                    << column->num_chunks() << " chunk size = " << column->chunk(0)->length() << std::endl;
+
+            // for (int c = 0; c < column->num_chunks(); ++c) {
+            //     std::cout << column->chunk(c)->length();
+            //     if (c < column->num_chunks() - 1) std::cout << ", ";
+            // }
+            // std::cout << " ]" << std::endl;
         }
 
-        std::cout << "\nTable Data (" << table->num_rows() << " rows):" << std::endl;
+        const int64_t total_rows = table->num_rows();
+        std::cout << "\nTable Data (" << total_rows << " rows):" << std::endl;
 
         try {
-            for (int64_t i = 0; i < table->num_rows(); ++i) {
-                for (int j = 0; j < table->num_columns(); ++j) {
-                    auto column = table->column(j);
-                    if (!column || column->num_chunks() == 0) {
-                        std::cout << "NULL\t";
-                        continue;
-                    }
+            // Determine how many rows to print
+            bool use_ellipsis = max_rows > 0 && total_rows > max_rows + 1;
+            int64_t rows_to_print = use_ellipsis ? max_rows : total_rows;
 
-                    auto chunk = column->chunk(0);
-                    if (!chunk) {
-                        std::cout << "NULL\t";
-                        continue;
-                    }
+            // Print rows up to max_rows
+            for (int64_t i = 0; i < rows_to_print; ++i) {
+                print_row(table, i);
+            }
 
-                    if (i >= chunk->length() || chunk->IsNull(i)) {
-                        std::cout << "NULL\t";
-                        continue;
-                    }
-
-                    switch (chunk->type_id()) {
-                        case arrow::Type::INT32:
-                            std::cout << std::static_pointer_cast<arrow::Int32Array>(chunk)->Value(i);
-                            break;
-                        case arrow::Type::INT64:
-                            std::cout << std::static_pointer_cast<arrow::Int64Array>(chunk)->Value(i);
-                            break;
-                        case arrow::Type::FLOAT:
-                            std::cout << std::static_pointer_cast<arrow::FloatArray>(chunk)->Value(i);
-                            break;
-                        case arrow::Type::DOUBLE:
-                            std::cout << std::static_pointer_cast<arrow::DoubleArray>(chunk)->Value(i);
-                            break;
-                        case arrow::Type::BOOL:
-                            std::cout << (std::static_pointer_cast<arrow::BooleanArray>(chunk)->Value(i)
-                                              ? "true"
-                                              : "false");
-                            break;
-                        case arrow::Type::STRING:
-                            try {
-                                auto str_array = std::static_pointer_cast<arrow::StringArray>(chunk);
-                                if (i < str_array->length()) {
-                                    std::cout << str_array->GetString(i);
-                                } else {
-                                    std::cout << "NULL";
-                                }
-                            } catch (const std::exception &e) {
-                                std::cout << "ERROR";
-                            }
-                            break;
-                        case arrow::Type::TIMESTAMP:
-                            std::cout << std::static_pointer_cast<arrow::TimestampArray>(chunk)->Value(i);
-                            break;
-                        default:
-                            std::cout << "Unsupported";
-                    }
-                    std::cout << "\t";
-                }
-                std::cout << std::endl;
+            // Print ellipsis and last row if needed
+            if (use_ellipsis) {
+                std::cout << "....\t" << std::endl;
+                print_row(table, total_rows - 1);
             }
         } catch (const std::exception &e) {
             std::cout << "Error while printing table: " << e.what() << std::endl;
         }
     }
+
 
     // Utility function to create a table from nodes
     inline arrow::Result<std::shared_ptr<arrow::Table> > create_table(
