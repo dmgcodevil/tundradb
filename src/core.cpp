@@ -139,7 +139,7 @@ namespace tundradb {
         std::cout << "Updates per second per thread: " << static_cast<int64_t>(ups / num_threads) << " UPS/thread" <<
                 std::endl;
 
-        auto table = create_table(database.get_schema("test-schema").ValueOrDie(), nodes, 10000).ValueOrDie();
+        auto table = create_table(database.get_schema("test-schema").ValueOrDie(), nodes, 100000).ValueOrDie();
         print_table(table);
 
         return true;
