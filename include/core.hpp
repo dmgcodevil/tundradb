@@ -591,6 +591,14 @@ class ShardManager {
     }
 
     std::vector<std::shared_ptr<Node>> result;
+    // Reserve space for efficiency
+    size_t total_estimated_nodes = 0;
+    for (auto &shard : schema_it->second) {
+      total_estimated_nodes += shard->size();
+    }
+    result.reserve(total_estimated_nodes);
+
+    // Collect nodes from all shards
     for (auto &shard : schema_it->second) {
       auto nodes = shard->get_nodes();
       result.insert(result.end(), nodes.begin(), nodes.end());
@@ -630,6 +638,40 @@ class ShardManager {
   bool has_shards(const std::string &schema_name) const {
     auto it = shards.find(schema_name);
     return it != shards.end() && !it->second.empty();
+  }
+
+  // Get information about shards for a schema
+  arrow::Result<size_t> get_shard_count(const std::string &schema_name) const {
+    if (!has_shards(schema_name)) {
+      return arrow::Status::Invalid("Schema '", schema_name, "' not found");
+    }
+    return shards.find(schema_name)->second.size();
+  }
+
+  // Get sizes of all shards for a schema
+  arrow::Result<std::vector<size_t>> get_shard_sizes(
+      const std::string &schema_name) const {
+    if (!has_shards(schema_name)) {
+      return arrow::Status::Invalid("Schema '", schema_name, "' not found");
+    }
+    std::vector<size_t> sizes;
+    for (const auto &shard : shards.find(schema_name)->second) {
+      sizes.push_back(shard->size());
+    }
+    return sizes;
+  }
+
+  // Get the min/max IDs of all shards for a schema
+  arrow::Result<std::vector<std::pair<int64_t, int64_t>>> get_shard_ranges(
+      const std::string &schema_name) const {
+    if (!has_shards(schema_name)) {
+      return arrow::Status::Invalid("Schema '", schema_name, "' not found");
+    }
+    std::vector<std::pair<int64_t, int64_t>> ranges;
+    for (const auto &shard : shards.find(schema_name)->second) {
+      ranges.push_back({shard->min_id, shard->max_id});
+    }
+    return ranges;
   }
 };
 
@@ -811,6 +853,11 @@ class Database {
     return shard_manager->update_node(update);
   }
 
+  arrow::Result<bool> remove_node(const std::string &schema_name,
+                                  int64_t node_id) {
+    return shard_manager->remove_node(schema_name, node_id);
+  }
+
   arrow::Result<bool> compact(const std::string &schema_name) {
     return shard_manager->compact(schema_name);
   }
@@ -842,10 +889,11 @@ class Database {
     // Get the schema
     ARROW_ASSIGN_OR_RAISE(auto schema, get_schema(schema_name));
 
-    // Use ShardManager to get tables from each shard
-    ARROW_ASSIGN_OR_RAISE(auto tables, shard_manager->get_tables(schema_name));
+    // First, get all nodes for the schema (this gets from all shards)
+    ARROW_ASSIGN_OR_RAISE(auto all_nodes,
+                          shard_manager->get_nodes(schema_name));
 
-    if (tables.empty()) {
+    if (all_nodes.empty()) {
       // No data in any shards, return empty table
       std::vector<std::shared_ptr<arrow::ChunkedArray>> empty_columns;
       for (int i = 0; i < schema->num_fields(); i++) {
@@ -855,13 +903,39 @@ class Database {
       return arrow::Table::Make(schema, empty_columns);
     }
 
-    // If only one table, return it directly
-    if (tables.size() == 1) {
-      return tables[0];
-    }
+    // Sort the nodes by ID to ensure consistent ordering
+    std::sort(all_nodes.begin(), all_nodes.end(),
+              [](const std::shared_ptr<Node> &a,
+                 const std::shared_ptr<Node> &b) { return a->id < b->id; });
 
-    // Concatenate tables if we have multiple
-    return arrow::ConcatenateTables(tables);
+    // Create a table directly from the sorted nodes
+    return create_table(schema, all_nodes, chunk_size);
+  }
+
+  // Get information about shards for a schema
+  arrow::Result<size_t> get_shard_count(const std::string &schema_name) const {
+    if (!has_schema(schema_name)) {
+      return arrow::Status::Invalid("Schema '", schema_name, "' not found");
+    }
+    return shard_manager->get_shard_count(schema_name);
+  }
+
+  // Get sizes of all shards for a schema
+  arrow::Result<std::vector<size_t>> get_shard_sizes(
+      const std::string &schema_name) const {
+    if (!has_schema(schema_name)) {
+      return arrow::Status::Invalid("Schema '", schema_name, "' not found");
+    }
+    return shard_manager->get_shard_sizes(schema_name);
+  }
+
+  // Get the min/max IDs of all shards for a schema
+  arrow::Result<std::vector<std::pair<int64_t, int64_t>>> get_shard_ranges(
+      const std::string &schema_name) const {
+    if (!has_schema(schema_name)) {
+      return arrow::Status::Invalid("Schema '", schema_name, "' not found");
+    }
+    return shard_manager->get_shard_ranges(schema_name);
   }
 };
 
