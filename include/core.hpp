@@ -8,6 +8,7 @@
 
 #include <iostream>
 #include <memory_resource>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -174,7 +175,7 @@ class SchemaRegistry {
 
 static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
     const std::shared_ptr<arrow::Schema> &schema,
-    const std::vector<std::shared_ptr<Node>> &nodes, int64_t chunk_size = 0) {
+    const std::vector<std::shared_ptr<Node>> &nodes, size_t chunk_size = 0) {
   if (nodes.empty()) {
     return arrow::Status::Invalid("Empty nodes list");
   }
@@ -211,7 +212,7 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
     } else {
       // Multiple chunks - create chunks of specified size
       std::vector<std::shared_ptr<arrow::Array>> chunks;
-      int64_t total_length = 0;
+      size_t total_length = 0;
       std::vector<std::shared_ptr<arrow::Array>> current_chunk;
 
       for (const auto &array : arrays) {
@@ -245,7 +246,8 @@ class Shard {
  private:
   std::pmr::monotonic_buffer_resource memory_pool;
   std::pmr::unordered_map<int64_t, std::shared_ptr<Node>> nodes;
-  bool dirty;
+  std::set<int64_t> nodes_ids;
+  bool dirty;  // todo: make atomic ?
   std::shared_ptr<arrow::Table> table;
   std::shared_ptr<SchemaRegistry> schema_registry;
   std::string schema_name;
@@ -276,12 +278,45 @@ class Shard {
       return arrow::Status::KeyError("Shard is full");
     }
     nodes.insert(std::make_pair(node->id, node));
+    nodes_ids.insert(node->id);
+    return arrow::Status::OK();
+  }
+
+  arrow::Result<bool> extend(const std::shared_ptr<Node> &node) {
+    if (node->id < min_id || node->id == max_id) {
+      return arrow::Status::Invalid("Node id is out of range");
+    }
+    if (nodes.contains(node->id)) {
+      return arrow::Status::KeyError("Node already exists: ", node->id);
+    }
+    if (nodes.size() >= capacity) {
+      return arrow::Status::KeyError("Shard is full");
+    }
+    nodes.insert(std::make_pair(node->id, node));
+    nodes_ids.insert(node->id);
+    max_id = node->id;
     return arrow::Status::OK();
   }
 
   arrow::Result<std::shared_ptr<Node>> remove(int64_t id) {
+    auto it = nodes.find(id);
+    if (it == nodes.end()) {
+      return arrow::Status::Invalid("Node not found: ", id);
+    }
     nodes.erase(id);
-    // todo remove status
+    nodes_ids.erase(id);
+    return it->second;
+  }
+
+  arrow::Result<std::shared_ptr<Node>> poll_first() {
+    if (nodes_ids.empty()) {
+      return arrow::Status::Invalid("Shard is empty");
+    }
+    auto first = nodes_ids.begin();
+    nodes.erase(*first);
+    auto node = remove(*first).ValueOrDie();
+    min_id = node->id;
+    return node;
   }
 
   arrow::Result<bool> update(const std::shared_ptr<BaseOperation> &update) {
@@ -304,12 +339,75 @@ class Shard {
     }
     return table;
   }
+
+  size_t size() { return nodes.size(); }
+
+  bool has_space() { return nodes.size() < capacity; }
+
+  bool empty() { return nodes.empty(); }
 };
 
 class ShardManager {
  private:
   std::pmr::unordered_map<std::string, std::vector<std::shared_ptr<Shard>>>
       shards;
+  const size_t capacity = 100000;  // todo make configurable
+
+  void create_new_shard(const std::shared_ptr<Node> &node) {
+    auto shard = std::make_shared<Shard>(capacity, node->id,
+                                         node->id + capacity, capacity / 10);
+    shards[node->schema_name].push_back(shard);
+    shard->add(node).ValueOrDie();
+  }
+
+ public:
+  arrow::Result<bool> compact(const std::string &schema_name) {
+    auto it = shards.find(schema_name);
+    if (it == shards.end()) {
+      return arrow::Status::Invalid("Shard not found for the given schema: ",
+                                    schema_name);
+    }
+    auto shard_list = it->second;
+    if (shard_list.empty()) {
+      return arrow::Status::OK();
+    }
+
+    for (int i = 0; i < shard_list.size(); i++) {
+      if (auto const &shard = shard_list[i]; !shard->has_space()) {
+        for (int j = i + 1; j < shard_list.size(); j++) {
+          if (!shard->has_space()) break;
+          while (!shard_list[j]->empty() && shard->has_space()) {
+            shard->extend(shard_list[j]->poll_first().ValueOrDie())
+                .ValueOrDie();
+          }
+        }
+      }
+    }
+    // remove empty shards
+    for (auto it = shard_list.begin(); it != shard_list.end(); it++) {
+      if ((*it)->empty()) {
+        shard_list.erase(it);
+      }
+    }
+
+    return arrow::Status::OK();
+  }
+
+  arrow::Result<bool> insert_node(const std::shared_ptr<Node> &node) {
+    auto it = shards.find(node->schema_name);
+    if (it == shards.end()) {
+      shards.insert(std::make_pair(node->schema_name,
+                                   std::vector<std::shared_ptr<Shard>>()));
+      create_new_shard(node);
+    } else {
+      auto last_shard = it->second.back();
+      if (last_shard->has_space()) {
+        last_shard->add(node).ValueOrDie();
+      } else {
+        create_new_shard(node);
+      }
+    }
+  }
 };
 
 class Database {
