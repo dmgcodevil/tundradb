@@ -293,8 +293,8 @@ class Shard {
   }
 
   arrow::Result<bool> extend(const std::shared_ptr<Node> &node) {
-    if (node->id < min_id || node->id > max_id) {
-      return arrow::Status::Invalid("Node id is out of range");
+    if (node->id < min_id) {
+      return arrow::Status::Invalid("Node id is below the minimum range");
     }
     if (nodes.contains(node->id)) {
       return arrow::Status::KeyError("Node already exists: ", node->id);
