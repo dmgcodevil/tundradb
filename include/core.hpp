@@ -20,6 +20,24 @@ class Node;
 class Shard;
 class ShardManager;
 
+// Configuration parameters for the database
+struct DatabaseConfig {
+  // Maximum number of nodes per shard
+  size_t shard_capacity = 100000;
+  
+  // Size of chunks when creating tables
+  size_t chunk_size = 10000;
+  
+  // Memory pool size for shards (in bytes)
+  size_t shard_memory_pool_size = 10 * 1024 * 1024;
+  
+  // Memory pool size for shard manager (in bytes)
+  size_t manager_memory_pool_size = 100 * 1024 * 1024;
+  
+  // Memory pool size for database (in bytes)
+  size_t database_memory_pool_size = 1024 * 1024 * 1024; // 1GB default
+};
+
 static arrow::Result<std::shared_ptr<arrow::Array>> create_int64_array(
     const int64_t value) {
   arrow::Int64Builder int64_builder;
@@ -275,6 +293,21 @@ class Shard {
         nodes(&memory_pool),
         schema_registry(schema_registry),
         schema_name(schema_name) {}
+        
+  // Constructor that uses DatabaseConfig
+  Shard(const DatabaseConfig& config, int64_t min_id, int64_t max_id,
+        const std::string &schema_name,
+        std::shared_ptr<
+            std::unordered_map<std::string, std::shared_ptr<arrow::Schema>>>
+            schema_registry)
+      : capacity(config.shard_capacity),
+        min_id(min_id),
+        max_id(max_id),
+        chunk_size(config.chunk_size),
+        memory_pool(config.shard_memory_pool_size),
+        nodes(&memory_pool),
+        schema_registry(schema_registry),
+        schema_name(schema_name) {}
 
   arrow::Result<bool> add(const std::shared_ptr<Node> &node) {
     if (node->id < min_id || node->id > max_id) {
@@ -396,14 +429,14 @@ class ShardManager {
       schema_registry;
   const size_t shard_capacity;
   const size_t chunk_size;
+  const DatabaseConfig config;
 
   void create_new_shard(const std::shared_ptr<Node> &node) {
     auto new_min_id = node->id;
     auto new_max_id = node->id + shard_capacity - 1;
 
-    auto shard =
-        std::make_shared<Shard>(shard_capacity, new_min_id, new_max_id,
-                                chunk_size, node->schema_name, schema_registry);
+    auto shard = std::make_shared<Shard>(config, new_min_id, new_max_id,
+                             node->schema_name, schema_registry);
 
     auto result = shard->add(node);
     if (!result.ok()) {
@@ -416,6 +449,7 @@ class ShardManager {
   }
 
  public:
+  // Existing constructor
   explicit ShardManager(
       std::shared_ptr<
           std::unordered_map<std::string, std::shared_ptr<arrow::Schema>>>
@@ -426,7 +460,21 @@ class ShardManager {
         shards(&memory_pool),
         schema_registry(schema_registry),
         shard_capacity(shard_capacity),
-        chunk_size(chunk_size) {}
+        chunk_size(chunk_size),
+        config({shard_capacity, chunk_size, 10 * 1024 * 1024, buffer_size, 1024 * 1024 * 1024}) {}
+        
+  // Constructor that uses DatabaseConfig
+  explicit ShardManager(
+      std::shared_ptr<
+          std::unordered_map<std::string, std::shared_ptr<arrow::Schema>>>
+          schema_registry,
+      const DatabaseConfig& config)
+      : memory_pool(config.manager_memory_pool_size),
+        shards(&memory_pool),
+        schema_registry(schema_registry),
+        shard_capacity(config.shard_capacity),
+        chunk_size(config.chunk_size),
+        config(config) {}
 
   arrow::Result<bool> compact(const std::string &schema_name) {
     auto it = shards.find(schema_name);
@@ -687,15 +735,35 @@ class Database {
 
   // ID counter for generating node IDs
   std::atomic<int64_t> id_counter;
+  
+  // Database configuration
+  DatabaseConfig config;
 
  public:
+  // Existing constructor
   explicit Database(size_t shard_capacity = 100000, size_t chunk_size = 10000,
                     size_t buffer_size = 1024 * 1024 * 1024)  // 1GB default
       : schema_registry(std::make_shared<std::unordered_map<
                             std::string, std::shared_ptr<arrow::Schema>>>()),
-        id_counter(0) {
+        id_counter(0),
+        config({shard_capacity, chunk_size, 10 * 1024 * 1024, 100 * 1024 * 1024, buffer_size}) {
     shard_manager = std::make_unique<ShardManager>(
-        schema_registry, shard_capacity, chunk_size, buffer_size);
+        schema_registry, config);
+  }
+  
+  // Constructor that takes a DatabaseConfig
+  explicit Database(const DatabaseConfig& config)
+      : schema_registry(std::make_shared<std::unordered_map<
+                            std::string, std::shared_ptr<arrow::Schema>>>()),
+        id_counter(0),
+        config(config) {
+    shard_manager = std::make_unique<ShardManager>(
+        schema_registry, config);
+  }
+  
+  // Get a copy of the current configuration
+  DatabaseConfig get_config() const {
+    return config;
   }
 
   arrow::Result<std::shared_ptr<arrow::Schema>> prepend_id_field(
