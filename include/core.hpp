@@ -12,6 +12,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <algorithm>
 
 namespace tundradb {
 class Database;
@@ -353,6 +354,12 @@ class Shard {
       std::vector<std::shared_ptr<Node>> result;
       std::ranges::transform(nodes, std::back_inserter(result),
                              [](const auto &pair) { return pair.second; });
+      
+      // Sort nodes by ID in ascending order
+      std::sort(result.begin(), result.end(), 
+                [](const std::shared_ptr<Node>& a, const std::shared_ptr<Node>& b) {
+                  return a->id < b->id;
+                });
 
       ARROW_ASSIGN_OR_RAISE(table, create_table(schema, result, chunk_size));
       dirty = false;
@@ -582,8 +589,17 @@ class ShardManager {
       return std::vector<std::shared_ptr<arrow::Table>>{};
     }
     
+    // Copy shards to a vector we can sort
+    std::vector<std::shared_ptr<Shard>> sorted_shards = schema_it->second;
+    
+    // Sort shards by min_id to ensure consistent ordering
+    std::sort(sorted_shards.begin(), sorted_shards.end(), 
+              [](const std::shared_ptr<Shard>& a, const std::shared_ptr<Shard>& b) {
+                return a->min_id < b->min_id;
+              });
+    
     std::vector<std::shared_ptr<arrow::Table>> tables;
-    for (const auto& shard : schema_it->second) {
+    for (const auto& shard : sorted_shards) {
       ARROW_ASSIGN_OR_RAISE(auto table, shard->get_table());
       if (table->num_rows() > 0) {
         tables.push_back(table);
@@ -782,6 +798,23 @@ class Database {
     return shard_manager->compact(schema_name);
   }
   
+  // Compact all schemas in the database
+  arrow::Result<bool> compact_all() {
+    std::vector<std::string> schema_names = get_schema_names();
+    bool success = true;
+    
+    for (const auto& schema_name : schema_names) {
+      auto result = compact(schema_name);
+      if (!result.ok()) {
+        std::cerr << "Error compacting schema '" << schema_name << "': " 
+                  << result.status().ToString() << std::endl;
+        success = false;
+      }
+    }
+    
+    return success;
+  }
+  
   // Get a table for all nodes of a given schema
   arrow::Result<std::shared_ptr<arrow::Table>> get_table(const std::string& schema_name, size_t chunk_size = 10000) {
     if (!has_schema(schema_name)) {
@@ -906,14 +939,17 @@ static void print_table(const std::shared_ptr<arrow::Table> &table,
   for (int j = 0; j < table->num_columns(); ++j) {
     auto column = table->column(j);
     std::cout << "Column '" << table->schema()->field(j)->name()
-              << "': " << column->num_chunks()
-              << " chunk size = " << column->chunk(0)->length() << std::endl;
-
-    // for (int c = 0; c < column->num_chunks(); ++c) {
-    //     std::cout << column->chunk(c)->length();
-    //     if (c < column->num_chunks() - 1) std::cout << ", ";
-    // }
-    // std::cout << " ]" << std::endl;
+              << "': " << column->num_chunks();
+    
+    if (column->num_chunks() > 0) {
+      std::cout << " chunk sizes = [ ";
+      for (int c = 0; c < column->num_chunks(); c++) {
+        std::cout << column->chunk(c)->length();
+        if (c < column->num_chunks() - 1) std::cout << ", ";
+      }
+      std::cout << " ]";
+    }
+    std::cout << std::endl;
   }
 
   const int64_t total_rows = table->num_rows();
@@ -921,18 +957,23 @@ static void print_table(const std::shared_ptr<arrow::Table> &table,
 
   try {
     // Determine how many rows to print
-    bool use_ellipsis = max_rows > 0 && total_rows > max_rows + 1;
-    int64_t rows_to_print = use_ellipsis ? max_rows : total_rows;
+    bool use_ellipsis = max_rows > 0 && total_rows > max_rows;
+    int64_t rows_to_print = use_ellipsis ? max_rows / 2 : total_rows;
 
-    // Print rows up to max_rows
-    for (int64_t i = 0; i < rows_to_print; ++i) {
+    std::cout << "First " << rows_to_print << " rows:" << std::endl;
+    // Print first half of rows
+    for (int64_t i = 0; i < rows_to_print && i < total_rows; ++i) {
       print_row(table, i);
     }
 
-    // Print ellipsis and last row if needed
+    // Print ellipsis and last half of rows if needed
     if (use_ellipsis) {
-      std::cout << "....\t" << std::endl;
-      print_row(table, total_rows - 1);
+      std::cout << "....\n" << std::endl;
+      
+      std::cout << "Last " << rows_to_print << " rows:" << std::endl;
+      for (int64_t i = total_rows - rows_to_print; i < total_rows; ++i) {
+        print_row(table, i);
+      }
     }
   } catch (const std::exception &e) {
     std::cout << "Error while printing table: " << e.what() << std::endl;

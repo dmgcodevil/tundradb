@@ -42,3 +42,6 @@ target_link_libraries(tundradb
         Arrow::arrow_shared
 )
 
+# Add the tests subdirectory
+add_subdirectory(tests)
+
