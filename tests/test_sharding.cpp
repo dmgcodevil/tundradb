@@ -17,14 +17,19 @@ class ShardingTest : public ::testing::Test {
   // Set up the test
   void SetUp() override {
     // Initialize database with small shard size
-    db = std::make_unique<Database>(SHARD_SIZE, CHUNK_SIZE);
+    auto config = make_config()
+                      .with_shard_capacity(SHARD_SIZE)
+                      .with_chunk_size(CHUNK_SIZE)
+                      .build();
+
+    db = std::make_unique<Database>(config);
 
     // Create a test schema
     auto name_field = arrow::field("name", arrow::utf8());
     auto count_field = arrow::field("count", arrow::int64());
     auto schema = arrow::schema({name_field, count_field});
 
-    auto result = db->register_schema("test-schema", schema);
+    auto result = db->get_schema_registry()->add("test-schema", schema);
     ASSERT_TRUE(result.ok())
         << "Failed to register schema: " << result.status().ToString();
   }
@@ -192,13 +197,18 @@ class CompactionTest : public ::testing::TestWithParam<CompactionScenario> {
   void SetUp() override {
     // Initialize database with the specified shard size
     const auto& scenario = GetParam();
-    db = std::make_unique<Database>(scenario.shard_size, 2);
+    auto config = make_config()
+                      .with_shard_capacity(scenario.shard_size)
+                      .with_chunk_size(2)
+                      .build();
+
+    db = std::make_unique<Database>(config);
 
     // Create a test schema
     auto counter_field = arrow::field("counter", arrow::int64());
     auto schema = arrow::schema({counter_field});
 
-    auto result = db->register_schema("test-schema", schema);
+    auto result = db->get_schema_registry()->add("test-schema", schema);
     ASSERT_TRUE(result.ok())
         << "Failed to register schema: " << result.status().ToString();
   }

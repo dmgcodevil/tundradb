@@ -72,7 +72,8 @@ arrow::Result<bool> demo_batch_update() {
   // Create schema
   auto schema =
       arrow::schema({count_field, name_field, count2_field, name2_field});
-  ARROW_RETURN_NOT_OK(database.register_schema("test-schema", schema));
+  ARROW_RETURN_NOT_OK(
+      database.get_schema_registry()->add("test-schema", schema));
 
   // Keep track of node IDs for later updates
   std::vector<int64_t> node_ids;
