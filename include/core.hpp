@@ -247,9 +247,9 @@ class Shard {
   std::pmr::monotonic_buffer_resource memory_pool;
   std::pmr::unordered_map<int64_t, std::shared_ptr<Node>> nodes;
   std::set<int64_t> nodes_ids;
-  bool dirty;  // todo: make atomic ?
+  std::atomic<bool> dirty{false};  // Made atomic for thread safety
   std::shared_ptr<arrow::Table> table;
-  std::shared_ptr<SchemaRegistry> schema_registry;
+  std::shared_ptr<std::unordered_map<std::string, std::shared_ptr<arrow::Schema>>> schema_registry;
   std::string schema_name;
 
  public:
@@ -259,13 +259,17 @@ class Shard {
   const size_t chunk_size;
 
   Shard(size_t capacity, int64_t min_id, int64_t max_id, size_t chunk_size,
+        const std::string& schema_name,
+        std::shared_ptr<std::unordered_map<std::string, std::shared_ptr<arrow::Schema>>> schema_registry,
         size_t buffer_size = 10 * 1024 * 1024)
       : capacity(capacity),
         min_id(min_id),
         max_id(max_id),
         chunk_size(chunk_size),
         memory_pool(buffer_size),
-        nodes(&memory_pool) {}
+        nodes(&memory_pool),
+        schema_registry(schema_registry),
+        schema_name(schema_name) {}
 
   arrow::Result<bool> add(const std::shared_ptr<Node> &node) {
     if (node->id < min_id || node->id > max_id) {
@@ -279,11 +283,12 @@ class Shard {
     }
     nodes.insert(std::make_pair(node->id, node));
     nodes_ids.insert(node->id);
-    return arrow::Status::OK();
+    dirty = true;
+    return true;
   }
 
   arrow::Result<bool> extend(const std::shared_ptr<Node> &node) {
-    if (node->id < min_id || node->id == max_id) {
+    if (node->id < min_id || node->id > max_id) {
       return arrow::Status::Invalid("Node id is out of range");
     }
     if (nodes.contains(node->id)) {
@@ -294,8 +299,9 @@ class Shard {
     }
     nodes.insert(std::make_pair(node->id, node));
     nodes_ids.insert(node->id);
-    max_id = node->id;
-    return arrow::Status::OK();
+    max_id = std::max(max_id, node->id);
+    dirty = true;
+    return true;
   }
 
   arrow::Result<std::shared_ptr<Node>> remove(int64_t id) {
@@ -303,9 +309,11 @@ class Shard {
     if (it == nodes.end()) {
       return arrow::Status::Invalid("Node not found: ", id);
     }
+    auto node = it->second;
     nodes.erase(id);
     nodes_ids.erase(id);
-    return it->second;
+    dirty = true;
+    return node;
   }
 
   arrow::Result<std::shared_ptr<Node>> poll_first() {
@@ -317,9 +325,13 @@ class Shard {
     nodes_ids.erase(first);
     auto node = nodes[node_id];
     nodes.erase(node_id);
+    
+    // Update the min_id to the next minimum if available
     if (!nodes_ids.empty()) {
       min_id = *nodes_ids.begin();
     }
+    
+    dirty = true;
     return node;
   }
 
@@ -333,108 +345,285 @@ class Shard {
 
   arrow::Result<std::shared_ptr<arrow::Table>> get_table() {
     if (dirty || !table) {
-      auto schema = schema_registry->get(schema_name).ValueOrDie();
+      auto it = schema_registry->find(schema_name);
+      if (it == schema_registry->end()) {
+        return arrow::Status::KeyError("Schema '", schema_name, "' not found");
+      }
+      auto schema = it->second;
       std::vector<std::shared_ptr<Node>> result;
       std::ranges::transform(nodes, std::back_inserter(result),
                              [](const auto &pair) { return pair.second; });
 
-      table = create_table(schema, result, chunk_size).ValueOrDie();
-      dirty = false;  // fix: synchronize access, use atomic
+      ARROW_ASSIGN_OR_RAISE(table, create_table(schema, result, chunk_size));
+      dirty = false;
     }
     return table;
   }
 
-  size_t size() { return nodes.size(); }
+  size_t size() const { return nodes.size(); }
 
-  bool has_space() { return nodes.size() < capacity; }
+  bool has_space() const { return nodes.size() < capacity; }
 
-  bool empty() { return nodes.empty(); }
+  bool empty() const { return nodes.empty(); }
+  
+  std::vector<std::shared_ptr<Node>> get_nodes() const {
+    std::vector<std::shared_ptr<Node>> result;
+    result.reserve(nodes.size());
+    for (const auto& [_, node] : nodes) {
+      result.push_back(node);
+    }
+    return result;
+  }
 };
 
 class ShardManager {
  private:
-  std::pmr::unordered_map<std::string, std::vector<std::shared_ptr<Shard>>>
-      shards;
-  const size_t capacity = 100000;  // todo make configurable
+  std::pmr::monotonic_buffer_resource memory_pool;
+  std::pmr::unordered_map<std::string, std::vector<std::shared_ptr<Shard>>> shards;
+  std::shared_ptr<std::unordered_map<std::string, std::shared_ptr<arrow::Schema>>> schema_registry;
+  const size_t shard_capacity;
+  const size_t chunk_size;
 
   void create_new_shard(const std::shared_ptr<Node> &node) {
-    auto shard = std::make_shared<Shard>(capacity, node->id,
-                                         node->id + capacity, capacity / 10);
+    auto new_min_id = node->id;
+    auto new_max_id = node->id + shard_capacity - 1;
+    
+    auto shard = std::make_shared<Shard>(
+        shard_capacity, 
+        new_min_id, 
+        new_max_id, 
+        chunk_size,
+        node->schema_name,
+        schema_registry
+    );
+    
+    auto result = shard->add(node);
+    if (!result.ok()) {
+      // Log error - this shouldn't happen with newly created shard
+      std::cerr << "Error adding node to new shard: " << result.status().ToString() << std::endl;
+    }
+    
     shards[node->schema_name].push_back(shard);
-    shard->add(node).ValueOrDie();
   }
 
  public:
+  explicit ShardManager(
+      std::shared_ptr<std::unordered_map<std::string, std::shared_ptr<arrow::Schema>>> schema_registry,
+      size_t shard_capacity = 100000,
+      size_t chunk_size = 10000,
+      size_t buffer_size = 100 * 1024 * 1024)
+      : memory_pool(buffer_size),
+        shards(&memory_pool),
+        schema_registry(schema_registry),
+        shard_capacity(shard_capacity),
+        chunk_size(chunk_size) {}
+
   arrow::Result<bool> compact(const std::string &schema_name) {
     auto it = shards.find(schema_name);
     if (it == shards.end()) {
       return arrow::Status::Invalid("Shard not found for the given schema: ",
                                     schema_name);
     }
-    auto shard_list = it->second;
+    
+    auto& shard_list = it->second;  // Use reference to modify actual collection
     if (shard_list.empty()) {
-      return arrow::Status::OK();
+      return true;
     }
 
-    for (int i = 0; i < shard_list.size(); i++) {
-      if (auto const &shard = shard_list[i]; !shard->has_space()) {
-        for (int j = i + 1; j < shard_list.size(); j++) {
-          if (!shard->has_space()) break;
+    // First pass: move nodes from later shards to fill earlier shards
+    for (size_t i = 0; i < shard_list.size(); i++) {
+      auto& shard = shard_list[i];
+      if (!shard->has_space()) {
+        continue;  // Skip full shards
+      }
+      
+      // Try to fill this shard from later shards
+      for (size_t j = i + 1; j < shard_list.size(); j++) {
+        if (!shard_list[j]->empty()) {
           while (!shard_list[j]->empty() && shard->has_space()) {
-            shard->extend(shard_list[j]->poll_first().ValueOrDie())
-                .ValueOrDie();
+            auto node_result = shard_list[j]->poll_first();
+            if (!node_result.ok()) {
+              break;  // Error polling from source shard
+            }
+            
+            auto extend_result = shard->extend(node_result.ValueOrDie());
+            if (!extend_result.ok()) {
+              break;  // Error extending target shard
+            }
           }
         }
       }
     }
-    // remove empty shards
-    for (auto it = shard_list.begin(); it != shard_list.end(); it++) {
-      if ((*it)->empty()) {
-        shard_list.erase(it);
+    
+    // Second pass: remove empty shards
+    auto it_shard = shard_list.begin();
+    while (it_shard != shard_list.end()) {
+      if ((*it_shard)->empty()) {
+        it_shard = shard_list.erase(it_shard);
+      } else {
+        ++it_shard;
       }
     }
 
-    return arrow::Status::OK();
+    return true;
   }
 
   arrow::Result<bool> insert_node(const std::shared_ptr<Node> &node) {
     auto it = shards.find(node->schema_name);
     if (it == shards.end()) {
-      shards.insert(std::make_pair(node->schema_name,
-                                   std::vector<std::shared_ptr<Shard>>()));
+      // Create new schema entry if it doesn't exist
+      shards[node->schema_name] = std::vector<std::shared_ptr<Shard>>();
       create_new_shard(node);
-    } else {
-      auto last_shard = it->second.back();
-      if (last_shard->has_space()) {
-        last_shard->add(node).ValueOrDie();
-      } else {
-        create_new_shard(node);
+      return true;
+    }
+    
+    auto& shard_list = it->second;
+    if (shard_list.empty()) {
+      create_new_shard(node);
+      return true;
+    }
+    
+    // Try to find an appropriate shard based on ID
+    for (auto& shard : shard_list) {
+      if (node->id >= shard->min_id && node->id <= shard->max_id && shard->has_space()) {
+        auto result = shard->add(node);
+        if (result.ok()) {
+          return true;
+        }
+        // If there was an error, we'll try the next shard
       }
     }
+    
+    // If we get here, we need a new shard
+    create_new_shard(node);
+    return true;
+  }
+  
+  arrow::Result<std::shared_ptr<Node>> get_node(const std::string& schema_name, int64_t node_id) {
+    auto schema_it = shards.find(schema_name);
+    if (schema_it == shards.end()) {
+      return arrow::Status::KeyError("Schema '", schema_name, "' not found in shards");
+    }
+    
+    // Search through all shards for this schema
+    for (auto& shard : schema_it->second) {
+      if (node_id >= shard->min_id && node_id <= shard->max_id) {
+        // This is the right shard range, check if node exists
+        try {
+          auto node_result = shard->remove(node_id);
+          if (node_result.ok()) {
+            return node_result.ValueOrDie();
+          }
+        } catch (...) {
+          // Node wasn't in this shard, continue to next shard
+        }
+      }
+    }
+    
+    return arrow::Status::KeyError("Node with id ", node_id, " not found in schema '", schema_name, "'");
+  }
+  
+  arrow::Result<bool> remove_node(const std::string& schema_name, int64_t node_id) {
+    auto schema_it = shards.find(schema_name);
+    if (schema_it == shards.end()) {
+      return arrow::Status::KeyError("Schema '", schema_name, "' not found in shards");
+    }
+    
+    // Search through all shards for this schema
+    for (auto& shard : schema_it->second) {
+      if (node_id >= shard->min_id && node_id <= shard->max_id) {
+        // This is the right shard range, try to remove
+        auto remove_result = shard->remove(node_id);
+        if (remove_result.ok()) {
+          return true;
+        }
+      }
+    }
+    
+    return arrow::Status::KeyError("Node with id ", node_id, " not found in schema '", schema_name, "'");
+  }
+  
+  arrow::Result<bool> update_node(const std::shared_ptr<BaseOperation>& update) {
+    // Since we don't have the schema name in the operation anymore, we need to search in all schemas
+    for (auto& [schema_name, schema_shards] : shards) {
+      // Find the right shard
+      for (auto& shard : schema_shards) {
+        if (update->node_id >= shard->min_id && update->node_id <= shard->max_id) {
+          // Try to update in this shard
+          auto update_result = shard->update(update);
+          if (update_result.ok()) {
+            return true;
+          }
+        }
+      }
+    }
+    
+    return arrow::Status::KeyError("Node with id ", update->node_id, " not found in any schema");
+  }
+  
+  arrow::Result<std::vector<std::shared_ptr<Node>>> get_nodes(const std::string& schema_name) {
+    auto schema_it = shards.find(schema_name);
+    if (schema_it == shards.end()) {
+      return arrow::Status::KeyError("Schema '", schema_name, "' not found in shards");
+    }
+    
+    std::vector<std::shared_ptr<Node>> result;
+    for (auto& shard : schema_it->second) {
+      auto nodes = shard->get_nodes();
+      result.insert(result.end(), nodes.begin(), nodes.end());
+    }
+    
+    return result;
+  }
+
+  arrow::Result<std::vector<std::shared_ptr<arrow::Table>>> get_tables(const std::string& schema_name) {
+    auto schema_it = shards.find(schema_name);
+    if (schema_it == shards.end()) {
+      return std::vector<std::shared_ptr<arrow::Table>>{};
+    }
+    
+    std::vector<std::shared_ptr<arrow::Table>> tables;
+    for (const auto& shard : schema_it->second) {
+      ARROW_ASSIGN_OR_RAISE(auto table, shard->get_table());
+      if (table->num_rows() > 0) {
+        tables.push_back(table);
+      }
+    }
+    
+    return tables;
+  }
+  
+  bool has_shards(const std::string& schema_name) const {
+    auto it = shards.find(schema_name);
+    return it != shards.end() && !it->second.empty();
   }
 };
 
 class Database {
  private:
-  std::unordered_map<std::string, std::shared_ptr<arrow::Schema>>
-      schema_registry;
-  // Memory pool for nodes
-  std::pmr::monotonic_buffer_resource nodes_memory_pool;
-
-  // Nodes storage using the pool
-  std::pmr::unordered_map<
-      std::string, std::pmr::unordered_map<int64_t, std::shared_ptr<Node>>>
-      nodes;
+  // Schema registry
+  std::shared_ptr<std::unordered_map<std::string, std::shared_ptr<arrow::Schema>>> schema_registry;
+  
+  // Shard manager for node storage
+  std::unique_ptr<ShardManager> shard_manager;
+  
+  // ID counter for generating node IDs
   std::atomic<int64_t> id_counter;
 
  public:
-  explicit Database(size_t nodes_buffer_size = 1024 * 1024 *
-                                               1024)  // 1GB default
-      : nodes_memory_pool(nodes_buffer_size)  // Fixed size pool for nodes
-        ,
-        nodes(&nodes_memory_pool),
-        id_counter(0)  // Use the pool for nodes map
-  {}
+  explicit Database(size_t shard_capacity = 100000,
+                   size_t chunk_size = 10000,
+                   size_t buffer_size = 1024 * 1024 * 1024)  // 1GB default
+      : schema_registry(std::make_shared<std::unordered_map<std::string, std::shared_ptr<arrow::Schema>>>()),
+        id_counter(0) 
+  {
+    shard_manager = std::make_unique<ShardManager>(
+      schema_registry,
+      shard_capacity,
+      chunk_size,
+      buffer_size
+    );
+  }
 
   arrow::Result<std::shared_ptr<arrow::Schema>> prepend_id_field(
       const std::shared_ptr<arrow::Schema> &schema) {
@@ -477,7 +666,7 @@ class Database {
       return arrow::Status::Invalid("'id' field name is reserved");
     }
     ARROW_ASSIGN_OR_RAISE(auto final_schema, prepend_id_field(schema));
-    auto [it, inserted] = schema_registry.try_emplace(name, final_schema);
+    auto [it, inserted] = schema_registry->try_emplace(name, final_schema);
     if (!inserted) {
       return arrow::Status::AlreadyExists("Schema '", name, "' already exists");
     }
@@ -486,14 +675,14 @@ class Database {
 
   // Check if a schema exists
   bool has_schema(const std::string &name) const {
-    return schema_registry.contains(name);
+    return schema_registry->contains(name);
   }
 
   // Get a schema by name
   arrow::Result<std::shared_ptr<arrow::Schema>> get_schema(
       const std::string &name) const {
-    auto it = schema_registry.find(name);
-    if (it == schema_registry.end()) {
+    auto it = schema_registry->find(name);
+    if (it == schema_registry->end()) {
       return arrow::Status::KeyError("Schema '", name, "' not found");
     }
     return it->second;
@@ -509,8 +698,8 @@ class Database {
       return arrow::Status::Invalid("Schema cannot be null");
     }
 
-    auto it = schema_registry.find(name);
-    if (it == schema_registry.end()) {
+    auto it = schema_registry->find(name);
+    if (it == schema_registry->end()) {
       return arrow::Status::KeyError("Schema '", name, "' not found");
     }
 
@@ -524,7 +713,7 @@ class Database {
       return arrow::Status::Invalid("Schema name cannot be empty");
     }
 
-    if (schema_registry.erase(name) == 0) {
+    if (schema_registry->erase(name) == 0) {
       return arrow::Status::KeyError("Schema '", name, "' not found");
     }
     return true;
@@ -533,8 +722,8 @@ class Database {
   // Get all schema names
   [[nodiscard]] std::vector<std::string> get_schema_names() const {
     std::vector<std::string> names;
-    names.reserve(schema_registry.size());
-    for (const auto &[name, _] : schema_registry) {
+    names.reserve(schema_registry->size());
+    for (const auto &[name, _] : *schema_registry) {
       names.push_back(name);
     }
     return names;
@@ -546,12 +735,13 @@ class Database {
     if (schema_name.empty()) {
       return arrow::Status::Invalid("Schema name cannot be empty");
     }
+    
     ARROW_ASSIGN_OR_RAISE(auto schema, get_schema(schema_name));
     if (data.contains("id")) {
       return arrow::Status::Invalid("'id' column is auto generated");
     }
-    std::unordered_map<std::string, std::shared_ptr<arrow::Array>>
-        normalized_data;
+    
+    std::unordered_map<std::string, std::shared_ptr<arrow::Array>> normalized_data;
     for (auto field : schema->fields()) {
       if (field->name() != "id" && !field->nullable() &&
           (!data.contains(field->name()) ||
@@ -573,22 +763,54 @@ class Database {
         normalized_data[field->name()] = array;
       }
     }
+    
     auto id = id_counter.fetch_add(1);
     normalized_data["id"] = create_int64_array(id).ValueOrDie();
     auto node = std::make_shared<Node>(id, schema_name, normalized_data);
-    nodes[schema_name].insert(std::make_pair(id, node));
+    
+    // Insert node into shards
+    ARROW_RETURN_NOT_OK(shard_manager->insert_node(node));
+    
     return node;
   }
 
-  arrow::Result<std::vector<std::shared_ptr<Node>>> get_nodes(
-      const std::string &schema_name) {
+  arrow::Result<bool> update_node(const std::shared_ptr<BaseOperation>& update) {
+    return shard_manager->update_node(update);
+  }
+  
+  arrow::Result<bool> compact(const std::string& schema_name) {
+    return shard_manager->compact(schema_name);
+  }
+  
+  // Get a table for all nodes of a given schema
+  arrow::Result<std::shared_ptr<arrow::Table>> get_table(const std::string& schema_name, size_t chunk_size = 10000) {
     if (!has_schema(schema_name)) {
       return arrow::Status::Invalid("Schema '", schema_name, "' not found");
     }
-    std::vector<std::shared_ptr<Node>> result;
-    std::ranges::transform(nodes[schema_name], std::back_inserter(result),
-                           [](const auto &pair) { return pair.second; });
-    return result;
+    
+    // Get the schema
+    ARROW_ASSIGN_OR_RAISE(auto schema, get_schema(schema_name));
+    
+    // Use ShardManager to get tables from each shard
+    ARROW_ASSIGN_OR_RAISE(auto tables, shard_manager->get_tables(schema_name));
+    
+    if (tables.empty()) {
+      // No data in any shards, return empty table
+      std::vector<std::shared_ptr<arrow::ChunkedArray>> empty_columns;
+      for (int i = 0; i < schema->num_fields(); i++) {
+        empty_columns.push_back(std::make_shared<arrow::ChunkedArray>(
+            std::vector<std::shared_ptr<arrow::Array>>{}));
+      }
+      return arrow::Table::Make(schema, empty_columns);
+    }
+    
+    // If only one table, return it directly
+    if (tables.size() == 1) {
+      return tables[0];
+    }
+    
+    // Concatenate tables if we have multiple
+    return arrow::ConcatenateTables(tables);
   }
 };
 
