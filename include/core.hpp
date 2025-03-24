@@ -313,9 +313,13 @@ class Shard {
       return arrow::Status::Invalid("Shard is empty");
     }
     auto first = nodes_ids.begin();
-    nodes.erase(*first);
-    auto node = remove(*first).ValueOrDie();
-    min_id = node->id;
+    auto node_id = *first;
+    nodes_ids.erase(first);
+    auto node = nodes[node_id];
+    nodes.erase(node_id);
+    if (!nodes_ids.empty()) {
+      min_id = *nodes_ids.begin();
+    }
     return node;
   }
 
