@@ -15,6 +15,8 @@
 namespace tundradb {
 class Database;
 class Node;
+class Shard;
+class ShardManager;
 
 static arrow::Result<std::shared_ptr<arrow::Array>> create_int64_array(
     const int64_t value) {
@@ -163,6 +165,151 @@ class Node {
     }
     return update->apply(it->second, 0);
   }
+};
+
+class SchemaRegistry {
+ public:
+  arrow::Result<std::shared_ptr<arrow::Schema>> get(const std::string &id) {}
+};
+
+static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
+    const std::shared_ptr<arrow::Schema> &schema,
+    const std::vector<std::shared_ptr<Node>> &nodes, int64_t chunk_size = 0) {
+  if (nodes.empty()) {
+    return arrow::Status::Invalid("Empty nodes list");
+  }
+  auto field_names = schema->field_names();
+  if (field_names.empty()) {
+    return arrow::Status::Invalid("Empty field names list");
+  }
+
+  // Collect arrays for each field
+  std::vector<std::vector<std::shared_ptr<arrow::Array>>> field_arrays(
+      field_names.size());
+
+  // For each field
+  for (size_t field_idx = 0; field_idx < field_names.size(); ++field_idx) {
+    const auto &field_name = field_names[field_idx];
+
+    // For each node
+    for (const auto &node : nodes) {
+      auto field_result = node->get_field(field_name);
+      if (!field_result.ok()) {
+        return field_result.status();
+      }
+      field_arrays[field_idx].push_back(field_result.ValueOrDie());
+    }
+  }
+
+  // Concatenate arrays for each field
+  std::vector<std::shared_ptr<arrow::ChunkedArray>> columns;
+  for (const auto &arrays : field_arrays) {
+    if (chunk_size <= 0) {
+      // Single chunk - concatenate all arrays
+      ARROW_ASSIGN_OR_RAISE(auto concat_array, arrow::Concatenate(arrays));
+      columns.push_back(std::make_shared<arrow::ChunkedArray>(concat_array));
+    } else {
+      // Multiple chunks - create chunks of specified size
+      std::vector<std::shared_ptr<arrow::Array>> chunks;
+      int64_t total_length = 0;
+      std::vector<std::shared_ptr<arrow::Array>> current_chunk;
+
+      for (const auto &array : arrays) {
+        current_chunk.push_back(array);
+        total_length += array->length();
+
+        if (total_length >= chunk_size) {
+          ARROW_ASSIGN_OR_RAISE(auto concat_chunk,
+                                arrow::Concatenate(current_chunk));
+          chunks.push_back(concat_chunk);
+          current_chunk.clear();
+          total_length = 0;
+        }
+      }
+
+      // Handle remaining arrays
+      if (!current_chunk.empty()) {
+        ARROW_ASSIGN_OR_RAISE(auto concat_chunk,
+                              arrow::Concatenate(current_chunk));
+        chunks.push_back(concat_chunk);
+      }
+
+      columns.push_back(std::make_shared<arrow::ChunkedArray>(chunks));
+    }
+  }
+
+  return arrow::Table::Make(schema, columns);
+}
+
+class Shard {
+ private:
+  std::pmr::monotonic_buffer_resource memory_pool;
+  std::pmr::unordered_map<int64_t, std::shared_ptr<Node>> nodes;
+  bool dirty;
+  std::shared_ptr<arrow::Table> table;
+  std::shared_ptr<SchemaRegistry> schema_registry;
+  std::string schema_name;
+
+ public:
+  int64_t min_id;
+  int64_t max_id;
+  const size_t capacity;
+  const size_t chunk_size;
+
+  Shard(size_t capacity, int64_t min_id, int64_t max_id, size_t chunk_size,
+        size_t buffer_size = 10 * 1024 * 1024)
+      : capacity(capacity),
+        min_id(min_id),
+        max_id(max_id),
+        chunk_size(chunk_size),
+        memory_pool(buffer_size),
+        nodes(&memory_pool) {}
+
+  arrow::Result<bool> add(const std::shared_ptr<Node> &node) {
+    if (node->id < min_id || node->id > max_id) {
+      return arrow::Status::Invalid("Node id is out of range");
+    }
+    if (nodes.contains(node->id)) {
+      return arrow::Status::KeyError("Node already exists: ", node->id);
+    }
+    if (nodes.size() >= capacity) {
+      return arrow::Status::KeyError("Shard is full");
+    }
+    nodes.insert(std::make_pair(node->id, node));
+    return arrow::Status::OK();
+  }
+
+  arrow::Result<std::shared_ptr<Node>> remove(int64_t id) {
+    nodes.erase(id);
+    // todo remove status
+  }
+
+  arrow::Result<bool> update(const std::shared_ptr<BaseOperation> &update) {
+    if (!nodes.contains(update->node_id)) {
+      return arrow::Status::KeyError("Node not found: ", update->node_id);
+    }
+    dirty = true;
+    return nodes[update->node_id]->update(update);
+  }
+
+  arrow::Result<std::shared_ptr<arrow::Table>> get_table() {
+    if (dirty || !table) {
+      auto schema = schema_registry->get(schema_name).ValueOrDie();
+      std::vector<std::shared_ptr<Node>> result;
+      std::ranges::transform(nodes, std::back_inserter(result),
+                             [](const auto &pair) { return pair.second; });
+
+      table = create_table(schema, result, chunk_size).ValueOrDie();
+      dirty = false;  // fix: synchronize access, use atomic
+    }
+    return table;
+  }
+};
+
+class ShardManager {
+ private:
+  std::pmr::unordered_map<std::string, std::vector<std::shared_ptr<Shard>>>
+      shards;
 };
 
 class Database {
@@ -466,75 +613,6 @@ static void print_table(const std::shared_ptr<arrow::Table> &table,
   } catch (const std::exception &e) {
     std::cout << "Error while printing table: " << e.what() << std::endl;
   }
-}
-
-static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
-    const std::shared_ptr<arrow::Schema> &schema,
-    const std::vector<std::shared_ptr<Node>> &nodes, int64_t chunk_size = 0) {
-  if (nodes.empty()) {
-    return arrow::Status::Invalid("Empty nodes list");
-  }
-  auto field_names = schema->field_names();
-  if (field_names.empty()) {
-    return arrow::Status::Invalid("Empty field names list");
-  }
-
-  // Collect arrays for each field
-  std::vector<std::vector<std::shared_ptr<arrow::Array>>> field_arrays(
-      field_names.size());
-
-  // For each field
-  for (size_t field_idx = 0; field_idx < field_names.size(); ++field_idx) {
-    const auto &field_name = field_names[field_idx];
-
-    // For each node
-    for (const auto &node : nodes) {
-      auto field_result = node->get_field(field_name);
-      if (!field_result.ok()) {
-        return field_result.status();
-      }
-      field_arrays[field_idx].push_back(field_result.ValueOrDie());
-    }
-  }
-
-  // Concatenate arrays for each field
-  std::vector<std::shared_ptr<arrow::ChunkedArray>> columns;
-  for (const auto &arrays : field_arrays) {
-    if (chunk_size <= 0) {
-      // Single chunk - concatenate all arrays
-      ARROW_ASSIGN_OR_RAISE(auto concat_array, arrow::Concatenate(arrays));
-      columns.push_back(std::make_shared<arrow::ChunkedArray>(concat_array));
-    } else {
-      // Multiple chunks - create chunks of specified size
-      std::vector<std::shared_ptr<arrow::Array>> chunks;
-      int64_t total_length = 0;
-      std::vector<std::shared_ptr<arrow::Array>> current_chunk;
-
-      for (const auto &array : arrays) {
-        current_chunk.push_back(array);
-        total_length += array->length();
-
-        if (total_length >= chunk_size) {
-          ARROW_ASSIGN_OR_RAISE(auto concat_chunk,
-                                arrow::Concatenate(current_chunk));
-          chunks.push_back(concat_chunk);
-          current_chunk.clear();
-          total_length = 0;
-        }
-      }
-
-      // Handle remaining arrays
-      if (!current_chunk.empty()) {
-        ARROW_ASSIGN_OR_RAISE(auto concat_chunk,
-                              arrow::Concatenate(current_chunk));
-        chunks.push_back(concat_chunk);
-      }
-
-      columns.push_back(std::make_shared<arrow::ChunkedArray>(chunks));
-    }
-  }
-
-  return arrow::Table::Make(schema, columns);
 }
 
 arrow::Result<bool> demo_single_node();
