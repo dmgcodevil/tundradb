@@ -7,6 +7,7 @@
 
 int main() {
   // tundradb::demo_single_node();
-  tundradb::demo_batch_update().ValueOrDie();
+  // tundradb::demo_batch_update().ValueOrDie();
+  tundradb::demo_snapshot_creation().ValueOrDie();
   return 0;
 }

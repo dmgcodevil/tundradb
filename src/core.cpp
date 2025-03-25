@@ -6,8 +6,10 @@
 #include <memory>
 #include <thread>
 #include <vector>
+namespace fs = std::filesystem;
 
 namespace tundradb {
+
 // arrow::Result<bool> demo_single_node() {
 //     std::cout << "demo_single_node:\n" << std::endl;
 //     arrow::Int64Builder int64_builder;
@@ -163,4 +165,167 @@ arrow::Result<bool> demo_batch_update() {
 
   return true;
 }
+    // Helper function to verify a file exists
+bool file_exists(const std::string& path) {
+  std::ifstream f(path);
+  return f.good();
+}
+
+arrow::Result<bool> demo_snapshot_creation() {
+  std::cout << "Starting snapshot creation test" << std::endl;
+
+  // Create a temporary directory for the test
+  std::string temp_dir = fs::temp_directory_path().string() + "/tundradb_test_" +
+    std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+
+  std::cout << "Using temporary directory: " << temp_dir << std::endl;
+
+  // Create the directory if it doesn't exist
+  fs::create_directories(temp_dir);
+
+  // Create database with persistence enabled
+  auto config = make_config()
+    .with_data_directory(temp_dir)
+    .with_persistence_enabled(true)
+    .build();
+
+  Database db(config);
+
+  // Create schemas
+  auto schema_registry = db.get_schema_registry();
+
+  // Create "users" schema
+  auto user_fields = std::vector<std::shared_ptr<arrow::Field>>{
+    arrow::field("name", arrow::utf8()),
+    arrow::field("age", arrow::int32())
+  };
+  auto user_schema = arrow::schema(user_fields);
+  ARROW_RETURN_NOT_OK(schema_registry->add("users", user_schema));
+
+  // Create "products" schema
+  auto product_fields = std::vector<std::shared_ptr<arrow::Field>>{
+    arrow::field("title", arrow::utf8()),
+    arrow::field("price", arrow::float64())
+  };
+  auto product_schema = arrow::schema(product_fields);
+  ARROW_RETURN_NOT_OK(schema_registry->add("products", product_schema));
+
+  // Create user nodes
+  for (int i = 0; i < 10; i++) {
+    std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data;
+
+    auto name_builder = arrow::StringBuilder();
+    ARROW_RETURN_NOT_OK(name_builder.Append("User " + std::to_string(i)));
+    std::shared_ptr<arrow::Array> name_array;
+    ARROW_RETURN_NOT_OK(name_builder.Finish(&name_array));
+    data["name"] = name_array;
+
+    auto age_builder = arrow::Int32Builder();
+    ARROW_RETURN_NOT_OK(age_builder.Append(20 + i));
+    std::shared_ptr<arrow::Array> age_array;
+    ARROW_RETURN_NOT_OK(age_builder.Finish(&age_array));
+    data["age"] = age_array;
+
+    ARROW_RETURN_NOT_OK(db.create_node("users", data));
+  }
+
+  // Create product nodes
+  for (int i = 0; i < 5; i++) {
+    std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data;
+
+    auto title_builder = arrow::StringBuilder();
+    ARROW_RETURN_NOT_OK(title_builder.Append("Product " + std::to_string(i)));
+    std::shared_ptr<arrow::Array> title_array;
+    ARROW_RETURN_NOT_OK(title_builder.Finish(&title_array));
+    data["title"] = title_array;
+
+    auto price_builder = arrow::DoubleBuilder();
+    ARROW_RETURN_NOT_OK(price_builder.Append(10.0 * (i + 1)));
+    std::shared_ptr<arrow::Array> price_array;
+    ARROW_RETURN_NOT_OK(price_builder.Finish(&price_array));
+    data["price"] = price_array;
+
+    ARROW_RETURN_NOT_OK(db.create_node("products", data));
+  }
+
+  // Create a snapshot
+  std::cout << "Creating snapshot..." << std::endl;
+  ARROW_RETURN_NOT_OK(db.create_snapshot());
+
+  // Check files were created
+  // We would expect to have:
+  // 1. At least one metadata file for each schema
+  // 2. At least one data file for each schema
+
+  // Check the directory exists and has files
+  if (!fs::exists(temp_dir)) {
+    std::cerr << "Error: Data directory doesn't exist after snapshot creation" << std::endl;
+    return false;
+  }
+
+  // Count files by extension
+  int metadata_files = 0;
+  int parquet_files = 0;
+
+  std::cout << "Files created:" << std::endl;
+  for (const auto& entry : fs::recursive_directory_iterator(temp_dir)) {
+    if (entry.is_regular_file()) {
+      std::string path = entry.path().string();
+      std::cout << "  " << path << std::endl;
+
+      if (path.find(".metadata.json") != std::string::npos) {
+        metadata_files++;
+      } else if (path.find(".parquet") != std::string::npos) {
+        parquet_files++;
+      }
+    }
+  }
+
+  std::cout << "Found " << metadata_files << " metadata files and "
+            << parquet_files << " parquet files" << std::endl;
+
+  // We should have at least one metadata file and one parquet file
+  if (metadata_files == 0) {
+    std::cerr << "Error: No metadata files were created" << std::endl;
+    return false;
+  }
+
+  if (parquet_files == 0) {
+    std::cerr << "Error: No parquet files were created" << std::endl;
+    return false;
+  }
+
+  // Check if we have files for both schemas
+  bool has_users_files = false;
+  bool has_products_files = false;
+
+  for (const auto& entry : fs::recursive_directory_iterator(temp_dir)) {
+    if (entry.is_regular_file()) {
+      std::string path = entry.path().string();
+      if (path.find("users-") != std::string::npos) {
+        has_users_files = true;
+      } else if (path.find("products-") != std::string::npos) {
+        has_products_files = true;
+      }
+    }
+  }
+
+  if (!has_users_files) {
+    std::cerr << "Error: No files for 'users' schema found" << std::endl;
+    return false;
+  }
+
+  if (!has_products_files) {
+    std::cerr << "Error: No files for 'products' schema found" << std::endl;
+    return false;
+  }
+
+  std::cout << "Snapshot creation test passed successfully!" << std::endl;
+
+  // Clean up the temporary directory
+  fs::remove_all(temp_dir);
+
+  return true;
+}
+
 }  // namespace tundradb
