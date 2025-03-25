@@ -48,21 +48,16 @@ include_directories(
 
 # Core library
 add_library(core 
-    src/core.cpp
-    src/storage.cpp
+    src/core.cpp src/storage.cpp
 )
+
+
 target_include_directories(core
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     PRIVATE
         ${ARROW_INCLUDE_DIR}
 )
-
-# Link against Arrow (using imported targets)
-#target_link_libraries(core
-#    PRIVATE
-#        Arrow::arrow_shared
-#)
 
 
 # Main executable

@@ -13,10 +13,13 @@ add_executable(sharding_test
 # Link against Arrow and GTest
 target_link_libraries(sharding_test
     PRIVATE
-    Arrow::arrow_shared
-    GTest::GTest
-    GTest::Main
-    pthread
+        core
+        Arrow::arrow_shared
+        Parquet::parquet_shared
+        nlohmann_json::nlohmann_json
+        GTest::GTest
+        GTest::Main
+        pthread
 )
 
 # Simple test registration

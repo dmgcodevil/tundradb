@@ -13,6 +13,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+
 #include "storage.hpp"
 
 namespace tundradb {
@@ -47,10 +48,11 @@ class DatabaseConfig {
 
   // Memory pool size for database (in bytes)
   size_t database_memory_pool_size = defaults::DATABASE_MEMORY_POOL_SIZE;
-  
-  // Path to the data directory for persistence (empty string means in-memory only)
+
+  // Path to the data directory for persistence (empty string means in-memory
+  // only)
   std::string data_directory = "";
-  
+
   // Whether persistence is enabled
   bool persistence_enabled = false;
 
@@ -104,12 +106,12 @@ class DatabaseConfigBuilder {
     config.database_memory_pool_size = size;
     return *this;
   }
-  
-  DatabaseConfigBuilder &with_data_directory(const std::string& directory) {
+
+  DatabaseConfigBuilder &with_data_directory(const std::string &directory) {
     config.data_directory = directory;
     return *this;
   }
-  
+
   DatabaseConfigBuilder &with_persistence_enabled(bool enabled) {
     config.persistence_enabled = enabled;
     return *this;
@@ -131,7 +133,6 @@ class DatabaseConfigBuilder {
 
 // Helper function to create a config builder
 inline DatabaseConfigBuilder make_config() { return {}; }
-
 
 static arrow::Result<std::shared_ptr<arrow::Array>> create_int64_array(
     const int64_t value) {
@@ -450,15 +451,15 @@ class Shard {
   std::shared_ptr<SchemaRegistry> schema_registry;
 
  public:
-  const int64_t id;  // Unique shard identifier
-  int64_t min_id;    // Minimum node ID in this shard
-  int64_t max_id;    // Maximum node ID in this shard
-  const size_t capacity;  // Maximum number of nodes
+  const int64_t id;         // Unique shard identifier
+  int64_t min_id;           // Minimum node ID in this shard
+  int64_t max_id;           // Maximum node ID in this shard
+  const size_t capacity;    // Maximum number of nodes
   const size_t chunk_size;  // Size of chunks for table creation
   std::string schema_name;  // Name of the schema this shard holds
 
-  Shard(int64_t id, size_t capacity, int64_t min_id, int64_t max_id, size_t chunk_size,
-        const std::string &schema_name,
+  Shard(int64_t id, size_t capacity, int64_t min_id, int64_t max_id,
+        size_t chunk_size, const std::string &schema_name,
         std::shared_ptr<SchemaRegistry> schema_registry,
         size_t buffer_size = 10 * 1024 * 1024)
       : id(id),
@@ -472,8 +473,8 @@ class Shard {
         schema_name(schema_name) {}
 
   // Constructor that uses DatabaseConfig
-  Shard(int64_t id, const DatabaseConfig &config, int64_t min_id, int64_t max_id,
-        const std::string &schema_name,
+  Shard(int64_t id, const DatabaseConfig &config, int64_t min_id,
+        int64_t max_id, const std::string &schema_name,
         std::shared_ptr<SchemaRegistry> schema_registry)
       : id(id),
         capacity(config.get_shard_capacity()),
@@ -600,13 +601,14 @@ class ShardManager {
   const size_t shard_capacity;
   const size_t chunk_size;
   const DatabaseConfig config;
-  std::atomic<int64_t> id_counter;
+  std::unordered_map<std::string, std::atomic<int64_t>> id_counter;
 
   void create_new_shard(const std::shared_ptr<Node> &node) {
     auto new_min_id = node->id;
     auto new_max_id = node->id + shard_capacity - 1;
 
-    auto shard = std::make_shared<Shard>(id_counter++, config, new_min_id, new_max_id,
+    auto shard = std::make_shared<Shard>(id_counter[node->schema_name]++,
+                                         config, new_min_id, new_max_id,
                                          node->schema_name, schema_registry);
 
     auto result = shard->add(node);
@@ -633,17 +635,19 @@ class ShardManager {
   std::vector<std::string> get_schemas() const {
     std::vector<std::string> schema_names;
     schema_names.reserve(shards.size());
-    for (const auto& [schema_name, _] : shards) {
+    for (const auto &[schema_name, _] : shards) {
       schema_names.push_back(schema_name);
     }
     return schema_names;
   }
 
   // Get shards for a given schema (returns a copy)
-  arrow::Result<std::vector<std::shared_ptr<Shard>>> get_shards(const std::string& schema_name) const {
+  arrow::Result<std::vector<std::shared_ptr<Shard>>> get_shards(
+      const std::string &schema_name) const {
     auto it = shards.find(schema_name);
     if (it == shards.end()) {
-      return arrow::Status::KeyError("Schema '", schema_name, "' not found in shards");
+      return arrow::Status::KeyError("Schema '", schema_name,
+                                     "' not found in shards");
     }
     return it->second;
   }
@@ -895,11 +899,11 @@ class ShardManager {
   }
 
   // Add a pre-existing shard directly to the shard manager
-  arrow::Result<bool> add_shard(const std::shared_ptr<Shard>& shard) {
+  arrow::Result<bool> add_shard(const std::shared_ptr<Shard> &shard) {
     if (!shard) {
       return arrow::Status::Invalid("Cannot add null shard");
     }
-    
+
     // Add shard to the appropriate schema's shard list
     shards[shard->schema_name].push_back(shard);
     return true;
@@ -936,12 +940,13 @@ class Database {
         id_counter(0),
         config(config),
         persistence_enabled(config.is_persistence_enabled()) {
-    
     if (persistence_enabled && !config.get_data_directory().empty()) {
-      storage = std::make_unique<Storage>(config.get_data_directory(), schema_registry);
+      storage = std::make_unique<Storage>(config.get_data_directory(),
+                                          schema_registry);
       auto result = storage->initialize();
       if (!result.ok()) {
-        std::cerr << "Failed to initialize storage: " << result.status().ToString() << std::endl;
+        std::cerr << "Failed to initialize storage: "
+                  << result.status().ToString() << std::endl;
         persistence_enabled = false;
       }
     }
@@ -1089,12 +1094,20 @@ class Database {
   arrow::Result<bool> create_snapshot() {
     auto snap_id = snapshot_counter++;
     auto schema_names = shard_manager->get_schemas();
-    for (auto schema_name: schema_names) {
-      ARROW_ASSIGN_OR_RAISE(auto shards, shard_manager->get_shards(schema_name));
-      for (auto shard: shards) {
+    for (auto schema_name : schema_names) {
+      ARROW_ASSIGN_OR_RAISE(auto shards,
+                            shard_manager->get_shards(schema_name));
+      for (auto shard : shards) {
         ARROW_RETURN_NOT_OK(storage->write_shard(snap_id, shard));
       }
     }
+    return true;
+  }
+
+  arrow::Result<bool> load_shard(const std::string &path) {
+    auto shard = storage->read_shard(path).ValueOrDie();
+    std::cout << "Loaded shard '" << path << "'..." << std::endl;
+    ARROW_RETURN_NOT_OK(shard_manager->add_shard(shard));
     return true;
   }
 };
@@ -1237,6 +1250,8 @@ arrow::Result<bool> demo_single_node();
 arrow::Result<bool> demo_batch_update();
 
 arrow::Result<bool> demo_snapshot_creation();
+
+arrow::Result<bool> load_shard_demo();
 
 }  // namespace tundradb
 
