@@ -59,10 +59,10 @@ target_include_directories(core
 )
 
 # Explicitly link core against UUID
-target_link_libraries(core
-    PUBLIC  # Changed from PRIVATE to PUBLIC so dependents can use it
-        uuid  # Directly use the library name
-)
+#target_link_libraries(core
+#    PUBLIC  # Changed from PRIVATE to PUBLIC so dependents can use it
+#        uuid  # Directly use the library name
+#)
 
 # Main executable
 add_executable(tundradb src/main.cpp)
@@ -72,6 +72,7 @@ target_link_libraries(tundradb
         Arrow::arrow_shared
         Parquet::parquet_shared
         nlohmann_json::nlohmann_json
+        ${UUID_LIBRARY}
 )
 
 # Add the tests subdirectory
