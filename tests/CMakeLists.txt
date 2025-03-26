@@ -25,6 +25,7 @@ target_link_libraries(sharding_test
         GTest::GTest
         GTest::Main
         pthread
+        ${UUID_LIBRARY}
 )
 
 target_link_libraries(metadata_test
@@ -36,6 +37,7 @@ target_link_libraries(metadata_test
         GTest::GTest
         GTest::Main
         pthread
+        ${UUID_LIBRARY}
 )
 
 # Simple test registration
