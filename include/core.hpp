@@ -5,7 +5,7 @@
 #include <arrow/result.h>
 #include <arrow/table.h>
 #include <arrow/type.h>
-
+#include <chrono>
 #include <algorithm>
 #include <iostream>
 #include <memory_resource>
@@ -930,7 +930,7 @@ class Database {
   // Storage for persistence
   std::unique_ptr<Storage> storage;
 
-  std::atomic<int64_t> snapshot_counter;
+  // std::atomic<int64_t> snapshot_counter;
 
  public:
   // Constructor that takes a DatabaseConfig
@@ -1092,8 +1092,13 @@ class Database {
   }
 
   arrow::Result<bool> create_snapshot() {
-    auto snap_id = snapshot_counter++;
+    auto now = std::chrono::system_clock::now();
+    auto snap_id =  std::chrono::duration_cast<std::chrono::milliseconds>(
+          now.time_since_epoch())
+          .count();
     auto schema_names = shard_manager->get_schemas();
+
+
     for (auto schema_name : schema_names) {
       ARROW_ASSIGN_OR_RAISE(auto shards,
                             shard_manager->get_shards(schema_name));

@@ -7,6 +7,7 @@
 #include <parquet/arrow/reader.h>
 #include <parquet/arrow/writer.h>
 #include <parquet/file_reader.h>
+#include <nlohmann/json.hpp>
 
 #include <filesystem>
 #include <fstream>
@@ -20,28 +21,14 @@ namespace tundradb {
 class SchemaRegistry;
 class Shard;
 
-// Metadata for a single shard
-struct ShardMetadata {
-  std::string shard_id;
-  std::string schema_name;
-  int64_t min_id;
-  int64_t max_id;
-  size_t record_count;
-  size_t chunk_size;
-  std::string data_file;
-  int64_t timestamp_ms;  // Time in milliseconds since epoch
 
-  // Serialize to JSON
-  std::string to_json() const;
-
-  // Deserialize from JSON
-  static arrow::Result<ShardMetadata> from_json(const std::string& json_str);
-};
 
 class Storage {
  private:
   std::string data_directory;
   std::shared_ptr<SchemaRegistry> schema_registry;
+  std::string metadata_dir;
+  std::string data_dir;
 
  public:
   // Constructor

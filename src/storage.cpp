@@ -10,6 +10,7 @@
 #include <nlohmann/json.hpp>
 #include <random>
 #include <sstream>
+#include "metadata.hpp"
 
 namespace tundradb {
 
@@ -19,37 +20,37 @@ namespace tundradb {
 
 // Using nlohmann/json for efficient and more robust JSON
 // serialization/deserialization
-std::string ShardMetadata::to_json() const {
-  nlohmann::json j;
-  j["shard_id"] = shard_id;
-  j["schema_name"] = schema_name;
-  j["min_id"] = min_id;
-  j["max_id"] = max_id;
-  j["record_count"] = record_count;
-  j["chunk_size"] = chunk_size;
-  j["data_file"] = data_file;
-  j["timestamp_ms"] = timestamp_ms;
-  return j.dump();
-}
-
-arrow::Result<ShardMetadata> ShardMetadata::from_json(
-    const std::string& json_str) {
-  try {
-    auto j = nlohmann::json::parse(json_str);
-    ShardMetadata metadata;
-    metadata.shard_id = j["shard_id"].get<std::string>();
-    metadata.schema_name = j["schema_name"].get<std::string>();
-    metadata.min_id = j["min_id"].get<int64_t>();
-    metadata.max_id = j["max_id"].get<int64_t>();
-    metadata.record_count = j["record_count"].get<size_t>();
-    metadata.chunk_size = j["chunk_size"].get<size_t>();
-    metadata.data_file = j["data_file"].get<std::string>();
-    metadata.timestamp_ms = j["timestamp_ms"].get<int64_t>();
-    return metadata;
-  } catch (const std::exception& e) {
-    return arrow::Status::Invalid("Failed to parse JSON metadata: ", e.what());
-  }
-}
+// std::string ShardMetadata::to_json() const {
+//   nlohmann::json j;
+//   j["shard_id"] = shard_id;
+//   j["schema_name"] = schema_name;
+//   j["min_id"] = min_id;
+//   j["max_id"] = max_id;
+//   j["record_count"] = record_count;
+//   j["chunk_size"] = chunk_size;
+//   j["data_file"] = data_file;
+//   j["timestamp_ms"] = timestamp_ms;
+//   return j.dump();
+// }
+//
+// arrow::Result<ShardMetadata> ShardMetadata::from_json(
+//     const std::string& json_str) {
+//   try {
+//     auto j = nlohmann::json::parse(json_str);
+//     ShardMetadata metadata;
+//     metadata.shard_id = j["shard_id"].get<std::string>();
+//     metadata.schema_name = j["schema_name"].get<std::string>();
+//     metadata.min_id = j["min_id"].get<int64_t>();
+//     metadata.max_id = j["max_id"].get<int64_t>();
+//     metadata.record_count = j["record_count"].get<size_t>();
+//     metadata.chunk_size = j["chunk_size"].get<size_t>();
+//     metadata.data_file = j["data_file"].get<std::string>();
+//     metadata.timestamp_ms = j["timestamp_ms"].get<int64_t>();
+//     return metadata;
+//   } catch (const std::exception& e) {
+//     return arrow::Status::Invalid("Failed to parse JSON metadata: ", e.what());
+//   }
+// }
 
 Storage::Storage(const std::string& data_dir,
                  std::shared_ptr<SchemaRegistry> schema_registry)
@@ -58,7 +59,8 @@ Storage::Storage(const std::string& data_dir,
 arrow::Result<bool> Storage::initialize() {
   // Create data directory if it doesn't exist
   try {
-    std::filesystem::create_directories(data_directory);
+    std::filesystem::create_directories(data_directory + "/metadata");
+    std::filesystem::create_directories(data_directory + "/data");
     return true;
   } catch (const std::filesystem::filesystem_error& e) {
     return arrow::Status::IOError("Failed to create data directory: ",
@@ -108,8 +110,7 @@ arrow::Result<std::string> Storage::write_shard(
 
   // Create shard metadata
   ShardMetadata shard_metadata;
-  shard_metadata.shard_id =
-      std::to_string(shard->id);  // Using shard ID from the shard object
+  shard_metadata.shard_id = std::to_string(shard->id);
   shard_metadata.schema_name = schema_name;
   shard_metadata.min_id = shard->min_id;
   shard_metadata.max_id = shard->max_id;
@@ -124,8 +125,9 @@ arrow::Result<std::string> Storage::write_shard(
           now.time_since_epoch())
           .count();
 
-  // Serialize metadata to JSON
-  std::string json_str = shard_metadata.to_json();
+  // Convert to JSON using nlohmann::json
+  nlohmann::json j = shard_metadata;
+  std::string json_str = j.dump();
 
   std::string metadata_file_path =
       data_directory + "/" + schema_name + "-" + shard_metadata.shard_id + "-" +
@@ -164,9 +166,14 @@ arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(
   std::string json_str = buffer.str();
   file.close();
 
-  // Parse metadata
-  ARROW_ASSIGN_OR_RAISE(auto shard_metadata,
-                        ShardMetadata::from_json(json_str));
+  // Parse metadata using nlohmann::json
+  ShardMetadata shard_metadata;
+  try {
+    nlohmann::json j = nlohmann::json::parse(json_str);
+    shard_metadata = j.get<ShardMetadata>();
+  } catch (const std::exception& e) {
+    return arrow::Status::Invalid("Failed to parse JSON metadata: ", e.what());
+  }
 
   // Check if data file exists
   if (!std::filesystem::exists(shard_metadata.data_file)) {

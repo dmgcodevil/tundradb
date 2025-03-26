@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.30)
 project(tundradb)
 
 set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Add Homebrew prefix to CMAKE_PREFIX_PATH
 list(APPEND CMAKE_PREFIX_PATH "/opt/homebrew")
@@ -47,8 +48,10 @@ include_directories(
 )
 
 # Core library
-add_library(core 
-    src/core.cpp src/storage.cpp
+add_library(core
+        src/core.cpp
+        src/storage.cpp
+        src/metadata.cpp
 )
 
 
