@@ -49,6 +49,7 @@ add_library(core
         src/core.cpp
         src/storage.cpp
         src/metadata.cpp
+        src/file_utils.cpp
 )
 
 target_include_directories(core

@@ -13,8 +13,11 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
-
+#include <nlohmann/json.hpp>
+#include "file_utils.hpp"
+#include "metadata.hpp"
 #include "storage.hpp"
+using namespace std::string_literals;
 
 namespace tundradb {
 class Database;
@@ -133,6 +136,11 @@ class DatabaseConfigBuilder {
 
 // Helper function to create a config builder
 inline DatabaseConfigBuilder make_config() { return {}; }
+
+struct Info {
+  std::string current_metadata;
+  NLOHMANN_DEFINE_TYPE_INTRUSIVE(Info, current_metadata);
+};
 
 static arrow::Result<std::shared_ptr<arrow::Array>> create_int64_array(
     const int64_t value) {
@@ -930,6 +938,8 @@ class Database {
   // Storage for persistence
   std::unique_ptr<Storage> storage;
 
+  std::shared_ptr<Metadata> metadata;
+
   // std::atomic<int64_t> snapshot_counter;
 
  public:
@@ -957,6 +967,26 @@ class Database {
 
   std::shared_ptr<SchemaRegistry> get_schema_registry() {
     return schema_registry;
+  }
+
+  arrow::Result<Info> load_info() {
+    auto info_file_path = this->config.get_data_directory() + "/metadata/info.json";
+    if(file_exists(info_file_path)) {
+      return read_json_file<Info>(info_file_path);
+    }
+    Info info;
+    info.current_metadata = ""s;
+    ARROW_RETURN_NOT_OK(write_json_file(info, info_file_path));
+    return info;
+  }
+
+  arrow::Result<bool> initialize() {
+    ARROW_ASSIGN_OR_RAISE(auto info, load_info());
+    std::cout << "current metadata=" << info.current_metadata << std::endl;
+    if(info.empty()) {
+      this->metadata = std::make_shared<Metadata>();
+    }
+    return true;
   }
 
   arrow::Result<std::shared_ptr<Node>> create_node(
@@ -1097,6 +1127,19 @@ class Database {
           now.time_since_epoch())
           .count();
     auto schema_names = shard_manager->get_schemas();
+    Metadata new_metadata;
+    if(this->metadata->snapshot_id != 0) {
+      new_metadata.snapshot_id = snap_id;
+      new_metadata.parent_snapshot_id = this->metadata->snapshot_id;
+    }
+    std::unordered_map<std::string, ShardMetadata> prev_shards_metadata;
+    Manifest prev_manifest;
+    if(!this->metadata->manifest_location.empty()) {
+      ARROW_ASSIGN_OR_RAISE(prev_manifest, read_json_file(this->metadata->manifest_location));
+    }
+    for(const auto& shard_manifest : prev_manifest.shards) {
+      prev_shards_metadata[shard_manifest.shard_id] = shard_manifest;
+    }
 
 
     for (auto schema_name : schema_names) {

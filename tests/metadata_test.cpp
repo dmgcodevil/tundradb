@@ -84,7 +84,7 @@ TEST_F(MetadataManagerTest, WriteAndReadMetadata) {
     Metadata metadata;
     metadata.id = "test_metadata"s;
     metadata.snapshot_id = 1;
-    metadata.snapshot_parent_id = 0;
+    metadata.parent_snapshot_id = 0;
     metadata.manifest_location = "manifest.json"s;
     metadata.timestamp_ms = 1234567890;
     
@@ -92,7 +92,7 @@ TEST_F(MetadataManagerTest, WriteAndReadMetadata) {
     Metadata child_snapshot;
     child_snapshot.id = "child_snapshot"s;
     child_snapshot.snapshot_id = 2;
-    child_snapshot.snapshot_parent_id = 1;
+    child_snapshot.parent_snapshot_id = 1;
     child_snapshot.manifest_location = "child_manifest.json"s;
     child_snapshot.timestamp_ms = 1234567891;
     
@@ -110,7 +110,7 @@ TEST_F(MetadataManagerTest, WriteAndReadMetadata) {
     Metadata read_metadata = read_result.ValueOrDie();
     ASSERT_EQ(read_metadata.id, metadata.id);
     ASSERT_EQ(read_metadata.snapshot_id, metadata.snapshot_id);
-    ASSERT_EQ(read_metadata.snapshot_parent_id, metadata.snapshot_parent_id);
+    ASSERT_EQ(read_metadata.parent_snapshot_id, metadata.parent_snapshot_id);
     ASSERT_EQ(read_metadata.manifest_location, metadata.manifest_location);
     ASSERT_EQ(read_metadata.timestamp_ms, metadata.timestamp_ms);
     ASSERT_EQ(read_metadata.snapshots.size(), 1);
@@ -118,7 +118,7 @@ TEST_F(MetadataManagerTest, WriteAndReadMetadata) {
     const auto& read_child = read_metadata.snapshots[0];
     ASSERT_EQ(read_child.id, child_snapshot.id);
     ASSERT_EQ(read_child.snapshot_id, child_snapshot.snapshot_id);
-    ASSERT_EQ(read_child.snapshot_parent_id, child_snapshot.snapshot_parent_id);
+    ASSERT_EQ(read_child.parent_snapshot_id, child_snapshot.parent_snapshot_id);
     ASSERT_EQ(read_child.manifest_location, child_snapshot.manifest_location);
     ASSERT_EQ(read_child.timestamp_ms, child_snapshot.timestamp_ms);
 }

@@ -72,14 +72,14 @@ namespace tundradb {
     struct Metadata {
         std::string id;
         int64_t snapshot_id;
-        int64_t snapshot_parent_id;
+        int64_t parent_snapshot_id;
         std::string manifest_location;
         std::vector<Metadata> snapshots;
         int64_t timestamp_ms;
         NLOHMANN_DEFINE_TYPE_INTRUSIVE(Metadata,
             id,
             snapshot_id,
-            snapshot_parent_id,
+            parent_snapshot_id,
             manifest_location,
             snapshots, timestamp_ms);
 
@@ -87,7 +87,7 @@ namespace tundradb {
             std::stringstream ss;
             ss << "Metadata{id='" << id 
                << "', snapshot_id=" << snapshot_id 
-               << ", snapshot_parent_id=" << snapshot_parent_id 
+               << ", snapshot_parent_id=" << parent_snapshot_id 
                << ", manifest_location='" << manifest_location 
                << "', timestamp_ms=" << timestamp_ms 
                << ", snapshots=[";
