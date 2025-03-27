@@ -39,7 +39,7 @@ namespace tundradb {
 void update_node_batch(
     Database& db, const std::vector<int64_t>& node_ids, size_t start,
     size_t end,
-    const std::vector<std::shared_ptr<tundradb::BaseOperation>>&
+    const std::vector<std::shared_ptr<BaseOperation>>&
         update_templates) {
   for (size_t i = start; i < end; ++i) {
     int64_t node_id = node_ids[i];
@@ -100,16 +100,16 @@ arrow::Result<bool> demo_batch_update() {
   std::vector<std::string> name_field_name = {"name"};
   std::vector<std::string> name2_field_name = {"name2"};
 
-  auto update_count = std::make_shared<tundradb::SetOperation>(
+  auto update_count = std::make_shared<SetOperation>(
       0, count_field_name, create_int64_array(1).ValueOrDie());
-  auto update_count2 = std::make_shared<tundradb::SetOperation>(
+  auto update_count2 = std::make_shared<SetOperation>(
       0, count2_field_name, create_int64_array(2).ValueOrDie());
-  auto update_name = std::make_shared<tundradb::SetOperation>(
+  auto update_name = std::make_shared<SetOperation>(
       0, name_field_name, create_str_array("tundra").ValueOrDie());
-  auto update_name2 = std::make_shared<tundradb::SetOperation>(
+  auto update_name2 = std::make_shared<SetOperation>(
       0, name2_field_name, create_str_array("db").ValueOrDie());
 
-  std::vector<std::shared_ptr<tundradb::BaseOperation>> update_templates = {
+  std::vector<std::shared_ptr<BaseOperation>> update_templates = {
       update_count, update_count2, update_name, update_name2};
 
   std::cout << "Running updates on " << num_threads << " threads..."
@@ -342,23 +342,40 @@ arrow::Result<bool> demo_snapshot_creation() {
     return result.ValueOrDie();
 }
 
-
 arrow::Result<bool> demo() {
-    auto config = make_config().with_db_path("./testdb").build();
-    Database db(config);
-    db.initialize().ValueOrDie();
+    auto config = make_config()
+    .with_db_path("./testdb")
+    .with_shard_capacity(4)
+    .with_chunk_size(2)
+    .build();
 
     auto name_field = arrow::field("name", arrow::utf8());
     auto age_field = arrow::field("age", arrow::int64());
     auto schema = arrow::schema({name_field, age_field});
 
+    Database db(config);
     db.get_schema_registry()->add("users", schema).ValueOrDie();
-    auto snap = db.create_snapshot().ValueOrDie();
+    db.initialize().ValueOrDie();
+    print_table(db.get_table("users").ValueOrDie());
+
+
+    //
+    // auto users_count = 8;
+    // for (int64_t i = 0; i < users_count; i++) {
+    //     create_user_node(db, "user" + std::to_string(i), i + 20);
+    // }
+    //
+    // std::cout << "shard_count=" << std::to_string(db.get_shard_count("users").ValueOrDie()) << std::endl;
+    // print_table(db.get_table("users").ValueOrDie());
+    //
+    //
+    //
+    // auto snap = db.create_snapshot().ValueOrDie();
+    // db.create_snapshot().ValueOrDie();
+    // db.create_snapshot().ValueOrDie();
 
 
     return true;
 }
-
-
 
 }  // namespace tundradb

@@ -18,7 +18,6 @@
 #include "metadata.hpp"
 #include "storage.hpp"
 #include "utils.hpp"
-#include "snapshot.hpp"
 using namespace std::string_literals;
 
 namespace tundradb {
@@ -26,8 +25,66 @@ class Database;
 class Node;
 class Shard;
 class ShardManager;
-struct Snapshot;
-class SnapshotManager;
+class MetadataManager;
+class Storage;
+
+// Define Snapshot struct here
+struct Snapshot {
+    int64_t id;
+    int64_t parent_id;
+    std::string manifest_location;
+    std::vector<Snapshot> snapshots;
+    int64_t timestamp_ms;
+    NLOHMANN_DEFINE_TYPE_INTRUSIVE(Snapshot,
+                                   id,
+                                   parent_id,
+                                   manifest_location,
+                                   snapshots, timestamp_ms);
+
+    std::string toString() const {
+        std::stringstream ss;
+        ss << "Snapshot{id='" << id
+                << "', parent_id=" << parent_id
+                << ", manifest_location='" << manifest_location
+                << "', timestamp_ms=" << timestamp_ms
+                << ", snapshots=[";
+        for (size_t i = 0; i < snapshots.size(); ++i) {
+            ss << snapshots[i];
+            if (i < snapshots.size() - 1) ss << ", ";
+        }
+        ss << "]}";
+        return ss.str();
+    }
+
+    friend std::ostream &operator<<(std::ostream &os, const Snapshot &snapshot) {
+        os << snapshot.toString();
+        return os;
+    }
+};
+
+// Move SnapshotManager definition here
+class SnapshotManager {
+public:
+    explicit SnapshotManager(std::shared_ptr<MetadataManager> metadata_manager,
+                             std::shared_ptr<Storage> storage,
+                             std::shared_ptr<ShardManager> shard_manager);
+
+    arrow::Result<bool> initialize();
+
+    arrow::Result<std::shared_ptr<Snapshot>> commit();
+
+    std::shared_ptr<Snapshot> current_snapshot();
+
+private:
+    std::shared_ptr<Snapshot> snapshot;
+    std::shared_ptr<MetadataManager> metadata_manager;
+    std::shared_ptr<Storage> storage;
+    std::shared_ptr<ShardManager> shard_manager;
+};
+
+// No longer need to include snapshot.hpp as we've moved all definitions here
+// Remove the following line:
+// #include "snapshot.hpp"
 
 // Default configuration constants
 namespace defaults {
@@ -456,8 +513,8 @@ class Shard {
   std::atomic<bool> dirty{false};
   std::shared_ptr<arrow::Table> table;
   std::shared_ptr<SchemaRegistry> schema_registry;
-  int64_t updated_ts;
-  bool updated = false;
+  int64_t updated_ts = now_millis();
+  bool updated = true; // todo should be false when we read from snaptshot and after commit
 
  public:
   const int64_t id;         // Unique shard identifier
@@ -498,12 +555,16 @@ class Shard {
   bool is_updated() const {
     return updated;
   }
+  bool set_updated(bool v) {
+    updated = v;
+  }
 
   int64_t get_updated_ts() const {
     return updated_ts;
   }
 
   arrow::Result<bool> add(const std::shared_ptr<Node> &node) {
+    std::cout << "add node to shard: " << std::to_string(this->id) << std::endl;
     if (node->id < min_id || node->id > max_id) {
       return arrow::Status::Invalid("Node id is out of range");
     }
@@ -727,10 +788,12 @@ class ShardManager {
   }
 
   arrow::Result<bool> insert_node(const std::shared_ptr<Node> &node) {
+    std::cout << "insert_node\n" << std::endl;
     auto it = shards.find(node->schema_name);
     if (it == shards.end()) {
       // Create new schema entry if it doesn't exist
       shards[node->schema_name] = std::vector<std::shared_ptr<Shard>>();
+      std::cout << "create new shard\n" << std::endl;
       create_new_shard(node);
       return true;
     }
@@ -932,6 +995,15 @@ class ShardManager {
     shards[shard->schema_name].push_back(shard);
     return true;
   }
+
+  void reset_all_updated() {
+    for (const auto &entry: shards) {
+      for (auto shard: entry.second) {
+        shard->set_updated(false);
+      }
+    }
+  }
+
 };
 
 class Database {
@@ -968,7 +1040,7 @@ class Database {
         persistence_enabled(config.is_persistence_enabled()) {
     if (persistence_enabled) {
       // todo: assert db_path is not empty
-      storage = std::make_shared<Storage>(config.get_db_path() ,
+      storage = std::make_shared<Storage>(config.get_db_path()+"/data" ,
                                           schema_registry);
       metadata_manager = std::make_shared<MetadataManager>(config.get_db_path());
       snapshot_manager = std::make_shared<SnapshotManager>(metadata_manager, storage, shard_manager);
@@ -988,16 +1060,23 @@ class Database {
     return schema_registry;
   }
 
-
-
   arrow::Result<bool> initialize() {
-    if (!config.is_persistence_enabled()) {
-      this->storage->initialize().ValueOrDie();
-      this->metadata_manager->initialize().ValueOrDie();
-      this->snapshot_manager->initialize().ValueOrDie();
+    if (persistence_enabled) {
+      auto storage_init = this->storage->initialize();
+      if (!storage_init.ok()) {
+        return storage_init.status();
+      }
+      
+      auto metadata_init = this->metadata_manager->initialize();
+      if (!metadata_init.ok()) {
+        return metadata_init.status();
+      }
+      
+      auto snapshot_init = this->snapshot_manager->initialize();
+      if (!snapshot_init.ok()) {
+        return snapshot_init.status();
+      }
     }
-
-
     return true;
   }
 

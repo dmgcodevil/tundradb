@@ -1,13 +1,15 @@
-#include <iostream>
-#include <nlohmann/json.hpp>
-#include <arrow/api.h>
-#include <sstream>
-#include <string>
-#include <vector>
-#include "file_utils.hpp"
-
 #ifndef METADATA_HPP
 #define METADATA_HPP
+
+#include <string>
+#include <vector>
+#include <sstream>
+#include <nlohmann/json.hpp>
+#include <arrow/result.h>
+#include <arrow/api.h>
+#include <filesystem>
+#include "file_utils.hpp"
+#include "logger.hpp"
 
 using namespace std::string_literals;
 
@@ -56,9 +58,9 @@ namespace tundradb {
             return os;
         }
 
-        std::string compound_id() const {
-            return this->schema_name + "-" + std::to_string(this->id);
-        }
+        // std::string compound_id() const {
+        //     return this->schema_name + "-" + std::to_string(this->id);
+        // }
     };
 
     struct Manifest {
@@ -99,11 +101,13 @@ namespace tundradb {
         arrow::Result<bool> initialize();
 
         arrow::Result<Metadata> load_metadata() {
+            log_info("Loading metadata");
             auto file_path = this->metadata_dir + "/metadata.json";
+            log_info("Loading metadata from " + file_path);
             if (file_exists(file_path)) {
                 return read_json_file<Metadata>(file_path);
             }
-            std::cout << "file '" << file_path << "' doesn't exist. create empty metadata" << std::endl;
+            log_info("File '" + file_path + "' doesn't exist. Creating empty metadata");
             Metadata metadata;
             metadata.snapshot_location = ""s;
             ARROW_RETURN_NOT_OK(write_json_file(metadata, file_path));

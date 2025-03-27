@@ -14,6 +14,9 @@ find_package(Parquet REQUIRED)
 find_package(benchmark REQUIRED)
 find_package(GTest REQUIRED)
 
+# Try to find spdlog first, if not found we'll use FetchContent
+find_package(spdlog QUIET)
+
 # Explicitly set UUID_LIBRARY for Linux
 if(APPLE)
   # On macOS, we need to use find_library as it's part of the system
@@ -39,6 +42,20 @@ else()
   message(STATUS "nlohmann_json target already exists, skipping FetchContent")
 endif()
 
+# Add spdlog if not found with find_package
+if(NOT spdlog_FOUND AND NOT TARGET spdlog::spdlog)
+  include(FetchContent)
+  FetchContent_Declare(
+    spdlog
+    GIT_REPOSITORY https://github.com/gabime/spdlog.git
+    GIT_TAG v1.12.0
+  )
+  FetchContent_MakeAvailable(spdlog)
+  message(STATUS "Using FetchContent to provide spdlog")
+else()
+  message(STATUS "Using installed spdlog")
+endif()
+
 # Include directories
 include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -60,6 +77,16 @@ target_include_directories(core
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     PRIVATE
         ${ARROW_INCLUDE_DIR}
+)
+
+# Link dependencies
+target_link_libraries(core
+    PUBLIC
+        Arrow::arrow_shared
+        Parquet::parquet_shared
+        nlohmann_json::nlohmann_json
+        spdlog::spdlog
+        ${UUID_LIBRARY}
 )
 
 # Explicitly link core against UUID
