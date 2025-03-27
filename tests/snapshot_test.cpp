@@ -47,7 +47,7 @@ protected:
     
     void TearDown() override {
         // Clean up the test directory
-        // std::filesystem::remove_all(test_dir);
+        std::filesystem::remove_all(test_dir);
     }
     
     // Helper to create database with test settings
@@ -84,6 +84,7 @@ protected:
     }
 };
 
+
 // Test Scenario 1: Create DB, add nodes, snapshot, recreate, verify
 TEST_F(DatabaseSnapshotTest, BasicSnapshotAndReload) {
     // Step 1: Create and initialize DB
@@ -96,7 +97,7 @@ TEST_F(DatabaseSnapshotTest, BasicSnapshotAndReload) {
     
     // Step 2: Create schema and add users
     create_user_schema(*db);
-    create_test_users(*db);
+    create_test_users(*db, 0, 8);
     
     // Step 3: Create snapshot
     auto snapshot = db->create_snapshot().ValueOrDie();
@@ -127,7 +128,7 @@ TEST_F(DatabaseSnapshotTest, SnapshotWithoutChanges) {
     
     // Step 2: Create schema and add users
     create_user_schema(*db);
-    create_test_users(*db);
+    create_test_users(*db, 0, 8);
     
     // Step 3: Create first snapshot
     auto snapshot1 = db->create_snapshot().ValueOrDie();
@@ -190,14 +191,14 @@ TEST_F(DatabaseSnapshotTest, SnapshotWithAdditionalData) {
     
     // Step 2: Create schema and add users
     create_user_schema(*db);
-    create_test_users(*db, 0, 4);  // Create 4 users initially
+    create_test_users(*db, 0, 8);  // Create 4 users initially
     
     // Step 3: Create first snapshot
     auto snapshot1 = db->create_snapshot().ValueOrDie();
     ASSERT_TRUE(snapshot1 != nullptr);
     
     // Step 4: Add 4 more users
-    create_test_users(*db, 4, 8);  // Create 4 more users
+    create_test_users(*db, 8, 16);  // Create 4 more users
     
     // Step 5: Create second snapshot with additional data
     auto snapshot2 = db->create_snapshot().ValueOrDie();
@@ -214,7 +215,7 @@ TEST_F(DatabaseSnapshotTest, SnapshotWithAdditionalData) {
     
     // Step 7: Get table and verify data - should have all 8 users
     auto table = new_db->get_table("users").ValueOrDie();
-    verify_user_table(table, 8);
+    verify_user_table(table, 16);
 }
 
 

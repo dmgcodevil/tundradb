@@ -564,7 +564,6 @@ class Shard {
   }
 
   arrow::Result<bool> add(const std::shared_ptr<Node> &node) {
-    std::cout << "add node to shard: " << std::to_string(this->id) << std::endl;
     if (node->id < min_id || node->id > max_id) {
       return arrow::Status::Invalid("Node id is out of range");
     }
@@ -788,12 +787,10 @@ class ShardManager {
   }
 
   arrow::Result<bool> insert_node(const std::shared_ptr<Node> &node) {
-    std::cout << "insert_node\n" << std::endl;
     auto it = shards.find(node->schema_name);
     if (it == shards.end()) {
       // Create new schema entry if it doesn't exist
       shards[node->schema_name] = std::vector<std::shared_ptr<Shard>>();
-      std::cout << "create new shard\n" << std::endl;
       create_new_shard(node);
       return true;
     }

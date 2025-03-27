@@ -356,23 +356,23 @@ arrow::Result<bool> demo() {
     Database db(config);
     db.get_schema_registry()->add("users", schema).ValueOrDie();
     db.initialize().ValueOrDie();
+    // print_table(db.get_table("users").ValueOrDie());
+
+
+
+    auto users_count = 8;
+    for (int64_t i = 0; i < users_count; i++) {
+        create_user_node(db, "user" + std::to_string(i), i + 20);
+    }
+
+    std::cout << "shard_count=" << std::to_string(db.get_shard_count("users").ValueOrDie()) << std::endl;
     print_table(db.get_table("users").ValueOrDie());
 
 
-    //
-    // auto users_count = 8;
-    // for (int64_t i = 0; i < users_count; i++) {
-    //     create_user_node(db, "user" + std::to_string(i), i + 20);
-    // }
-    //
-    // std::cout << "shard_count=" << std::to_string(db.get_shard_count("users").ValueOrDie()) << std::endl;
-    // print_table(db.get_table("users").ValueOrDie());
-    //
-    //
-    //
-    // auto snap = db.create_snapshot().ValueOrDie();
-    // db.create_snapshot().ValueOrDie();
-    // db.create_snapshot().ValueOrDie();
+
+    auto snap = db.create_snapshot().ValueOrDie();
+    db.create_snapshot().ValueOrDie();
+    db.create_snapshot().ValueOrDie();
 
 
     return true;
