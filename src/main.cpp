@@ -10,8 +10,7 @@ using namespace std::string_literals;
 using namespace tundradb;
 
 int main() {
-  auto config = make_config().with_data_directory("./testdb").build();
-  Database database(config);
-  database.initialize().ValueOrDie();
+  demo();
+
   return 0;
 }

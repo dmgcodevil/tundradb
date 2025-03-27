@@ -50,6 +50,9 @@ add_library(core
         src/storage.cpp
         src/metadata.cpp
         src/file_utils.cpp
+        include/utils.hpp
+        src/snapshot.cpp
+        include/snapshot.hpp
 )
 
 target_include_directories(core

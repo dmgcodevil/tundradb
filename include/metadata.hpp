@@ -1,15 +1,25 @@
+#include <iostream>
 #include <nlohmann/json.hpp>
 #include <arrow/api.h>
 #include <sstream>
 #include <string>
 #include <vector>
+#include "file_utils.hpp"
 
 #ifndef METADATA_HPP
 #define METADATA_HPP
 
+using namespace std::string_literals;
+
 namespace tundradb {
+    struct Metadata {
+        std::string snapshot_location;
+        NLOHMANN_DEFINE_TYPE_INTRUSIVE(Metadata, snapshot_location);
+    };
+
+
     struct ShardMetadata {
-        std::string shard_id;
+        int64_t id;
         std::string schema_name;
         int64_t min_id;
         int64_t max_id;
@@ -19,7 +29,7 @@ namespace tundradb {
         int64_t timestamp_ms; // Time in milliseconds since epoch
 
         NLOHMANN_DEFINE_TYPE_INTRUSIVE(ShardMetadata,
-                                       shard_id,
+                                       id,
                                        schema_name,
                                        min_id,
                                        max_id,
@@ -28,22 +38,26 @@ namespace tundradb {
                                        data_file,
                                        timestamp_ms);
 
-        std::string toString() const {
+        [[nodiscard]] std::string toString() const {
             std::stringstream ss;
-            ss << "ShardMetadata{shard_id='" << shard_id 
-               << "', schema_name='" << schema_name 
-               << "', min_id=" << min_id 
-               << ", max_id=" << max_id 
-               << ", record_count=" << record_count 
-               << ", chunk_size=" << chunk_size 
-               << ", data_file='" << data_file 
-               << "', timestamp_ms=" << timestamp_ms << "}";
+            ss << "ShardMetadata{id='" << id
+                    << "', schema_name='" << schema_name
+                    << "', min_id=" << min_id
+                    << ", max_id=" << max_id
+                    << ", record_count=" << record_count
+                    << ", chunk_size=" << chunk_size
+                    << ", data_file='" << data_file
+                    << "', timestamp_ms=" << timestamp_ms << "}";
             return ss.str();
         }
 
-        friend std::ostream& operator<<(std::ostream& os, const ShardMetadata& shard) {
+        friend std::ostream &operator<<(std::ostream &os, const ShardMetadata &shard) {
             os << shard.toString();
             return os;
+        }
+
+        std::string compound_id() const {
+            return this->schema_name + "-" + std::to_string(this->id);
         }
     };
 
@@ -63,60 +77,45 @@ namespace tundradb {
             return ss.str();
         }
 
-        friend std::ostream& operator<<(std::ostream& os, const Manifest& manifest) {
+        friend std::ostream &operator<<(std::ostream &os, const Manifest &manifest) {
             os << manifest.toString();
             return os;
         }
     };
 
-    struct Metadata {
-        std::string id;
-        int64_t snapshot_id;
-        int64_t parent_snapshot_id;
-        std::string manifest_location;
-        std::vector<Metadata> snapshots;
-        int64_t timestamp_ms;
-        NLOHMANN_DEFINE_TYPE_INTRUSIVE(Metadata,
-            id,
-            snapshot_id,
-            parent_snapshot_id,
-            manifest_location,
-            snapshots, timestamp_ms);
-
-        std::string toString() const {
-            std::stringstream ss;
-            ss << "Metadata{id='" << id 
-               << "', snapshot_id=" << snapshot_id 
-               << ", snapshot_parent_id=" << parent_snapshot_id 
-               << ", manifest_location='" << manifest_location 
-               << "', timestamp_ms=" << timestamp_ms 
-               << ", snapshots=[";
-            for (size_t i = 0; i < snapshots.size(); ++i) {
-                ss << snapshots[i];
-                if (i < snapshots.size() - 1) ss << ", ";
-            }
-            ss << "]}";
-            return ss.str();
-        }
-
-        friend std::ostream& operator<<(std::ostream& os, const Metadata& metadata) {
-            os << metadata.toString();
-            return os;
-        }
-    };
 
     class MetadataManager {
-        public:
+    public:
         std::string data_dir;
-        arrow::Result<std::string> write_manifest(const Manifest &manifest);
-        arrow::Result<std::string> write_metadata(const Metadata &metadata);
-        arrow::Result<Manifest> read_manifest(const std::string &id);
-        arrow::Result<Metadata> read_metadata(const std::string &id);
-        explicit MetadataManager(const std::string &data_dir);
-        arrow::Result<bool> initialize();
-        private:
-        std::string metadata_dir;
 
+        arrow::Result<std::string> write_manifest(const Manifest &manifest);
+
+        arrow::Result<bool> write_metadata(const Metadata &manifest);
+
+        arrow::Result<Manifest> read_manifest(const std::string &file_path);
+
+        explicit MetadataManager(const std::string &data_dir);
+
+        arrow::Result<bool> initialize();
+
+        arrow::Result<Metadata> load_metadata() {
+            auto file_path = this->metadata_dir + "/metadata.json";
+            if (file_exists(file_path)) {
+                return read_json_file<Metadata>(file_path);
+            }
+            std::cout << "file '" << file_path << "' doesn't exist. create empty metadata" << std::endl;
+            Metadata metadata;
+            metadata.snapshot_location = ""s;
+            ARROW_RETURN_NOT_OK(write_json_file(metadata, file_path));
+            return metadata;
+        }
+
+        std::string get_metadata_dir() {
+            return this->metadata_dir;
+        }
+
+    private:
+        std::string metadata_dir;
     };
 }
 

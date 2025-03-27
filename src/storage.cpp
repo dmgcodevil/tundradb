@@ -57,10 +57,9 @@ Storage::Storage(const std::string& data_dir,
     : data_directory(data_dir), schema_registry(std::move(schema_registry)) {}
 
 arrow::Result<bool> Storage::initialize() {
-  // Create data directory if it doesn't exist
   try {
-    std::filesystem::create_directories(data_directory + "/metadata");
-    std::filesystem::create_directories(data_directory + "/data");
+    std::cout << "Initializing storage" << std::endl;
+    std::filesystem::create_directories(data_directory);
     return true;
   } catch (const std::filesystem::filesystem_error& e) {
     return arrow::Status::IOError("Failed to create data directory: ",
@@ -68,8 +67,7 @@ arrow::Result<bool> Storage::initialize() {
   }
 }
 
-arrow::Result<std::string> Storage::write_shard(
-    int64_t snapshot_id, const std::shared_ptr<Shard>& shard) {
+arrow::Result<std::string> Storage::write_shard(const std::shared_ptr<Shard>& shard) {
   if (!shard) {
     return arrow::Status::Invalid("Cannot write null shard");
   }
@@ -108,78 +106,12 @@ arrow::Result<std::string> Storage::write_shard(
       *table, arrow::default_memory_pool(), output_file, shard->capacity,
       parquet_props, write_options));
 
-  // Create shard metadata
-  ShardMetadata shard_metadata;
-  shard_metadata.shard_id = std::to_string(shard->id);
-  shard_metadata.schema_name = schema_name;
-  shard_metadata.min_id = shard->min_id;
-  shard_metadata.max_id = shard->max_id;
-  shard_metadata.record_count = shard->size();
-  shard_metadata.chunk_size = shard->chunk_size;
-  shard_metadata.data_file = data_file_path;
-
-  // Set timestamp as milliseconds since epoch
-  auto now = std::chrono::system_clock::now();
-  shard_metadata.timestamp_ms =
-      std::chrono::duration_cast<std::chrono::milliseconds>(
-          now.time_since_epoch())
-          .count();
-
-  // Convert to JSON using nlohmann::json
-  nlohmann::json j = shard_metadata;
-  std::string json_str = j.dump();
-
-  std::string metadata_file_path =
-      data_directory + "/" + schema_name + "-" + shard_metadata.shard_id + "-" +
-      std::to_string(snapshot_id) + ".metadata.json";
-
-  // Write metadata to file
-  std::ofstream file(metadata_file_path);
-  if (!file.is_open()) {
-    return arrow::Status::IOError("Failed to open metadata file for writing: ",
-                                  metadata_file_path);
-  }
-
-  file << json_str;
-  file.close();
-
-  return metadata_file_path;
+  return data_file_path;
 }
 
-arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(
-    const std::string& metadata_path) {
+
+  arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(const ShardMetadata& shard_metadata){
   // Check if metadata file exists
-  if (!std::filesystem::exists(metadata_path)) {
-    return arrow::Status::IOError("Shard metadata file does not exist: ",
-                                  metadata_path);
-  }
-
-  // Read metadata file
-  std::ifstream file(metadata_path);
-  if (!file.is_open()) {
-    return arrow::Status::IOError("Failed to open metadata file for reading: ",
-                                  metadata_path);
-  }
-
-  std::stringstream buffer;
-  buffer << file.rdbuf();
-  std::string json_str = buffer.str();
-  file.close();
-
-  // Parse metadata using nlohmann::json
-  ShardMetadata shard_metadata;
-  try {
-    nlohmann::json j = nlohmann::json::parse(json_str);
-    shard_metadata = j.get<ShardMetadata>();
-  } catch (const std::exception& e) {
-    return arrow::Status::Invalid("Failed to parse JSON metadata: ", e.what());
-  }
-
-  // Check if data file exists
-  if (!std::filesystem::exists(shard_metadata.data_file)) {
-    return arrow::Status::IOError("Shard data file does not exist: ",
-                                  shard_metadata.data_file);
-  }
 
   // Open parquet file
   ARROW_ASSIGN_OR_RAISE(
@@ -187,22 +119,22 @@ arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(
 
   // Read parquet file into table
   std::unique_ptr<parquet::arrow::FileReader> reader;
-  ARROW_RETURN_NOT_OK(parquet::arrow::OpenFile(
-      input_file, arrow::default_memory_pool(), &reader));
+  ARROW_RETURN_NOT_OK(parquet::arrow::OpenFile(input_file, arrow::default_memory_pool(), &reader));
 
   std::shared_ptr<arrow::Table> table;
   ARROW_RETURN_NOT_OK(reader->ReadTable(&table));
 
-  // Get the schema from registry
-  ARROW_ASSIGN_OR_RAISE(auto schema,
-                        schema_registry->get(shard_metadata.schema_name));
+  // // Get the schema from registry
+  // ARROW_ASSIGN_OR_RAISE(auto schema,
+  //                       schema_registry->get(shard_metadata.schema_name));
 
   // Create a new shard with metadata properties
   auto shard = std::make_shared<Shard>(
-      std::stoll(shard_metadata.shard_id),  // Parse shard_id as ID
+      shard_metadata.id,
       shard_metadata.record_count,          // Use as capacity
-      shard_metadata.min_id, shard_metadata.max_id, shard_metadata.chunk_size,
-      shard_metadata.schema_name, schema_registry);
+      shard_metadata.min_id, shard_metadata.max_id,
+      shard_metadata.chunk_size,
+      shard_metadata.schema_name, this->schema_registry);
 
   // Convert table rows back to nodes and add to shard
   for (int64_t row_idx = 0; row_idx < table->num_rows(); ++row_idx) {

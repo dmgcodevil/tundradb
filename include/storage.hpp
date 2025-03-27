@@ -14,14 +14,13 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include "metadata.hpp"
 
 namespace tundradb {
 
 // Forward declarations
 class SchemaRegistry;
 class Shard;
-
-
 
 class Storage {
  private:
@@ -38,14 +37,12 @@ class Storage {
   // Initialize storage system, creating directories if needed
   arrow::Result<bool> initialize();
 
-  // Store a shard - writes both data and metadata
-  // Returns the path to the metadata file
-  arrow::Result<std::string> write_shard(int64_t snapshot_id,
-                                         const std::shared_ptr<Shard>& shard);
+
+  arrow::Result<std::string> write_shard(const std::shared_ptr<Shard>& shard);
 
   // Load a shard from its metadata path
-  arrow::Result<std::shared_ptr<Shard>> read_shard(
-      const std::string& metadata_path);
+  arrow::Result<std::shared_ptr<Shard>> read_shard(const ShardMetadata& shard_metadata);
+
 };
 
 }  // namespace tundradb

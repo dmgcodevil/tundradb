@@ -189,7 +189,7 @@ arrow::Result<bool> demo_snapshot_creation() {
 
   // Create database with persistence enabled
   auto config = make_config()
-                    .with_data_directory(temp_dir)
+                    .with_db_path(temp_dir)
                     .with_persistence_enabled(true)
                     .build();
 
@@ -331,48 +331,34 @@ arrow::Result<bool> demo_snapshot_creation() {
   return true;
 }
 
-arrow::Result<bool> load_shard_demo() {
-  std::string temp_dir =
-      "./tundradb_test_" +
-      std::to_string(
-          std::chrono::system_clock::now().time_since_epoch().count());
+    std::shared_ptr<Node> create_user_node(Database& db, const std::string& name,
+                                           int64_t age) {
+    std::unordered_map<std::string, std::shared_ptr<arrow::Array>> fields = {
+        {"name", create_str_array(name).ValueOrDie()},
+        {"age", create_int64_array(age).ValueOrDie()}};
 
-  std::cout << "Using temporary directory: " << temp_dir << std::endl;
+    auto result = db.create_node("users", fields);
 
-  // Create the directory if it doesn't exist
-  fs::create_directories(temp_dir);
-
-  // Create database with persistence enabled
-  auto config = make_config()
-                    .with_data_directory(temp_dir)
-                    .with_persistence_enabled(true)
-                    .build();
-
-  Database db(config);
-  // Create schemas
-  auto schema_registry = db.get_schema_registry();
-
-  // Create "users" schema
-  auto user_fields = std::vector<std::shared_ptr<arrow::Field>>{
-      arrow::field("name", arrow::utf8()), arrow::field("age", arrow::int64())};
-  auto user_schema = arrow::schema(user_fields);
-  ARROW_RETURN_NOT_OK(schema_registry->add("users", user_schema));
-
-  // // Create "products" schema
-  // auto product_fields = std::vector<std::shared_ptr<arrow::Field>>{
-  //   arrow::field("title", arrow::utf8()),
-  //   arrow::field("price", arrow::float64())
-  // };
-  // auto product_schema = arrow::schema(product_fields);
-  // ARROW_RETURN_NOT_OK(schema_registry->add("products", product_schema));
-  db.load_shard(
-        "/Users/dmgcodevil/dev/cpp/tundradb-v1/tundradb/build/"
-        "tundradb_test_1742878743153080/users-0-0.metadata.json")
-      .ValueOrDie();
-
-  // Create a snapshot
-  std::cout << "Creating snapshot..." << std::endl;
-  ARROW_RETURN_NOT_OK(db.create_snapshot());
+    return result.ValueOrDie();
 }
+
+
+arrow::Result<bool> demo() {
+    auto config = make_config().with_db_path("./testdb").build();
+    Database db(config);
+    db.initialize().ValueOrDie();
+
+    auto name_field = arrow::field("name", arrow::utf8());
+    auto age_field = arrow::field("age", arrow::int64());
+    auto schema = arrow::schema({name_field, age_field});
+
+    db.get_schema_registry()->add("users", schema).ValueOrDie();
+    auto snap = db.create_snapshot().ValueOrDie();
+
+
+    return true;
+}
+
+
 
 }  // namespace tundradb

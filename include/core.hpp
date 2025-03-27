@@ -17,6 +17,8 @@
 #include "file_utils.hpp"
 #include "metadata.hpp"
 #include "storage.hpp"
+#include "utils.hpp"
+#include "snapshot.hpp"
 using namespace std::string_literals;
 
 namespace tundradb {
@@ -24,6 +26,8 @@ class Database;
 class Node;
 class Shard;
 class ShardManager;
+struct Snapshot;
+class SnapshotManager;
 
 // Default configuration constants
 namespace defaults {
@@ -52,12 +56,11 @@ class DatabaseConfig {
   // Memory pool size for database (in bytes)
   size_t database_memory_pool_size = defaults::DATABASE_MEMORY_POOL_SIZE;
 
-  // Path to the data directory for persistence (empty string means in-memory
-  // only)
-  std::string data_directory = "";
+
+  std::string db_path = "";
 
   // Whether persistence is enabled
-  bool persistence_enabled = false;
+  bool persistence_enabled = true;
 
   // Allow DatabaseConfigBuilder to modify private fields
   friend class DatabaseConfigBuilder;
@@ -72,7 +75,7 @@ class DatabaseConfig {
   size_t get_database_memory_pool_size() const {
     return database_memory_pool_size;
   }
-  std::string get_data_directory() const { return data_directory; }
+  std::string get_db_path() const { return db_path; }
   bool is_persistence_enabled() const { return persistence_enabled; }
 };
 
@@ -110,8 +113,8 @@ class DatabaseConfigBuilder {
     return *this;
   }
 
-  DatabaseConfigBuilder &with_data_directory(const std::string &directory) {
-    config.data_directory = directory;
+  DatabaseConfigBuilder &with_db_path(const std::string &directory) {
+    config.db_path = directory;
     return *this;
   }
 
@@ -137,10 +140,6 @@ class DatabaseConfigBuilder {
 // Helper function to create a config builder
 inline DatabaseConfigBuilder make_config() { return {}; }
 
-struct Info {
-  std::string current_metadata;
-  NLOHMANN_DEFINE_TYPE_INTRUSIVE(Info, current_metadata);
-};
 
 static arrow::Result<std::shared_ptr<arrow::Array>> create_int64_array(
     const int64_t value) {
@@ -457,6 +456,8 @@ class Shard {
   std::atomic<bool> dirty{false};
   std::shared_ptr<arrow::Table> table;
   std::shared_ptr<SchemaRegistry> schema_registry;
+  int64_t updated_ts;
+  bool updated = false;
 
  public:
   const int64_t id;         // Unique shard identifier
@@ -494,6 +495,14 @@ class Shard {
         schema_registry(std::move(schema_registry)),
         schema_name(schema_name) {}
 
+  bool is_updated() const {
+    return updated;
+  }
+
+  int64_t get_updated_ts() const {
+    return updated_ts;
+  }
+
   arrow::Result<bool> add(const std::shared_ptr<Node> &node) {
     if (node->id < min_id || node->id > max_id) {
       return arrow::Status::Invalid("Node id is out of range");
@@ -524,6 +533,8 @@ class Shard {
     nodes_ids.insert(node->id);
     max_id = std::max(max_id, node->id);
     dirty = true;
+    updated = true;
+    updated_ts = now_millis();
     return true;
   }
 
@@ -555,14 +566,19 @@ class Shard {
     }
 
     dirty = true;
+    updated = true;
+    updated_ts = now_millis();
     return node;
   }
 
   arrow::Result<bool> update(const std::shared_ptr<BaseOperation> &update) {
+    updated = true;
     if (!nodes.contains(update->node_id)) {
       return arrow::Status::KeyError("Node not found: ", update->node_id);
     }
     dirty = true;
+    updated = true;
+    updated_ts = now_millis();
     return nodes[update->node_id]->update(update);
   }
 
@@ -640,7 +656,7 @@ class ShardManager {
         config(config) {}
 
   // Get all schema names that have shards
-  std::vector<std::string> get_schemas() const {
+  std::vector<std::string> get_schema_names() const {
     std::vector<std::string> schema_names;
     schema_names.reserve(shards.size());
     for (const auto &[schema_name, _] : shards) {
@@ -924,7 +940,7 @@ class Database {
   std::shared_ptr<SchemaRegistry> schema_registry;
 
   // Shard manager for node storage
-  std::unique_ptr<ShardManager> shard_manager;
+  std::shared_ptr<ShardManager> shard_manager;
 
   // ID counter for generating node IDs
   std::atomic<int64_t> id_counter;
@@ -936,9 +952,9 @@ class Database {
   bool persistence_enabled;
 
   // Storage for persistence
-  std::unique_ptr<Storage> storage;
-
-  std::shared_ptr<Metadata> metadata;
+  std::shared_ptr<Storage> storage;
+  std::shared_ptr<MetadataManager> metadata_manager;
+  std::shared_ptr<SnapshotManager> snapshot_manager;
 
   // std::atomic<int64_t> snapshot_counter;
 
@@ -946,19 +962,22 @@ class Database {
   // Constructor that takes a DatabaseConfig
   explicit Database(const DatabaseConfig &config = DatabaseConfig())
       : schema_registry(std::make_shared<SchemaRegistry>()),
-        shard_manager(std::make_unique<ShardManager>(schema_registry, config)),
+        shard_manager(std::make_shared<ShardManager>(schema_registry, config)),
         id_counter(0),
         config(config),
         persistence_enabled(config.is_persistence_enabled()) {
-    if (persistence_enabled && !config.get_data_directory().empty()) {
-      storage = std::make_unique<Storage>(config.get_data_directory(),
+    if (persistence_enabled) {
+      // todo: assert db_path is not empty
+      storage = std::make_shared<Storage>(config.get_db_path() ,
                                           schema_registry);
-      auto result = storage->initialize();
-      if (!result.ok()) {
-        std::cerr << "Failed to initialize storage: "
-                  << result.status().ToString() << std::endl;
-        persistence_enabled = false;
-      }
+      metadata_manager = std::make_shared<MetadataManager>(config.get_db_path());
+      snapshot_manager = std::make_shared<SnapshotManager>(metadata_manager, storage, shard_manager);
+      // auto result = storage->initialize();
+      // if (!result.ok()) {
+      //   std::cerr << "Failed to initialize storage: "
+      //             << result.status().ToString() << std::endl;
+      //   persistence_enabled = false;
+      // }
     }
   }
 
@@ -969,23 +988,16 @@ class Database {
     return schema_registry;
   }
 
-  arrow::Result<Info> load_info() {
-    auto info_file_path = this->config.get_data_directory() + "/metadata/info.json";
-    if(file_exists(info_file_path)) {
-      return read_json_file<Info>(info_file_path);
-    }
-    Info info;
-    info.current_metadata = ""s;
-    ARROW_RETURN_NOT_OK(write_json_file(info, info_file_path));
-    return info;
-  }
+
 
   arrow::Result<bool> initialize() {
-    ARROW_ASSIGN_OR_RAISE(auto info, load_info());
-    std::cout << "current metadata=" << info.current_metadata << std::endl;
-    if(info.empty()) {
-      this->metadata = std::make_shared<Metadata>();
+    if (!config.is_persistence_enabled()) {
+      this->storage->initialize().ValueOrDie();
+      this->metadata_manager->initialize().ValueOrDie();
+      this->snapshot_manager->initialize().ValueOrDie();
     }
+
+
     return true;
   }
 
@@ -1121,43 +1133,16 @@ class Database {
     return shard_manager->get_shard_ranges(schema_name);
   }
 
-  arrow::Result<bool> create_snapshot() {
-    auto now = std::chrono::system_clock::now();
-    auto snap_id =  std::chrono::duration_cast<std::chrono::milliseconds>(
-          now.time_since_epoch())
-          .count();
-    auto schema_names = shard_manager->get_schemas();
-    Metadata new_metadata;
-    if(this->metadata->snapshot_id != 0) {
-      new_metadata.snapshot_id = snap_id;
-      new_metadata.parent_snapshot_id = this->metadata->snapshot_id;
-    }
-    std::unordered_map<std::string, ShardMetadata> prev_shards_metadata;
-    Manifest prev_manifest;
-    if(!this->metadata->manifest_location.empty()) {
-      ARROW_ASSIGN_OR_RAISE(prev_manifest, read_json_file(this->metadata->manifest_location));
-    }
-    for(const auto& shard_manifest : prev_manifest.shards) {
-      prev_shards_metadata[shard_manifest.shard_id] = shard_manifest;
-    }
-
-
-    for (auto schema_name : schema_names) {
-      ARROW_ASSIGN_OR_RAISE(auto shards,
-                            shard_manager->get_shards(schema_name));
-      for (auto shard : shards) {
-        ARROW_RETURN_NOT_OK(storage->write_shard(snap_id, shard));
-      }
-    }
-    return true;
+  arrow::Result<std::shared_ptr<Snapshot>> create_snapshot() {
+    return this->snapshot_manager->commit();
   }
 
-  arrow::Result<bool> load_shard(const std::string &path) {
-    auto shard = storage->read_shard(path).ValueOrDie();
-    std::cout << "Loaded shard '" << path << "'..." << std::endl;
-    ARROW_RETURN_NOT_OK(shard_manager->add_shard(shard));
-    return true;
-  }
+  // arrow::Result<bool> load_shard(const std::string &path) {
+  //   auto shard = storage->read_shard(path).ValueOrDie();
+  //   std::cout << "Loaded shard '" << path << "'..." << std::endl;
+  //   ARROW_RETURN_NOT_OK(shard_manager->add_shard(shard));
+  //   return true;
+  // }
 };
 
 // Helper function to print a single row
@@ -1299,7 +1284,9 @@ arrow::Result<bool> demo_batch_update();
 
 arrow::Result<bool> demo_snapshot_creation();
 
-arrow::Result<bool> load_shard_demo();
+arrow::Result<bool> demo();
+
+// arrow::Result<bool> load_shard_demo();
 
 }  // namespace tundradb
 
