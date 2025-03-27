@@ -4,6 +4,8 @@
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/basic_file_sink.h>
 #include <string>
+#include <string_view>
+#include <source_location>
 
 namespace tundradb {
 
@@ -48,26 +50,42 @@ public:
         }
     }
 
-    void debug(const std::string& message) {
-        spdlog::debug(message);
+    // Enhanced logging methods with source location
+    void debug(const std::string& message, 
+             const std::source_location& location = std::source_location::current()) {
+        log(spdlog::level::debug, message, location);
     }
 
-    void info(const std::string& message) {
-        spdlog::info(message);
+    void info(const std::string& message, 
+            const std::source_location& location = std::source_location::current()) {
+        log(spdlog::level::info, message, location);
     }
 
-    void warn(const std::string& message) {
-        spdlog::warn(message);
+    void warn(const std::string& message, 
+            const std::source_location& location = std::source_location::current()) {
+        log(spdlog::level::warn, message, location);
     }
 
-    void error(const std::string& message) {
-        spdlog::error(message);
+    void error(const std::string& message, 
+             const std::source_location& location = std::source_location::current()) {
+        log(spdlog::level::err, message, location);
     }
 
 private:
     Logger() {
-        // Set default pattern similar to our original logger
-        spdlog::set_pattern("%Y-%m-%d %H:%M:%S.%e [%^%l%$] %v");
+        // Set default pattern to include file and line
+        spdlog::set_pattern("%Y-%m-%d %H:%M:%S.%e [%^%l%$] [%s:%#] %v");
+    }
+    
+    void log(spdlog::level::level_enum level, const std::string& message, 
+            const std::source_location& location) {
+        // Extract filename from path (remove directory)
+        std::string_view path(location.file_name());
+        size_t pos = path.find_last_of("/\\");
+        std::string_view filename = (pos == std::string_view::npos) ? path : path.substr(pos + 1);
+        
+        // Format: message [file:line]
+        spdlog::log(level, "{} [{}:{}]", message, filename, location.line());
     }
     
     // Private methods to prevent copying
@@ -75,22 +93,55 @@ private:
     Logger& operator=(const Logger&) = delete;
 };
 
-// Convenience functions
-inline void log_debug(const std::string& message) {
-    Logger::getInstance().debug(message);
+// Context-aware convenience functions
+inline void log_debug(const std::string& message, 
+                     const std::source_location& location = std::source_location::current()) {
+    Logger::getInstance().debug(message, location);
 }
 
-inline void log_info(const std::string& message) {
-    Logger::getInstance().info(message);
+inline void log_info(const std::string& message, 
+                    const std::source_location& location = std::source_location::current()) {
+    Logger::getInstance().info(message, location);
 }
 
-inline void log_warn(const std::string& message) {
-    Logger::getInstance().warn(message);
+inline void log_warn(const std::string& message, 
+                    const std::source_location& location = std::source_location::current()) {
+    Logger::getInstance().warn(message, location);
 }
 
-inline void log_error(const std::string& message) {
-    Logger::getInstance().error(message);
+inline void log_error(const std::string& message, 
+                     const std::source_location& location = std::source_location::current()) {
+    Logger::getInstance().error(message, location);
 }
+
+// Contextual logger that can be used to add operation context
+class ContextLogger {
+public:
+    ContextLogger(std::string prefix) : prefix_(std::move(prefix)) {}
+    
+    void debug(const std::string& message, 
+              const std::source_location& location = std::source_location::current()) {
+        log_debug(prefix_ + ": " + message, location);
+    }
+    
+    void info(const std::string& message, 
+             const std::source_location& location = std::source_location::current()) {
+        log_info(prefix_ + ": " + message, location);
+    }
+    
+    void warn(const std::string& message, 
+             const std::source_location& location = std::source_location::current()) {
+        log_warn(prefix_ + ": " + message, location);
+    }
+    
+    void error(const std::string& message, 
+              const std::source_location& location = std::source_location::current()) {
+        log_error(prefix_ + ": " + message, location);
+    }
+    
+private:
+    std::string prefix_;
+};
 
 } // namespace tundradb
 

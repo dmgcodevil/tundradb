@@ -18,6 +18,9 @@
 #include "metadata.hpp"
 #include "storage.hpp"
 #include "utils.hpp"
+#include "config.hpp"
+#include "node.hpp"
+#include "logger.hpp"
 using namespace std::string_literals;
 
 namespace tundradb {
@@ -28,41 +31,7 @@ class ShardManager;
 class MetadataManager;
 class Storage;
 
-// Define Snapshot struct here
-struct Snapshot {
-    int64_t id;
-    int64_t parent_id;
-    std::string manifest_location;
-    std::vector<Snapshot> snapshots;
-    int64_t timestamp_ms;
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE(Snapshot,
-                                   id,
-                                   parent_id,
-                                   manifest_location,
-                                   snapshots, timestamp_ms);
-
-    std::string toString() const {
-        std::stringstream ss;
-        ss << "Snapshot{id='" << id
-                << "', parent_id=" << parent_id
-                << ", manifest_location='" << manifest_location
-                << "', timestamp_ms=" << timestamp_ms
-                << ", snapshots=[";
-        for (size_t i = 0; i < snapshots.size(); ++i) {
-            ss << snapshots[i];
-            if (i < snapshots.size() - 1) ss << ", ";
-        }
-        ss << "]}";
-        return ss.str();
-    }
-
-    friend std::ostream &operator<<(std::ostream &os, const Snapshot &snapshot) {
-        os << snapshot.toString();
-        return os;
-    }
-};
-
-// Move SnapshotManager definition here
+// SnapshotManager class
 class SnapshotManager {
 public:
     explicit SnapshotManager(std::shared_ptr<MetadataManager> metadata_manager,
@@ -71,439 +40,71 @@ public:
 
     arrow::Result<bool> initialize();
 
-    arrow::Result<std::shared_ptr<Snapshot>> commit();
+    arrow::Result<Snapshot*> commit();
 
-    std::shared_ptr<Snapshot> current_snapshot();
+    Snapshot* current_snapshot();
 
 private:
-    std::shared_ptr<Snapshot> snapshot;
+    Snapshot* snapshot = nullptr;
     std::shared_ptr<MetadataManager> metadata_manager;
     std::shared_ptr<Storage> storage;
     std::shared_ptr<ShardManager> shard_manager;
+    Metadata metadata;
 };
 
 // No longer need to include snapshot.hpp as we've moved all definitions here
 // Remove the following line:
 // #include "snapshot.hpp"
 
-// Default configuration constants
-namespace defaults {
-constexpr size_t SHARD_CAPACITY = 100000;
-constexpr size_t CHUNK_SIZE = 10000;
-constexpr size_t SHARD_MEMORY_POOL_SIZE = 10 * 1024 * 1024;       // 10 MB
-constexpr size_t MANAGER_MEMORY_POOL_SIZE = 100 * 1024 * 1024;    // 100 MB
-constexpr size_t DATABASE_MEMORY_POOL_SIZE = 1024 * 1024 * 1024;  // 1 GB
-}  // namespace defaults
+// We are now using constants from config.hpp instead of defining them here
+// namespace defaults {
+// constexpr size_t SHARD_CAPACITY = 100000;
+// constexpr size_t CHUNK_SIZE = 10000;
+// constexpr size_t SHARD_MEMORY_POOL_SIZE = 10 * 1024 * 1024;       // 10 MB
+// constexpr size_t MANAGER_MEMORY_POOL_SIZE = 100 * 1024 * 1024;    // 100 MB
+// constexpr size_t DATABASE_MEMORY_POOL_SIZE = 1024 * 1024 * 1024;  // 1 GB
+// }  // namespace defaults
 
-// Configuration parameters for the database
-class DatabaseConfig {
- private:
-  // Maximum number of nodes per shard
-  size_t shard_capacity = defaults::SHARD_CAPACITY;
-
-  // Size of chunks when creating tables
-  size_t chunk_size = defaults::CHUNK_SIZE;
-
-  // Memory pool size for shards (in bytes)
-  size_t shard_memory_pool_size = defaults::SHARD_MEMORY_POOL_SIZE;
-
-  // Memory pool size for shard manager (in bytes)
-  size_t manager_memory_pool_size = defaults::MANAGER_MEMORY_POOL_SIZE;
-
-  // Memory pool size for database (in bytes)
-  size_t database_memory_pool_size = defaults::DATABASE_MEMORY_POOL_SIZE;
-
-
-  std::string db_path = "";
-
-  // Whether persistence is enabled
-  bool persistence_enabled = true;
-
-  // Allow DatabaseConfigBuilder to modify private fields
-  friend class DatabaseConfigBuilder;
-
- public:
-  size_t get_shard_capacity() const { return shard_capacity; }
-  size_t get_chunk_size() const { return chunk_size; }
-  size_t get_shard_memory_pool_size() const { return shard_memory_pool_size; }
-  size_t get_manager_memory_pool_size() const {
-    return manager_memory_pool_size;
-  }
-  size_t get_database_memory_pool_size() const {
-    return database_memory_pool_size;
-  }
-  std::string get_db_path() const { return db_path; }
-  bool is_persistence_enabled() const { return persistence_enabled; }
-};
-
-// Builder class for DatabaseConfig - separate implementation to avoid circular
-// dependency
-class DatabaseConfigBuilder {
- private:
-  DatabaseConfig config;
-
- public:
-  DatabaseConfigBuilder() = default;
-
-  DatabaseConfigBuilder &with_shard_capacity(size_t capacity) {
-    config.shard_capacity = capacity;
-    return *this;
-  }
-
-  DatabaseConfigBuilder &with_chunk_size(size_t size) {
-    config.chunk_size = size;
-    return *this;
-  }
-
-  DatabaseConfigBuilder &with_shard_memory_pool_size(size_t size) {
-    config.shard_memory_pool_size = size;
-    return *this;
-  }
-
-  DatabaseConfigBuilder &with_manager_memory_pool_size(size_t size) {
-    config.manager_memory_pool_size = size;
-    return *this;
-  }
-
-  DatabaseConfigBuilder &with_database_memory_pool_size(size_t size) {
-    config.database_memory_pool_size = size;
-    return *this;
-  }
-
-  DatabaseConfigBuilder &with_db_path(const std::string &directory) {
-    config.db_path = directory;
-    return *this;
-  }
-
-  DatabaseConfigBuilder &with_persistence_enabled(bool enabled) {
-    config.persistence_enabled = enabled;
-    return *this;
-  }
-
-  // Helper for setting all memory sizes with a single scale factor
-  DatabaseConfigBuilder &with_memory_scale_factor(double factor) {
-    config.shard_memory_pool_size =
-        static_cast<size_t>(defaults::SHARD_MEMORY_POOL_SIZE * factor);
-    config.manager_memory_pool_size =
-        static_cast<size_t>(defaults::MANAGER_MEMORY_POOL_SIZE * factor);
-    config.database_memory_pool_size =
-        static_cast<size_t>(defaults::DATABASE_MEMORY_POOL_SIZE * factor);
-    return *this;
-  }
-
-  [[nodiscard]] DatabaseConfig build() const { return config; }
-};
-
-// Helper function to create a config builder
-inline DatabaseConfigBuilder make_config() { return {}; }
-
-
-static arrow::Result<std::shared_ptr<arrow::Array>> create_int64_array(
-    const int64_t value) {
-  arrow::Int64Builder int64_builder;
-  ARROW_RETURN_NOT_OK(int64_builder.Reserve(1));
-  ARROW_RETURN_NOT_OK(int64_builder.Append(value));
-  std::shared_ptr<arrow::Array> int64_array;
-  ARROW_RETURN_NOT_OK(int64_builder.Finish(&int64_array));
-  return int64_array;
-}
-
-static arrow::Result<std::shared_ptr<arrow::Array>> create_str_array(
-    const std::string &value) {
-  arrow::StringBuilder builder;
-  ARROW_RETURN_NOT_OK(builder.Append(value));
-  std::shared_ptr<arrow::Array> string_arr;
-  ARROW_RETURN_NOT_OK(builder.Finish(&string_arr));
-  return string_arr;
-}
-
-static arrow::Result<std::shared_ptr<arrow::Array>> create_null_array(
-    const std::shared_ptr<arrow::DataType> &type) {
-  switch (type->id()) {
-    case arrow::Type::INT64: {
-      arrow::Int64Builder builder;
-      ARROW_RETURN_NOT_OK(builder.AppendNull());
-      std::shared_ptr<arrow::Array> array;
-      ARROW_RETURN_NOT_OK(builder.Finish(&array));
-      return array;
-    }
-    case arrow::Type::STRING: {
-      arrow::StringBuilder builder;
-      ARROW_RETURN_NOT_OK(builder.AppendNull());
-      std::shared_ptr<arrow::Array> array;
-      ARROW_RETURN_NOT_OK(builder.Finish(&array));
-      return array;
-    }
-    default:
-      return arrow::Status::NotImplemented("Unsupported type: ",
-                                           type->ToString());
-  }
-}
-
-enum OperationType { SET };
-
-// Base operation class
-struct BaseOperation {
-  int64_t node_id;  // The node identifier to apply the operation to
-  std::vector<std::string> field_name;  // Name of the field to update
-
-  BaseOperation(int64_t id, const std::vector<std::string> &field)
-      : node_id(id), field_name(field) {}
-
-  virtual arrow::Result<bool> apply(const std::shared_ptr<arrow::Array> &array,
-                                    int64_t row_index) const = 0;
-
-  virtual OperationType op_type() const = 0;
-
-  virtual bool should_replace_array() const { return false; }
-  virtual std::shared_ptr<arrow::Array> get_replacement_array() const {
-    return nullptr;
-  }
-
-  virtual ~BaseOperation() = default;
-};
-
-struct SetOperation : public BaseOperation {
-  std::shared_ptr<arrow::Array> value;  // The new value to set
-
-  SetOperation(int64_t id, const std::vector<std::string> &field,
-               const std::shared_ptr<arrow::Array> &v)
-      : BaseOperation(id, field), value(v) {}
-
-  arrow::Result<bool> apply(const std::shared_ptr<arrow::Array> &array,
-                            int64_t row_index) const override {
-    auto array_data = array->data();
-    switch (array->type_id()) {
-      case arrow::Type::INT64: {
-        auto raw_values = array_data->GetMutableValues<int32_t>(1);
-        raw_values[row_index] =
-            std::static_pointer_cast<arrow::Int32Array>(value)->Value(0);
-        return {true};
-      }
-      default:
-        return arrow::Status::Invalid("not implemented");
-    }
-  }
-  OperationType op_type() const override { return OperationType::SET; }
-  bool should_replace_array() const override {
-    return value->type_id() == arrow::Type::STRING;
-  }
-  std::shared_ptr<arrow::Array> get_replacement_array() const override {
-    return value;
-  }
-};
-
-class Node {
- private:
-  std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data;
-
- public:
-  int64_t id;
-  std::string schema_name;
-
-  explicit Node(const int64_t id, std::string schema_name,
-                std::unordered_map<std::string, std::shared_ptr<arrow::Array>>
-                    initial_data)
-      : id(id),
-        schema_name(std::move(schema_name)),
-        data(std::move(initial_data)) {}
-
-  ~Node() = default;
-
-  void add_field(const std::string &field_name,
-                 const std::shared_ptr<arrow::Array> &value) {
-    data.insert(std::make_pair(field_name, value));
-  }
-
-  arrow::Result<std::shared_ptr<arrow::Array>> get_field(
-      const std::string &field_name) const {
-    auto it = data.find(field_name);
-    if (it == data.end()) {
-      return arrow::Status::KeyError("Field not found: ", field_name);
-    }
-    return it->second;
-  }
-
-  arrow::Result<bool> update(const std::shared_ptr<BaseOperation> &update) {
-    if (update->field_name.empty()) {
-      return arrow::Status::Invalid("Field name vector is empty");
-    }
-
-    auto it = data.find(update->field_name[0]);
-    if (it == data.end()) {
-      return arrow::Status::KeyError("Field not found: ",
-                                     update->field_name[0]);
-    }
-    if (update->should_replace_array()) {
-      data[update->field_name[0]] = update->get_replacement_array();
-      return true;
-    }
-    return update->apply(it->second, 0);
-  }
-};
-
+// Schema registry class for managing node schemas
 class SchemaRegistry {
  private:
   std::unordered_map<std::string, std::shared_ptr<arrow::Schema>> schemas;
-  static arrow::Result<std::shared_ptr<arrow::Schema>> prepend_id_field(
-      const std::shared_ptr<arrow::Schema> &schema) {
-    auto id_field = arrow::field("id", arrow::int64(), false);
-    auto fields = schema->fields();
-    if (schema->GetFieldIndex("id") != -1) {
-      return arrow::Status::Invalid("Schema already contains 'id' field");
-    }
-    std::vector<std::shared_ptr<arrow::Field>> new_fields;
-    new_fields.reserve(fields.size() + 1);
-    new_fields.push_back(id_field);
-    new_fields.insert(new_fields.end(), fields.begin(), fields.end());
-    return arrow::schema(new_fields);
-  }
 
  public:
+  SchemaRegistry() = default;
+
+  // Add a schema with the given name
   arrow::Result<bool> add(const std::string &name,
-                          const std::shared_ptr<arrow::Schema> &schema) {
-    if (name.empty()) {
-      return arrow::Status::Invalid("Schema name cannot be empty");
-    }
-    if (!schema) {
-      return arrow::Status::Invalid("Schema cannot be null");
-    }
-    if (schema->GetFieldIndex("id") != -1) {
-      return arrow::Status::Invalid("'id' field name is reserved");
-    }
-    ARROW_ASSIGN_OR_RAISE(auto final_schema, prepend_id_field(schema));
-    auto [it, inserted] = schemas.try_emplace(name, final_schema);
-    if (!inserted) {
-      return arrow::Status::AlreadyExists("Schema '", name, "' already exists");
-    }
-    return true;
+                          std::shared_ptr<arrow::Schema> schema) {
+    schemas.insert(std::make_pair(name, schema));
+    return {true};
   }
 
-  // Check if a schema exists
-  bool has_schema(const std::string &name) const {
-    return schemas.contains(name);
-  }
-
-  // Get a schema by name
+  // Get a schema by name, returning an error if not found
   arrow::Result<std::shared_ptr<arrow::Schema>> get(
       const std::string &name) const {
     auto it = schemas.find(name);
     if (it == schemas.end()) {
-      return arrow::Status::KeyError("Schema '", name, "' not found");
+      return arrow::Status::KeyError("Schema not found: ", name);
     }
     return it->second;
   }
 
-  // Update existing schema
-  arrow::Result<bool> update(const std::string &name,
-                             const std::shared_ptr<arrow::Schema> &schema) {
-    if (name.empty()) {
-      return arrow::Status::Invalid("Schema name cannot be empty");
-    }
-    if (!schema) {
-      return arrow::Status::Invalid("Schema cannot be null");
-    }
-
-    auto it = schemas.find(name);
-    if (it == schemas.end()) {
-      return arrow::Status::KeyError("Schema '", name, "' not found");
-    }
-
-    it->second = schema;
-    return true;
-  }
-
-  // Remove a schema
-  arrow::Result<bool> remove(const std::string &name) {
-    if (name.empty()) {
-      return arrow::Status::Invalid("Schema name cannot be empty");
-    }
-
-    if (schemas.erase(name) == 0) {
-      return arrow::Status::KeyError("Schema '", name, "' not found");
-    }
-    return true;
+  // Check if a schema exists
+  [[nodiscard]] bool exists(const std::string &name) const {
+    return schemas.find(name) != schemas.end();
   }
 
   // Get all schema names
   [[nodiscard]] std::vector<std::string> get_schema_names() const {
     std::vector<std::string> names;
     names.reserve(schemas.size());
-    for (const auto &[name, _] : schemas) {
-      names.push_back(name);
+    for (const auto &schema_pair : schemas) {
+      names.push_back(schema_pair.first);
     }
     return names;
   }
 };
-
-static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
-    const std::shared_ptr<arrow::Schema> &schema,
-    const std::vector<std::shared_ptr<Node>> &nodes, size_t chunk_size = 0) {
-  if (nodes.empty()) {
-    return arrow::Status::Invalid("Empty nodes list");
-  }
-  auto field_names = schema->field_names();
-  if (field_names.empty()) {
-    return arrow::Status::Invalid("Empty field names list");
-  }
-
-  // Collect arrays for each field
-  std::vector<std::vector<std::shared_ptr<arrow::Array>>> field_arrays(
-      field_names.size());
-
-  // For each field
-  for (size_t field_idx = 0; field_idx < field_names.size(); ++field_idx) {
-    const auto &field_name = field_names[field_idx];
-
-    // For each node
-    for (const auto &node : nodes) {
-      auto field_result = node->get_field(field_name);
-      if (!field_result.ok()) {
-        return field_result.status();
-      }
-      field_arrays[field_idx].push_back(field_result.ValueOrDie());
-    }
-  }
-
-  // Concatenate arrays for each field
-  std::vector<std::shared_ptr<arrow::ChunkedArray>> columns;
-  for (const auto &arrays : field_arrays) {
-    if (chunk_size <= 0) {
-      // Single chunk - concatenate all arrays
-      ARROW_ASSIGN_OR_RAISE(auto concat_array, arrow::Concatenate(arrays));
-      columns.push_back(std::make_shared<arrow::ChunkedArray>(concat_array));
-    } else {
-      // Multiple chunks - create chunks of specified size
-      std::vector<std::shared_ptr<arrow::Array>> chunks;
-      size_t total_length = 0;
-      std::vector<std::shared_ptr<arrow::Array>> current_chunk;
-
-      for (const auto &array : arrays) {
-        current_chunk.push_back(array);
-        total_length += array->length();
-
-        if (total_length >= chunk_size) {
-          ARROW_ASSIGN_OR_RAISE(auto concat_chunk,
-                                arrow::Concatenate(current_chunk));
-          chunks.push_back(concat_chunk);
-          current_chunk.clear();
-          total_length = 0;
-        }
-      }
-
-      // Handle remaining arrays
-      if (!current_chunk.empty()) {
-        ARROW_ASSIGN_OR_RAISE(auto concat_chunk,
-                              arrow::Concatenate(current_chunk));
-        chunks.push_back(concat_chunk);
-      }
-
-      columns.push_back(std::make_shared<arrow::ChunkedArray>(chunks));
-    }
-  }
-
-  return arrow::Table::Make(schema, columns);
-}
 
 class Shard {
  private:
@@ -557,10 +158,14 @@ class Shard {
   }
   bool set_updated(bool v) {
     updated = v;
+    return updated;
   }
-
   int64_t get_updated_ts() const {
     return updated_ts;
+  }
+
+  std::string compound_id() const {
+    return this->schema_name + "-" + std::to_string(this->id);
   }
 
   arrow::Result<bool> add(const std::shared_ptr<Node> &node) {
@@ -993,12 +598,15 @@ class ShardManager {
     return true;
   }
 
-  void reset_all_updated() {
-    for (const auto &entry: shards) {
-      for (auto shard: entry.second) {
+  // Reset the updated flag for all shards
+  arrow::Result<bool> reset_all_updated() {
+    log_info("Resetting 'updated' flag for all shards");
+    for (auto &[schema_name, schema_shards] : shards) {
+      for (auto &shard : schema_shards) {
         shard->set_updated(false);
       }
     }
+    return true;
   }
 
 };
@@ -1185,7 +793,7 @@ class Database {
 
   // Get information about shards for a schema
   arrow::Result<size_t> get_shard_count(const std::string &schema_name) const {
-    if (!schema_registry->has_schema(schema_name)) {
+    if (!schema_registry->exists(schema_name)) {
       return arrow::Status::Invalid("Schema '", schema_name, "' not found");
     }
     return shard_manager->get_shard_count(schema_name);
@@ -1194,7 +802,7 @@ class Database {
   // Get sizes of all shards for a schema
   arrow::Result<std::vector<size_t>> get_shard_sizes(
       const std::string &schema_name) const {
-    if (!schema_registry->has_schema(schema_name)) {
+    if (!schema_registry->exists(schema_name)) {
       return arrow::Status::Invalid("Schema '", schema_name, "' not found");
     }
     return shard_manager->get_shard_sizes(schema_name);
@@ -1203,13 +811,13 @@ class Database {
   // Get the min/max IDs of all shards for a schema
   arrow::Result<std::vector<std::pair<int64_t, int64_t>>> get_shard_ranges(
       const std::string &schema_name) const {
-    if (!schema_registry->has_schema(schema_name)) {
+    if (!schema_registry->exists(schema_name)) {
       return arrow::Status::Invalid("Schema '", schema_name, "' not found");
     }
     return shard_manager->get_shard_ranges(schema_name);
   }
 
-  arrow::Result<std::shared_ptr<Snapshot>> create_snapshot() {
+  arrow::Result<Snapshot*> create_snapshot() {
     return this->snapshot_manager->commit();
   }
 

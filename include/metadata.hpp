@@ -1,5 +1,4 @@
-#ifndef METADATA_HPP
-#define METADATA_HPP
+#pragma once
 
 #include <string>
 #include <vector>
@@ -14,21 +13,116 @@
 using namespace std::string_literals;
 
 namespace tundradb {
+    // Define Snapshot first (no forward declaration)
+    struct Snapshot {
+        int64_t id = 0;
+        int64_t parent_id = 0;
+        std::string manifest_location;
+        int64_t timestamp_ms = 0;
+        
+        NLOHMANN_DEFINE_TYPE_INTRUSIVE(Snapshot,
+                                       id,
+                                       parent_id,
+                                       manifest_location,
+                                       timestamp_ms);
+
+        std::string toString() const {
+            std::stringstream ss;
+            ss << "Snapshot{id='" << id
+                    << "', parent_id=" << parent_id
+                    << ", manifest_location='" << manifest_location
+                    << "', timestamp_ms=" << timestamp_ms << "}";
+            return ss.str();
+        }
+
+        friend std::ostream &operator<<(std::ostream &os, const Snapshot &snapshot) {
+            os << snapshot.toString();
+            return os;
+        }
+    };
+    
     struct Metadata {
-        std::string snapshot_location;
-        NLOHMANN_DEFINE_TYPE_INTRUSIVE(Metadata, snapshot_location);
+        // Use raw pointer instead of std::shared_ptr for serialization simplicity
+        Snapshot* current_snapshot = nullptr;
+        std::vector<Snapshot> snapshots;
+        
+        // Custom serialization for Metadata to handle pointer
+        friend void to_json(nlohmann::json& j, const Metadata& m) {
+            j = nlohmann::json{{"snapshots", m.snapshots}};
+            
+            // Store the index of the current snapshot if it exists
+            if (m.current_snapshot) {
+                // Find the index of the current snapshot in the snapshots vector
+                for (size_t i = 0; i < m.snapshots.size(); ++i) {
+                    if (m.current_snapshot == &m.snapshots[i]) {
+                        j["current_snapshot_index"] = i;
+                        break;
+                    }
+                }
+            } else {
+                j["current_snapshot_index"] = -1;  // No current snapshot
+            }
+        }
+
+        // Custom deserialization for Metadata to handle pointer
+        friend void from_json(const nlohmann::json& j, Metadata& m) {
+            j.at("snapshots").get_to(m.snapshots);
+            
+            // Set the current snapshot pointer if it exists
+            if (j.contains("current_snapshot_index")) {
+                int index = j["current_snapshot_index"];
+                if (index >= 0 && index < static_cast<int>(m.snapshots.size())) {
+                    m.current_snapshot = &m.snapshots[index];
+                } else {
+                    m.current_snapshot = nullptr;
+                }
+            } else {
+                m.current_snapshot = nullptr;
+            }
+        }
+        
+        std::string toString() const {
+            std::stringstream ss;
+            ss << "Metadata{current_snapshot=" << (current_snapshot ? current_snapshot->toString() : "null") 
+               << ", snapshots_count=" << snapshots.size() << "}";
+            return ss.str();
+        }
+        
+        friend std::ostream &operator<<(std::ostream &os, const Metadata &metadata) {
+            os << metadata.toString();
+            return os;
+        }
     };
 
+    // DatabaseInfo to store location of the latest metadata file
+    struct DatabaseInfo {
+        std::string metadata_location;
+        int64_t timestamp_ms = 0;
+        
+        NLOHMANN_DEFINE_TYPE_INTRUSIVE(DatabaseInfo, metadata_location, timestamp_ms);
+        
+        std::string toString() const {
+            std::stringstream ss;
+            ss << "DatabaseInfo{metadata_location='" << metadata_location
+               << "', timestamp_ms=" << timestamp_ms << "}";
+            return ss.str();
+        }
+        
+        friend std::ostream &operator<<(std::ostream &os, const DatabaseInfo &info) {
+            os << info.toString();
+            return os;
+        }
+    };
 
     struct ShardMetadata {
-        int64_t id;
+        int64_t id = 0;
         std::string schema_name;
-        int64_t min_id;
-        int64_t max_id;
-        size_t record_count;
-        size_t chunk_size;
+        int64_t min_id = 0;
+        int64_t max_id = 0;
+        size_t record_count = 0;
+        size_t chunk_size = 0;
         std::string data_file;
-        int64_t timestamp_ms; // Time in milliseconds since epoch
+        int64_t timestamp_ms = 0; // Time in milliseconds since epoch
 
         NLOHMANN_DEFINE_TYPE_INTRUSIVE(ShardMetadata,
                                        id,
@@ -58,9 +152,9 @@ namespace tundradb {
             return os;
         }
 
-        // std::string compound_id() const {
-        //     return this->schema_name + "-" + std::to_string(this->id);
-        // }
+        std::string compound_id() const {
+            return this->schema_name + "-" + std::to_string(this->id);
+        }
     };
 
     struct Manifest {
@@ -85,42 +179,26 @@ namespace tundradb {
         }
     };
 
-
     class MetadataManager {
     public:
-        std::string data_dir;
-
-        arrow::Result<std::string> write_manifest(const Manifest &manifest);
-
-        arrow::Result<bool> write_metadata(const Metadata &manifest);
-
-        arrow::Result<Manifest> read_manifest(const std::string &file_path);
-
-        explicit MetadataManager(const std::string &data_dir);
+        explicit MetadataManager(const std::string &metadata_dir_path);
 
         arrow::Result<bool> initialize();
-
-        arrow::Result<Metadata> load_metadata() {
-            log_info("Loading metadata");
-            auto file_path = this->metadata_dir + "/metadata.json";
-            log_info("Loading metadata from " + file_path);
-            if (file_exists(file_path)) {
-                return read_json_file<Metadata>(file_path);
-            }
-            log_info("File '" + file_path + "' doesn't exist. Creating empty metadata");
-            Metadata metadata;
-            metadata.snapshot_location = ""s;
-            ARROW_RETURN_NOT_OK(write_json_file(metadata, file_path));
-            return metadata;
-        }
-
-        std::string get_metadata_dir() {
-            return this->metadata_dir;
-        }
+        
+        arrow::Result<std::string> write_manifest(const Manifest& manifest);
+        arrow::Result<Manifest> read_manifest(const std::string& id);
+        
+        arrow::Result<std::string> write_metadata(const Metadata& metadata);
+        arrow::Result<Metadata> read_metadata(const std::string& path);
+        
+        arrow::Result<std::string> write_db_info(const DatabaseInfo& db_info);
+        arrow::Result<DatabaseInfo> read_db_info();
+        
+        arrow::Result<Metadata> load_current_metadata();
+        
+        std::string get_metadata_dir() const;
 
     private:
         std::string metadata_dir;
     };
 }
-
-#endif //METADATA_HPP

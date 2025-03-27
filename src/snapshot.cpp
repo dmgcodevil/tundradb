@@ -18,73 +18,97 @@ namespace tundradb {
     arrow::Result<bool> SnapshotManager::initialize() {
         log_info("Initializing snapshot manager...");
         try {
-            // Fix: Use the instance member instead of the global variable
-            auto metadata = this->metadata_manager->load_metadata().ValueOrDie();
-            log_info("Metadata loaded.");
-            if (!metadata.snapshot_location.empty()) {
-                this->snapshot = std::make_shared<Snapshot>(
-                    read_json_file<Snapshot>(metadata.snapshot_location).ValueOrDie());
-                log_info("Snapshot loaded.");
+            // Load current metadata using the new loadMetadata method
+            auto metadata_result = this->metadata_manager->load_current_metadata();
+            if (!metadata_result.ok()) {
+                log_warn("Failed to load metadata: " + metadata_result.status().ToString());
+                return true; // Continue with empty metadata
+            }
+
+            this->metadata = metadata_result.ValueOrDie();
+            log_info("Metadata loaded: " + this->metadata.toString());
+
+            // Check if we have a current snapshot
+            if (this->metadata.current_snapshot != nullptr) {
+                this->snapshot = this->metadata.current_snapshot;
+                log_info("Current snapshot loaded: " + this->snapshot->toString());
+
+                // Load the manifest to initialize shards
                 Manifest manifest = read_json_file<Manifest>(this->snapshot->manifest_location).ValueOrDie();
                 log_info("Manifest loaded. shards count=" + std::to_string(manifest.shards.size()) + 
                          ", id=" + manifest.id);
-                // load shards data
-                std::unordered_map<std::string, std::vector<ShardMetadata> > grouped_shards;
 
-                for (auto shard: manifest.shards) {
+                // Group shards by schema name
+                std::unordered_map<std::string, std::vector<ShardMetadata>> grouped_shards;
+                for (auto& shard : manifest.shards) {
                     grouped_shards[shard.schema_name].push_back(shard);
                 }
 
+                // Sort shards by ID for each schema
                 for (auto &[_, v]: grouped_shards) {
                     std::sort(v.begin(), v.end(), [](const ShardMetadata &a, const ShardMetadata &b) {
                         return a.id < b.id;
                     });
                 }
+
                 log_info("Grouped shards: " + std::to_string(grouped_shards.size()));
+                
+                // Load and add each shard
                 for (auto &[schema_name, shards]: grouped_shards) {
-                    for (auto shard_metadata: shards) {
+                    for (auto& shard_metadata: shards) {
                         auto shard = this->storage->read_shard(shard_metadata).ValueOrDie();
-                        log_debug("Adding shard from snapshot");
+                        log_debug("Adding shard from snapshot: " + shard_metadata.toString());
                         shard->set_updated(false);
                         this->shard_manager->add_shard(shard).ValueOrDie();
                     }
                 }
             } else {
-                log_info("No snapshots exist");
+                log_info("No current snapshot exists");
             }
             return true;
-        } catch (const std::filesystem::filesystem_error &e) {
-            log_error("Failed to create data directory: " + std::string(e.what()));
-            return arrow::Status::IOError("Failed to create data directory: ",
-                                          e.what());
+        } catch (const std::exception &e) {
+            log_error("Failed to initialize snapshot manager: " + std::string(e.what()));
+            return arrow::Status::IOError("Failed to initialize snapshot manager: ", e.what());
         }
     }
 
-    arrow::Result<std::shared_ptr<Snapshot> > SnapshotManager::commit() {
-        log_info("Creating snapshot");
+    arrow::Result<Snapshot*> SnapshotManager::commit() {
+        log_info("Creating new snapshot");
         auto timestamp_ms = now_millis();
-        Snapshot snapshot;
-        snapshot.id = timestamp_ms;
-        snapshot.timestamp_ms = timestamp_ms;
+        
+        // Create new snapshot
+        Snapshot new_snapshot;
+        new_snapshot.id = timestamp_ms;
+        new_snapshot.timestamp_ms = timestamp_ms;
+        
+        // Set parent ID if previous snapshot exists
+        if (this->snapshot != nullptr) {
+            new_snapshot.parent_id = this->snapshot->id;
+        }
+        
+        // Create new manifest or load existing one
         Manifest current_manifest;
         if (this->snapshot != nullptr) {
-            snapshot.parent_id = this->snapshot->id;
-            snapshot.snapshots.push_back(*this->snapshot);
-            snapshot.snapshots.insert(snapshot.snapshots.end(),
-                                      this->snapshot->snapshots.begin(), this->snapshot->snapshots.end());
             current_manifest = read_json_file<Manifest>(this->snapshot->manifest_location).ValueOrDie();
         }
-        std::unordered_map<std::string, std::unordered_map<int64_t, ShardMetadata> > curr_shard_metadata;
+        
+        // Track shard metadata from current manifest
+        std::unordered_map<std::string, std::unordered_map<int64_t, ShardMetadata>> curr_shard_metadata;
         for (const auto &shard: current_manifest.shards) {
-            curr_shard_metadata[shard.schema_name][shard.id]= shard;
+            curr_shard_metadata[shard.schema_name][shard.id] = shard;
         }
+        
+        // Create new manifest
         Manifest new_manifest;
         new_manifest.id = generate_uuid();
 
+        // Go through all schemas and shards
         for (const auto &schema_name: this->shard_manager->get_schema_names()) {
             log_info("Writing shards for schema: " + schema_name);
             for (const auto &shard: this->shard_manager->get_shards(schema_name).ValueOrDie()) {
                 log_debug("Snapshotting shard: " + std::to_string(shard->id));
+                
+                // Only write updated shards, reuse unchanged ones
                 if (shard->is_updated()) {
                     ShardMetadata shard_metadata;
                     shard_metadata.id = shard->id;
@@ -102,21 +126,39 @@ namespace tundradb {
                 }
             }
         }
-        snapshot.manifest_location = this->metadata_manager->write_manifest(new_manifest).ValueOrDie();
-        log_info("Writing snapshot: " + snapshot.toString());
-        auto snap_id = generate_uuid();
-        auto snapshot_location = this->metadata_manager->get_metadata_dir() + "/" + snap_id + ".metadata.json";
-        write_json_file(snapshot,
-                        snapshot_location).ValueOrDie();
-        this->snapshot = std::make_shared<Snapshot>(std::move(snapshot));
-        Metadata new_metadata;
-        new_metadata.snapshot_location = snapshot_location;
-        this->metadata_manager->write_metadata(new_metadata).ValueOrDie();
-        shard_manager->reset_all_updated();
+        
+        // Save the manifest
+        new_snapshot.manifest_location = this->metadata_manager->write_manifest(new_manifest).ValueOrDie();
+        log_info("Created manifest: " + new_manifest.id + " at " + new_snapshot.manifest_location);
+        
+        // Add the new snapshot to metadata
+        this->metadata.snapshots.push_back(new_snapshot);
+        
+        // Set the current snapshot to the newly created one
+        this->snapshot = &this->metadata.snapshots.back();
+        this->metadata.current_snapshot = this->snapshot;
+        
+        // Save the updated metadata
+        std::string metadata_location = this->metadata_manager->write_metadata(this->metadata).ValueOrDie();
+        log_info("Saved metadata to: " + metadata_location);
+        
+        // Update database info to point to the new metadata location
+        DatabaseInfo db_info;
+        db_info.metadata_location = metadata_location;
+        db_info.timestamp_ms = timestamp_ms;
+        this->metadata_manager->write_db_info(db_info).ValueOrDie();
+        log_info("Updated database info to point to new metadata");
+        
+        // Reset all updated flags
+        auto reset_result = shard_manager->reset_all_updated();
+        if (!reset_result.ok()) {
+            log_warn("Failed to reset shard updated flags: " + reset_result.status().ToString());
+        }
+        
         return this->snapshot;
     }
 
-    std::shared_ptr<Snapshot> SnapshotManager::current_snapshot() {
+    Snapshot* SnapshotManager::current_snapshot() {
         return this->snapshot;
     }
 }
