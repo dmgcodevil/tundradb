@@ -69,6 +69,9 @@ add_library(core
         src/file_utils.cpp
         include/utils.hpp
         src/snapshot.cpp
+        include/edge_store.hpp
+        include/edge.hpp
+        src/edge_store.cpp
 )
 
 target_include_directories(core

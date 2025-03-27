@@ -7,13 +7,14 @@
 #include <parquet/arrow/reader.h>
 #include <parquet/arrow/writer.h>
 #include <parquet/file_reader.h>
-#include <nlohmann/json.hpp>
 
 #include <filesystem>
 #include <fstream>
+#include <nlohmann/json.hpp>
 #include <string>
 #include <unordered_map>
 #include <vector>
+
 #include "metadata.hpp"
 
 namespace tundradb {
@@ -37,12 +38,11 @@ class Storage {
   // Initialize storage system, creating directories if needed
   arrow::Result<bool> initialize();
 
-
   arrow::Result<std::string> write_shard(const std::shared_ptr<Shard>& shard);
 
   // Load a shard from its metadata path
-  arrow::Result<std::shared_ptr<Shard>> read_shard(const ShardMetadata& shard_metadata);
-
+  arrow::Result<std::shared_ptr<Shard>> read_shard(
+      const ShardMetadata& shard_metadata);
 };
 
 }  // namespace tundradb

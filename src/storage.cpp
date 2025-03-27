@@ -10,6 +10,7 @@
 #include <nlohmann/json.hpp>
 #include <random>
 #include <sstream>
+
 #include "metadata.hpp"
 
 namespace tundradb {
@@ -48,13 +49,15 @@ namespace tundradb {
 //     metadata.timestamp_ms = j["timestamp_ms"].get<int64_t>();
 //     return metadata;
 //   } catch (const std::exception& e) {
-//     return arrow::Status::Invalid("Failed to parse JSON metadata: ", e.what());
+//     return arrow::Status::Invalid("Failed to parse JSON metadata: ",
+//     e.what());
 //   }
 // }
 
 Storage::Storage(std::string data_dir,
                  std::shared_ptr<SchemaRegistry> schema_registry)
-    : data_directory(std::move(data_dir)), schema_registry(std::move(schema_registry)) {}
+    : data_directory(std::move(data_dir)),
+      schema_registry(std::move(schema_registry)) {}
 
 arrow::Result<bool> Storage::initialize() {
   try {
@@ -67,7 +70,8 @@ arrow::Result<bool> Storage::initialize() {
   }
 }
 
-arrow::Result<std::string> Storage::write_shard(const std::shared_ptr<Shard>& shard) {
+arrow::Result<std::string> Storage::write_shard(
+    const std::shared_ptr<Shard>& shard) {
   if (!shard) {
     return arrow::Status::Invalid("Cannot write null shard");
   }
@@ -83,12 +87,13 @@ arrow::Result<std::string> Storage::write_shard(const std::shared_ptr<Shard>& sh
 
   // Create schema-specific directory path
   std::string schema_dir = data_directory + "/" + schema_name;
-  
+
   // Create schema directory if needed
   try {
     std::filesystem::create_directories(schema_dir);
   } catch (const std::filesystem::filesystem_error& e) {
-    return arrow::Status::IOError("Failed to create schema directory: ", e.what());
+    return arrow::Status::IOError("Failed to create schema directory: ",
+                                  e.what());
   }
 
   // Create data file path using the new folder structure
@@ -99,13 +104,13 @@ arrow::Result<std::string> Storage::write_shard(const std::shared_ptr<Shard>& sh
 
   // Open output file
   ARROW_ASSIGN_OR_RAISE(auto output_file,
-                     arrow::io::FileOutputStream::Open(data_file_path));
+                        arrow::io::FileOutputStream::Open(data_file_path));
 
   // Write table to parquet
   auto write_options = parquet::ArrowWriterProperties::Builder().build();
   auto parquet_props = parquet::WriterProperties::Builder()
-                       .compression(parquet::Compression::SNAPPY)
-                       ->build();
+                           .compression(parquet::Compression::SNAPPY)
+                           ->build();
 
   ARROW_RETURN_NOT_OK(parquet::arrow::WriteTable(
       *table, arrow::default_memory_pool(), output_file, shard->capacity,
@@ -114,18 +119,19 @@ arrow::Result<std::string> Storage::write_shard(const std::shared_ptr<Shard>& sh
   return data_file_path;
 }
 
-arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(const ShardMetadata& shard_metadata){
+arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(
+    const ShardMetadata& shard_metadata) {
   // Check if metadata file exists
 
   // Open parquet file
   ARROW_ASSIGN_OR_RAISE(
       auto input_file, arrow::io::ReadableFile::Open(shard_metadata.data_file));
 
-  // Read parquet file into table using the modern API that returns arrow::Result
+  // Read parquet file into table using the modern API that returns
+  // arrow::Result
   std::unique_ptr<parquet::arrow::FileReader> reader;
-  ARROW_ASSIGN_OR_RAISE(
-      reader, 
-      parquet::arrow::OpenFile(input_file, arrow::default_memory_pool()));
+  ARROW_ASSIGN_OR_RAISE(reader, parquet::arrow::OpenFile(
+                                    input_file, arrow::default_memory_pool()));
 
   std::shared_ptr<arrow::Table> table;
   ARROW_RETURN_NOT_OK(reader->ReadTable(&table));
@@ -133,9 +139,8 @@ arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(const ShardMetadata& s
   // Create a new shard with metadata properties
   auto shard = std::make_shared<Shard>(
       shard_metadata.id,
-      shard_metadata.record_count,          // Use as capacity
-      shard_metadata.min_id, shard_metadata.max_id,
-      shard_metadata.chunk_size,
+      shard_metadata.record_count,  // Use as capacity
+      shard_metadata.min_id, shard_metadata.max_id, shard_metadata.chunk_size,
       shard_metadata.schema_name, this->schema_registry);
 
   // Convert table rows back to nodes and add to shard

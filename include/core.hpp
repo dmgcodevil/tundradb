@@ -5,22 +5,24 @@
 #include <arrow/result.h>
 #include <arrow/table.h>
 #include <arrow/type.h>
-#include <chrono>
+
 #include <algorithm>
+#include <chrono>
 #include <iostream>
 #include <memory_resource>
+#include <nlohmann/json.hpp>
 #include <set>
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include <nlohmann/json.hpp>
+
+#include "config.hpp"
 #include "file_utils.hpp"
+#include "logger.hpp"
 #include "metadata.hpp"
+#include "node.hpp"
 #include "storage.hpp"
 #include "utils.hpp"
-#include "config.hpp"
-#include "node.hpp"
-#include "logger.hpp"
 using namespace std::string_literals;
 
 namespace tundradb {
@@ -33,23 +35,23 @@ class Storage;
 
 // SnapshotManager class
 class SnapshotManager {
-public:
-    explicit SnapshotManager(std::shared_ptr<MetadataManager> metadata_manager,
-                             std::shared_ptr<Storage> storage,
-                             std::shared_ptr<ShardManager> shard_manager);
+ public:
+  explicit SnapshotManager(std::shared_ptr<MetadataManager> metadata_manager,
+                           std::shared_ptr<Storage> storage,
+                           std::shared_ptr<ShardManager> shard_manager);
 
-    arrow::Result<bool> initialize();
+  arrow::Result<bool> initialize();
 
-    arrow::Result<Snapshot*> commit();
+  arrow::Result<Snapshot *> commit();
 
-    Snapshot* current_snapshot();
+  Snapshot *current_snapshot();
 
-private:
-    Snapshot* snapshot = nullptr;
-    std::shared_ptr<MetadataManager> metadata_manager;
-    std::shared_ptr<Storage> storage;
-    std::shared_ptr<ShardManager> shard_manager;
-    Metadata metadata;
+ private:
+  Snapshot *snapshot = nullptr;
+  std::shared_ptr<MetadataManager> metadata_manager;
+  std::shared_ptr<Storage> storage;
+  std::shared_ptr<ShardManager> shard_manager;
+  Metadata metadata;
 };
 
 // No longer need to include snapshot.hpp as we've moved all definitions here
@@ -115,7 +117,8 @@ class Shard {
   std::shared_ptr<arrow::Table> table;
   std::shared_ptr<SchemaRegistry> schema_registry;
   int64_t updated_ts = now_millis();
-  bool updated = true; // todo should be false when we read from snaptshot and after commit
+  bool updated = true;  // todo should be false when we read from snaptshot and
+                        // after commit
 
  public:
   const int64_t id;         // Unique shard identifier
@@ -153,16 +156,12 @@ class Shard {
         schema_registry(std::move(schema_registry)),
         schema_name(schema_name) {}
 
-  bool is_updated() const {
-    return updated;
-  }
+  bool is_updated() const { return updated; }
   bool set_updated(bool v) {
     updated = v;
     return updated;
   }
-  int64_t get_updated_ts() const {
-    return updated_ts;
-  }
+  int64_t get_updated_ts() const { return updated_ts; }
 
   std::string compound_id() const {
     return this->schema_name + "-" + std::to_string(this->id);
@@ -608,7 +607,6 @@ class ShardManager {
     }
     return true;
   }
-
 };
 
 class Database {
@@ -644,17 +642,19 @@ class Database {
         config(config),
         persistence_enabled(config.is_persistence_enabled()) {
     if (persistence_enabled) {
-      const std::string& db_path = config.get_db_path();
+      const std::string &db_path = config.get_db_path();
       if (db_path.empty()) {
         log_error("Database path is empty but persistence is enabled");
         persistence_enabled = false;
         return;
       }
-      
+
       std::string data_path = db_path + "/data";
-      storage = std::make_shared<Storage>(std::move(data_path), schema_registry);
+      storage =
+          std::make_shared<Storage>(std::move(data_path), schema_registry);
       metadata_manager = std::make_shared<MetadataManager>(db_path);
-      snapshot_manager = std::make_shared<SnapshotManager>(metadata_manager, storage, shard_manager);
+      snapshot_manager = std::make_shared<SnapshotManager>(
+          metadata_manager, storage, shard_manager);
     }
   }
 
@@ -671,12 +671,12 @@ class Database {
       if (!storage_init.ok()) {
         return storage_init.status();
       }
-      
+
       auto metadata_init = this->metadata_manager->initialize();
       if (!metadata_init.ok()) {
         return metadata_init.status();
       }
-      
+
       auto snapshot_init = this->snapshot_manager->initialize();
       if (!snapshot_init.ok()) {
         return snapshot_init.status();
@@ -817,7 +817,7 @@ class Database {
     return shard_manager->get_shard_ranges(schema_name);
   }
 
-  arrow::Result<Snapshot*> create_snapshot() {
+  arrow::Result<Snapshot *> create_snapshot() {
     return this->snapshot_manager->commit();
   }
 
