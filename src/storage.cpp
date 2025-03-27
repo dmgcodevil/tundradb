@@ -52,9 +52,9 @@ namespace tundradb {
 //   }
 // }
 
-Storage::Storage(const std::string& data_dir,
+Storage::Storage(std::string data_dir,
                  std::shared_ptr<SchemaRegistry> schema_registry)
-    : data_directory(data_dir), schema_registry(std::move(schema_registry)) {}
+    : data_directory(std::move(data_dir)), schema_registry(std::move(schema_registry)) {}
 
 arrow::Result<bool> Storage::initialize() {
   try {
@@ -81,26 +81,31 @@ arrow::Result<std::string> Storage::write_shard(const std::shared_ptr<Shard>& sh
   char uuid_str[37];
   uuid_unparse_lower(uuid, uuid_str);
 
-  // Create data file path using the new naming convention
-  std::string data_file_path =
-      data_directory + "/" + schema_name + "-" + uuid_str + ".parquet";
-
+  // Create schema-specific directory path
+  std::string schema_dir = data_directory + "/" + schema_name;
+  
   // Create schema directory if needed
-  std::filesystem::path path(data_file_path);
-  std::filesystem::create_directories(path.parent_path());
+  try {
+    std::filesystem::create_directories(schema_dir);
+  } catch (const std::filesystem::filesystem_error& e) {
+    return arrow::Status::IOError("Failed to create schema directory: ", e.what());
+  }
+
+  // Create data file path using the new folder structure
+  std::string data_file_path = schema_dir + "/" + uuid_str + ".parquet";
 
   // Get the shard's table
   ARROW_ASSIGN_OR_RAISE(auto table, shard->get_table());
 
   // Open output file
   ARROW_ASSIGN_OR_RAISE(auto output_file,
-                        arrow::io::FileOutputStream::Open(data_file_path));
+                     arrow::io::FileOutputStream::Open(data_file_path));
 
   // Write table to parquet
   auto write_options = parquet::ArrowWriterProperties::Builder().build();
   auto parquet_props = parquet::WriterProperties::Builder()
-                           .compression(parquet::Compression::SNAPPY)
-                           ->build();
+                       .compression(parquet::Compression::SNAPPY)
+                       ->build();
 
   ARROW_RETURN_NOT_OK(parquet::arrow::WriteTable(
       *table, arrow::default_memory_pool(), output_file, shard->capacity,
@@ -109,24 +114,21 @@ arrow::Result<std::string> Storage::write_shard(const std::shared_ptr<Shard>& sh
   return data_file_path;
 }
 
-
-  arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(const ShardMetadata& shard_metadata){
+arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(const ShardMetadata& shard_metadata){
   // Check if metadata file exists
 
   // Open parquet file
   ARROW_ASSIGN_OR_RAISE(
       auto input_file, arrow::io::ReadableFile::Open(shard_metadata.data_file));
 
-  // Read parquet file into table
+  // Read parquet file into table using the modern API that returns arrow::Result
   std::unique_ptr<parquet::arrow::FileReader> reader;
-  ARROW_RETURN_NOT_OK(parquet::arrow::OpenFile(input_file, arrow::default_memory_pool(), &reader));
+  ARROW_ASSIGN_OR_RAISE(
+      reader, 
+      parquet::arrow::OpenFile(input_file, arrow::default_memory_pool()));
 
   std::shared_ptr<arrow::Table> table;
   ARROW_RETURN_NOT_OK(reader->ReadTable(&table));
-
-  // // Get the schema from registry
-  // ARROW_ASSIGN_OR_RAISE(auto schema,
-  //                       schema_registry->get(shard_metadata.schema_name));
 
   // Create a new shard with metadata properties
   auto shard = std::make_shared<Shard>(

@@ -644,17 +644,17 @@ class Database {
         config(config),
         persistence_enabled(config.is_persistence_enabled()) {
     if (persistence_enabled) {
-      // todo: assert db_path is not empty
-      storage = std::make_shared<Storage>(config.get_db_path()+"/data" ,
-                                          schema_registry);
-      metadata_manager = std::make_shared<MetadataManager>(config.get_db_path());
+      const std::string& db_path = config.get_db_path();
+      if (db_path.empty()) {
+        log_error("Database path is empty but persistence is enabled");
+        persistence_enabled = false;
+        return;
+      }
+      
+      std::string data_path = db_path + "/data";
+      storage = std::make_shared<Storage>(std::move(data_path), schema_registry);
+      metadata_manager = std::make_shared<MetadataManager>(db_path);
       snapshot_manager = std::make_shared<SnapshotManager>(metadata_manager, storage, shard_manager);
-      // auto result = storage->initialize();
-      // if (!result.ok()) {
-      //   std::cerr << "Failed to initialize storage: "
-      //             << result.status().ToString() << std::endl;
-      //   persistence_enabled = false;
-      // }
     }
   }
 

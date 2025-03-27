@@ -44,20 +44,41 @@ arrow::Result<T> read_json_file(const std::string& file_path) {
     }
 };
 
+// Write an object to a JSON file, ensuring the directory exists
 template<typename T>
 arrow::Result<bool> write_json_file(const T& object, const std::string& file_path) {
-    std::filesystem::path path(file_path);
-    std::filesystem::create_directories(path.parent_path());
-    std::ofstream file(file_path);
-    if (!file.is_open()) {
-    return arrow::Status::IOError("Failed to open file for writing: ", file_path);
+    try {
+        // Ensure parent directory exists
+        std::filesystem::path path(file_path);
+        if (!path.parent_path().empty()) {
+            std::error_code ec;
+            std::filesystem::create_directories(path.parent_path(), ec);
+            if (ec) {
+                return arrow::Status::IOError("Failed to create directory: ", path.parent_path().string(), ": ", ec.message());
+            }
+        }
+        
+        // Open file for writing
+        std::ofstream file(file_path);
+        if (!file.is_open()) {
+            return arrow::Status::IOError("Failed to open file for writing: ", file_path);
+        }
+        
+        // Serialize object to JSON and write to file
+        nlohmann::json j = object;
+        file << j.dump(4); // Pretty-print with 4-space indentation
+        
+        // Explicitly flush and close
+        file.flush();
+        if (file.fail()) {
+            return arrow::Status::IOError("Failed to flush file data: ", file_path);
+        }
+        file.close();
+        
+        return true;
+    } catch (const std::exception& e) {
+        return arrow::Status::IOError("Failed to write JSON file: ", file_path, ": ", e.what());
     }
-    nlohmann::json j = object;
-    std::string json_str = j.dump();
-
-    file << json_str;
-    file.close();
-    return true;
 };
 
 } // namespace tundradb

@@ -133,10 +133,17 @@ namespace tundradb {
         log_info("Reading database info");
         try {
             std::string db_info_path = metadata_dir + "/db_info.json";
+            
+            // For a new database, it's ok if the file doesn't exist
+            if (!std::filesystem::exists(db_info_path)) {
+                log_info("Database info file does not exist at " + db_info_path + " - likely a new database");
+                return DatabaseInfo{}; // Return empty database info for a new database
+            }
+            
             std::ifstream file(db_info_path);
             if (!file.is_open()) {
-                log_warn("Database info file does not exist: " + db_info_path);
-                return DatabaseInfo{}; // Return empty database info if file doesn't exist
+                // If the file exists but can't be opened, that's a critical error
+                return arrow::Status::IOError("Failed to open existing database info file: " + db_info_path);
             }
             
             return read_json_file<DatabaseInfo>(db_info_path);
@@ -152,21 +159,23 @@ namespace tundradb {
             // Read database info to get the metadata location
             auto db_info_result = read_db_info();
             if (!db_info_result.ok()) {
-                log_warn("Failed to read database info: " + db_info_result.status().ToString());
-                return Metadata{}; // Return empty metadata if database info doesn't exist
+                // This is a critical error - we need the database info
+                log_error("Failed to read database info: " + db_info_result.status().ToString());
+                return db_info_result.status();
             }
             
             DatabaseInfo db_info = db_info_result.ValueOrDie();
             if (db_info.metadata_location.empty()) {
-                log_warn("No metadata location in database info");
-                return Metadata{}; // Return empty metadata if metadata location doesn't exist
+                log_info("No metadata location in database info - starting with fresh metadata");
+                return Metadata{};  // This is acceptable for a new database
             }
             
             // Read metadata from the location specified in database info
             auto metadata_result = read_metadata(db_info.metadata_location);
             if (!metadata_result.ok()) {
+                // This is a critical error - if we have a metadata location, we should be able to read it
                 log_error("Failed to read metadata: " + metadata_result.status().ToString());
-                return arrow::Status::IOError("Failed to read metadata: " + metadata_result.status().ToString());
+                return metadata_result.status();
             }
             
             Metadata metadata = metadata_result.ValueOrDie();
@@ -184,7 +193,7 @@ namespace tundradb {
         }
     }
 
-    std::string MetadataManager::get_metadata_dir() const {
+    const std::string& MetadataManager::get_metadata_dir() const {
         return metadata_dir;
     }
 }

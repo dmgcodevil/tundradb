@@ -31,7 +31,7 @@ class Storage {
 
  public:
   // Constructor
-  explicit Storage(const std::string& data_dir,
+  explicit Storage(std::string data_dir,
                    std::shared_ptr<SchemaRegistry> schema_registry);
 
   // Initialize storage system, creating directories if needed

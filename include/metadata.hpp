@@ -196,7 +196,7 @@ namespace tundradb {
         
         arrow::Result<Metadata> load_current_metadata();
         
-        std::string get_metadata_dir() const;
+        const std::string& get_metadata_dir() const;
 
     private:
         std::string metadata_dir;

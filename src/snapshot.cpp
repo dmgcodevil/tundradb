@@ -21,8 +21,8 @@ namespace tundradb {
             // Load current metadata using the new loadMetadata method
             auto metadata_result = this->metadata_manager->load_current_metadata();
             if (!metadata_result.ok()) {
-                log_warn("Failed to load metadata: " + metadata_result.status().ToString());
-                return true; // Continue with empty metadata
+                log_error("Failed to load metadata: " + metadata_result.status().ToString());
+                return metadata_result.status();  // Return the error instead of continuing
             }
 
             this->metadata = metadata_result.ValueOrDie();
@@ -34,7 +34,13 @@ namespace tundradb {
                 log_info("Current snapshot loaded: " + this->snapshot->toString());
 
                 // Load the manifest to initialize shards
-                Manifest manifest = read_json_file<Manifest>(this->snapshot->manifest_location).ValueOrDie();
+                auto manifest_result = read_json_file<Manifest>(this->snapshot->manifest_location);
+                if (!manifest_result.ok()) {
+                    log_error("Failed to load manifest: " + manifest_result.status().ToString());
+                    return manifest_result.status();  // Return the error instead of continuing
+                }
+                
+                Manifest manifest = manifest_result.ValueOrDie();
                 log_info("Manifest loaded. shards count=" + std::to_string(manifest.shards.size()) + 
                          ", id=" + manifest.id);
 
@@ -56,10 +62,21 @@ namespace tundradb {
                 // Load and add each shard
                 for (auto &[schema_name, shards]: grouped_shards) {
                     for (auto& shard_metadata: shards) {
-                        auto shard = this->storage->read_shard(shard_metadata).ValueOrDie();
+                        auto shard_result = this->storage->read_shard(shard_metadata);
+                        if (!shard_result.ok()) {
+                            log_error("Failed to load shard: " + shard_result.status().ToString());
+                            return shard_result.status();  // Return the error instead of continuing
+                        }
+                        
+                        auto shard = shard_result.ValueOrDie();
                         log_debug("Adding shard from snapshot: " + shard_metadata.toString());
                         shard->set_updated(false);
-                        this->shard_manager->add_shard(shard).ValueOrDie();
+                        
+                        auto add_result = this->shard_manager->add_shard(shard);
+                        if (!add_result.ok()) {
+                            log_error("Failed to add shard: " + add_result.status().ToString());
+                            return add_result.status();  // Return the error instead of continuing
+                        }
                     }
                 }
             } else {
