@@ -21,6 +21,8 @@ struct Snapshot {
   int64_t parent_id = 0;
   std::string manifest_location;
   int64_t timestamp_ms = 0;
+  // int64_t node_id_counter; // todo
+  // int64_t edge_id_counter; // todo
 
   NLOHMANN_DEFINE_TYPE_INTRUSIVE(Snapshot, id, parent_id, manifest_location,
                                  timestamp_ms);
@@ -146,6 +148,16 @@ struct ShardMetadata {
   std::string compound_id() const {
     return this->schema_name + "-" + std::to_string(this->id);
   }
+};
+
+struct EdgeMetadata {
+  std::string edge_type;
+  std::string data_file;
+  int64_t record_count = 0;
+  int64_t timestamp_ms = 0;
+
+  NLOHMANN_DEFINE_TYPE_INTRUSIVE(EdgeMetadata, edge_type, data_file,
+                                 record_count, timestamp_ms);
 };
 
 struct Manifest {

@@ -13,23 +13,16 @@
 namespace tundradb {
 class EdgeStore {
  private:
-  // Primary edge storage
   std::unordered_map<int64_t, std::shared_ptr<Edge>> edges;
-
-  // Indexes for efficient access
   std::unordered_map<std::string, std::vector<int64_t>> edges_by_type;
   std::unordered_map<int64_t, std::vector<int64_t>> outgoing_edges;
   std::unordered_map<int64_t, std::vector<int64_t>> incoming_edges;
-
-  // Edge creation tracking
+  std::unordered_map<std::string, std::atomic<int64_t>> last_updated_ts;
   std::atomic<int64_t> edge_id_counter{0};
 
-  // Change tracking for persistence
-  std::atomic<bool> updated{true};
-  int64_t updated_ts;
-
  public:
-  EdgeStore();
+  explicit EdgeStore(int64_t edge_id_counter)
+      : edge_id_counter(edge_id_counter) {}
 
   // Basic edge operations
   arrow::Result<std::shared_ptr<Edge>> create_edge(
@@ -56,13 +49,10 @@ class EdgeStore {
   arrow::Result<std::shared_ptr<arrow::Table>> get_table(
       const std::string &edge_type = "") const;
 
-  bool is_updated() const { return updated.load(std::memory_order_acquire); }
-
-  bool set_updated(bool value) {
-    return updated.exchange(value, std::memory_order_acq_rel);
+  // todo address empty map
+  int64_t get_updated_ts(const std::string &edge_type) const {
+    return last_updated_ts.at(edge_type);
   }
-
-  int64_t get_updated_ts() const { return updated_ts; }
 
   std::vector<std::string> get_edge_types() const;
 
