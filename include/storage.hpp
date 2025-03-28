@@ -1,19 +1,17 @@
 #ifndef STORAGE_HPP
 #define STORAGE_HPP
 
-#include <arrow/api.h>
-#include <arrow/io/api.h>
 #include <arrow/result.h>
-#include <parquet/arrow/reader.h>
-#include <parquet/arrow/writer.h>
-#include <parquet/file_reader.h>
+// #include <parquet/arrow/reader.h>
+// #include <parquet/arrow/writer.h>
+// #include <parquet/file_reader.h>
 
 #include <filesystem>
 #include <fstream>
-#include <nlohmann/json.hpp>
+// #include <nlohmann/json.hpp>
 #include <string>
-#include <unordered_map>
-#include <vector>
+// #include <unordered_map>
+// #include <vector>
 
 #include "metadata.hpp"
 
@@ -31,16 +29,13 @@ class Storage {
   std::string data_dir;
 
  public:
-  // Constructor
   explicit Storage(std::string data_dir,
                    std::shared_ptr<SchemaRegistry> schema_registry);
 
-  // Initialize storage system, creating directories if needed
   arrow::Result<bool> initialize();
 
   arrow::Result<std::string> write_shard(const std::shared_ptr<Shard>& shard);
 
-  // Load a shard from its metadata path
   arrow::Result<std::shared_ptr<Shard>> read_shard(
       const ShardMetadata& shard_metadata);
 };

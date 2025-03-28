@@ -1,5 +1,6 @@
 #ifndef CORE_HPP
 #define CORE_HPP
+
 #include <arrow/api.h>
 #include <arrow/compute/api.h>
 #include <arrow/result.h>
@@ -26,6 +27,7 @@
 using namespace std::string_literals;
 
 namespace tundradb {
+
 class Database;
 class Node;
 class Shard;
@@ -33,7 +35,6 @@ class ShardManager;
 class MetadataManager;
 class Storage;
 
-// SnapshotManager class
 class SnapshotManager {
  public:
   explicit SnapshotManager(std::shared_ptr<MetadataManager> metadata_manager,
@@ -53,19 +54,6 @@ class SnapshotManager {
   std::shared_ptr<ShardManager> shard_manager;
   Metadata metadata;
 };
-
-// No longer need to include snapshot.hpp as we've moved all definitions here
-// Remove the following line:
-// #include "snapshot.hpp"
-
-// We are now using constants from config.hpp instead of defining them here
-// namespace defaults {
-// constexpr size_t SHARD_CAPACITY = 100000;
-// constexpr size_t CHUNK_SIZE = 10000;
-// constexpr size_t SHARD_MEMORY_POOL_SIZE = 10 * 1024 * 1024;       // 10 MB
-// constexpr size_t MANAGER_MEMORY_POOL_SIZE = 100 * 1024 * 1024;    // 100 MB
-// constexpr size_t DATABASE_MEMORY_POOL_SIZE = 1024 * 1024 * 1024;  // 1 GB
-// }  // namespace defaults
 
 // Schema registry class for managing node schemas
 class SchemaRegistry {

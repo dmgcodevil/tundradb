@@ -72,6 +72,7 @@ add_library(core
         include/edge_store.hpp
         include/edge.hpp
         src/edge_store.cpp
+        src/edge.cpp
 )
 
 target_include_directories(core

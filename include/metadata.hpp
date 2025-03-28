@@ -15,7 +15,7 @@
 using namespace std::string_literals;
 
 namespace tundradb {
-// Define Snapshot first (no forward declaration)
+
 struct Snapshot {
   int64_t id = 0;
   int64_t parent_id = 0;
@@ -42,7 +42,7 @@ struct Snapshot {
 };
 
 struct Metadata {
-  // Use raw pointer instead of std::shared_ptr for serialization simplicity
+  // use raw pointer instead of std::shared_ptr for serialization simplicity
   Snapshot *current_snapshot = nullptr;
   std::vector<Snapshot> snapshots;
 

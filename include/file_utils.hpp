@@ -7,6 +7,7 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <string>
+
 namespace tundradb {
 
 // Write a string to a file. Creates the file if it doesn't exist.

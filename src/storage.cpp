@@ -2,6 +2,10 @@
 
 #include <arrow/api.h>
 #include <arrow/io/api.h>
+#include <arrow/result.h>
+#include <parquet/arrow/reader.h>
+#include <parquet/arrow/writer.h>
+#include <parquet/file_reader.h>
 #include <uuid/uuid.h>
 
 #include <chrono>
@@ -9,50 +13,13 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <random>
-#include <sstream>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 #include "metadata.hpp"
 
 namespace tundradb {
-
-// Simple JSON serialization/deserialization for metadata
-// In a real implementation, we'd use nlohmann/json library
-// (https://github.com/nlohmann/json)
-
-// Using nlohmann/json for efficient and more robust JSON
-// serialization/deserialization
-// std::string ShardMetadata::to_json() const {
-//   nlohmann::json j;
-//   j["shard_id"] = shard_id;
-//   j["schema_name"] = schema_name;
-//   j["min_id"] = min_id;
-//   j["max_id"] = max_id;
-//   j["record_count"] = record_count;
-//   j["chunk_size"] = chunk_size;
-//   j["data_file"] = data_file;
-//   j["timestamp_ms"] = timestamp_ms;
-//   return j.dump();
-// }
-//
-// arrow::Result<ShardMetadata> ShardMetadata::from_json(
-//     const std::string& json_str) {
-//   try {
-//     auto j = nlohmann::json::parse(json_str);
-//     ShardMetadata metadata;
-//     metadata.shard_id = j["shard_id"].get<std::string>();
-//     metadata.schema_name = j["schema_name"].get<std::string>();
-//     metadata.min_id = j["min_id"].get<int64_t>();
-//     metadata.max_id = j["max_id"].get<int64_t>();
-//     metadata.record_count = j["record_count"].get<size_t>();
-//     metadata.chunk_size = j["chunk_size"].get<size_t>();
-//     metadata.data_file = j["data_file"].get<std::string>();
-//     metadata.timestamp_ms = j["timestamp_ms"].get<int64_t>();
-//     return metadata;
-//   } catch (const std::exception& e) {
-//     return arrow::Status::Invalid("Failed to parse JSON metadata: ",
-//     e.what());
-//   }
-// }
 
 Storage::Storage(std::string data_dir,
                  std::shared_ptr<SchemaRegistry> schema_registry)

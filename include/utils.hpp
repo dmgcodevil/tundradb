@@ -1,5 +1,6 @@
 #ifndef UTILS_HPP
 #define UTILS_HPP
+
 #include <arrow/result.h>
 #include <arrow/table.h>
 #include <uuid/uuid.h>

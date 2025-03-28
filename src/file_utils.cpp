@@ -8,18 +8,14 @@ namespace tundradb {
 arrow::Result<bool> write_to_file(const std::string& file_path,
                                   const std::string& content) {
   try {
-    // Create parent directories if they don't exist
     std::filesystem::path path(file_path);
     std::filesystem::create_directories(path.parent_path());
 
-    // Open file for writing
     std::ofstream file(file_path);
     if (!file.is_open()) {
       return arrow::Status::IOError("Failed to open file for writing: ",
                                     file_path);
     }
-
-    // Write content
     file << content;
     file.close();
     return true;
@@ -30,19 +26,15 @@ arrow::Result<bool> write_to_file(const std::string& file_path,
 
 arrow::Result<std::string> read_from_file(const std::string& file_path) {
   try {
-    // Check if file exists
     if (!std::filesystem::exists(file_path)) {
       return arrow::Status::IOError("File does not exist: ", file_path);
     }
-
-    // Open file for reading
     std::ifstream file(file_path);
     if (!file.is_open()) {
       return arrow::Status::IOError("Failed to open file for reading: ",
                                     file_path);
     }
 
-    // Read content
     std::string content((std::istreambuf_iterator<char>(file)),
                         std::istreambuf_iterator<char>());
     file.close();
