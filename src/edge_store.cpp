@@ -100,9 +100,10 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::get_table(const std::str
           tables_acc->second->table = generate_table(edge_type).ValueOrDie(); // todo return status instead
           tables_acc->second->version.store(latest_version,
                                             std::memory_order_release);
+          return tables_acc->second->table;
         }
       }
-      return tables_acc->second->table;
+      return get_table(edge_type); // table was updated concurrently, retry
     }
 
   if (tables.insert(tables_acc, edge_type)) {
