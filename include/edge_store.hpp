@@ -6,19 +6,40 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <set>
+#include <mutex>
+#include <tbb/concurrent_hash_map.h>
+#include <tbb/concurrent_vector.h>
 
 #include "edge.hpp"
 
 namespace tundradb {
+
 class EdgeStore {
+  struct TableCache;
  private:
-  std::unordered_map<int64_t, std::shared_ptr<Edge>> edges;
-  std::unordered_map<std::string, std::vector<int64_t>> edges_by_type;
-  std::unordered_map<int64_t, std::vector<int64_t>> outgoing_edges;
-  std::unordered_map<int64_t, std::vector<int64_t>> incoming_edges;
-  std::unordered_map<std::string, std::atomic<int64_t>> last_updated_ts;
+
+  tbb::concurrent_hash_map<int64_t, std::shared_ptr<Edge>> edges;
+
+  tbb::concurrent_hash_map<std::string, tbb::concurrent_vector<int64_t>> edges_by_type;
+  tbb::concurrent_hash_map<int64_t, tbb::concurrent_vector<int64_t>> outgoing_edges;
+  tbb::concurrent_hash_map<int64_t, tbb::concurrent_vector<int64_t>> incoming_edges;
+
+  tbb::concurrent_hash_map<std::string, std::atomic<int64_t>> versions; // version
   std::atomic<int64_t> edge_id_counter{0};
-  std::unordered_map<std::string, arrow::Table *> tables;  // cache
+
+  tbb::concurrent_hash_map<std::string, std::shared_ptr<TableCache>> tables;  // cache
+
+
+  arrow::Result<std::shared_ptr<arrow::Table>> generate_table(const std::string& edge_type) const;
+
+  arrow::Result<int64_t> get_version_snapshot(const std::string& edge_type) const;
+
+  struct TableCache {
+    std::shared_ptr<arrow::Table> table;
+    std::atomic<int64_t> version {0};
+    std::mutex lock;
+  };
 
  public:
   explicit EdgeStore(int64_t init_edge_id_counter)
@@ -45,11 +66,11 @@ class EdgeStore {
       const std::string &type) const;
 
   arrow::Result<std::shared_ptr<arrow::Table>> get_table(
-      const std::string &edge_type = "") const;
+      const std::string &edge_type = "");
 
   arrow::Result<int64_t> get_updated_ts(const std::string &edge_type) const;
 
-  std::vector<std::string> get_edge_types() const;
+  std::set<std::string> get_edge_types() const;
 
   size_t size() const { return edges.size(); }
 

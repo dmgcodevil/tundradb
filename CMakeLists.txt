@@ -13,6 +13,7 @@ find_package(Arrow REQUIRED)
 find_package(Parquet REQUIRED)
 find_package(benchmark REQUIRED)
 find_package(GTest REQUIRED)
+find_package(TBB REQUIRED)
 
 # Try to find spdlog first, if not found we'll use FetchContent
 find_package(spdlog QUIET)
@@ -90,6 +91,7 @@ target_link_libraries(core
         nlohmann_json::nlohmann_json
         spdlog::spdlog
         ${UUID_LIBRARY}
+        TBB::tbb
 )
 
 # Explicitly link core against UUID
