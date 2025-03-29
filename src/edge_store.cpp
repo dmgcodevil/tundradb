@@ -44,7 +44,9 @@ arrow::Result<bool> EdgeStore::add(std::shared_ptr<Edge> edge) {
   {
     typename tbb::concurrent_hash_map<std::string,
                                       std::atomic<int64_t>>::accessor acc;
-    if (!this->versions.insert(acc, edge->get_type())) {
+    if (this->versions.insert(acc, edge->get_type())) {
+      acc->second.store(1);
+    } else {
       acc->second.fetch_add(1);
     }
   }
