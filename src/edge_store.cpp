@@ -5,8 +5,8 @@ namespace tundradb {
 arrow::Result<std::shared_ptr<Edge>> EdgeStore::create_edge(
     int64_t source_id, int64_t target_id, const std::string& type,
     std::unordered_map<std::string, std::shared_ptr<arrow::Array>> properties) {
-  return std::make_shared<Edge>(this->edge_id_counter++, source_id, target_id,
-                                type, properties);
+  int64_t id = edge_id_counter.fetch_add(1, std::memory_order_acq_rel);
+  return std::make_shared<Edge>(id, source_id, target_id, type, properties);
 }
 
 arrow::Result<bool> EdgeStore::add(std::shared_ptr<Edge> edge) {
