@@ -13,49 +13,54 @@ struct RCUConcurrentSet {
   tbb::concurrent_hash_map<T, bool> data_;  // false means element is deleted
   std::atomic<size_t> remove_counter;
   std::shared_ptr<std::set<T>> snapshot_;
-  std::atomic<bool> generate_snapshot_;  // snapshot generation in progress
+  std::atomic<bool> generate_snapshot_al_;  // snapshot generation in progress
   std::atomic<int64_t> version_;
   std::atomic<int64_t> snapshot_version_;
   std::vector<std::shared_ptr<std::set<T>>> old_snapshots;
+  int64_t compaction_on_modification_ops_;
 
-  RCUConcurrentSet()
+  RCUConcurrentSet(int64_t compaction_on_modification_ops = 1000)
       : remove_counter(0),
         snapshot_(std::make_shared<std::set<T>>()),
-        generate_snapshot_(false),
+        generate_snapshot_al_(false),
         version_(0),
-        snapshot_version_(0) {}
+        snapshot_version_(0),
+        compaction_on_modification_ops_(compaction_on_modification_ops) {}
 
   bool insert(T t) {
-    typename tbb::concurrent_hash_map<T, bool>::accessor acc;
-    if (data_.insert(acc, t)) {
-      acc->second = true;
-      version_.fetch_add(1, std::memory_order_release);
-      return true;
+    bool inserted = false;
+    {
+      typename tbb::concurrent_hash_map<T, bool>::accessor acc;
+
+      if (data_.insert(acc, t)) {
+        acc->second = true;
+        version_.fetch_add(1, std::memory_order_release);
+        inserted = true;
+      } else {
+        inserted = !acc->second;
+        acc->second = true;
+        if (inserted) {
+          version_.fetch_add(1, std::memory_order_release);
+        }
+      }
     }
-    bool prev = acc->second;
-    acc->second = true;
-    if (!prev) {
-      version_.fetch_add(1, std::memory_order_release);
-    }
-    return !prev;
+    // trigger_generate_snapshot_(); do don't need to run snap generation on insert
+    return inserted;
   }
 
   bool remove(T t) {
-    typename tbb::concurrent_hash_map<T, bool>::accessor acc;
-    if (data_.find(acc, t) && acc->second) {
-      remove_counter.fetch_add(1, std::memory_order_release);
-      acc->second = false;
-      version_.fetch_add(1, std::memory_order_release);
-      return true;
+    bool removed = false;
+    {
+      typename tbb::concurrent_hash_map<T, bool>::accessor acc;
+      if (data_.find(acc, t) && acc->second) {
+        remove_counter.fetch_add(1, std::memory_order_release);
+        acc->second = false;
+        version_.fetch_add(1, std::memory_order_release);
+        removed = true;
+      }
     }
-    return false;
-  }
-
-  void unsafe_delete_(T t) {
-    typename tbb::concurrent_hash_map<T, bool>::accessor acc;
-    if (data_.find(acc, t)) {
-      data_.erase(acc);
-    }
+    trigger_generate_snapshot_();
+    return removed;
   }
 
   bool contains(T t) {
@@ -94,7 +99,18 @@ struct RCUConcurrentSet {
     return (total > removed) ? (total - removed) : 0;
   }
 
-  std::shared_ptr<std::set<T>> get_all() {
+  void trigger_generate_snapshot_() {
+    auto current_snapshot_version =
+        snapshot_version_.load(std::memory_order_acquire);
+    auto current_version = version_.load(std::memory_order_acquire);
+    if (current_snapshot_version < current_version &&
+        current_version - current_snapshot_version >=
+            compaction_on_modification_ops_) {
+      generate_snapshot_();
+    }
+  }
+
+  std::shared_ptr<std::set<T>> generate_snapshot_() {
     auto current_snapshot_version =
         snapshot_version_.load(std::memory_order_acquire);
     auto current_version = version_.load(std::memory_order_acquire);
@@ -104,9 +120,9 @@ struct RCUConcurrentSet {
     }
 
     bool expected = false;
-    if (generate_snapshot_.compare_exchange_strong(expected, true,
-                                                   std::memory_order_acq_rel,
-                                                   std::memory_order_acquire)) {
+    if (generate_snapshot_al_.compare_exchange_strong(
+            expected, true, std::memory_order_acq_rel,
+            std::memory_order_acquire)) {
       try {
         current_snapshot_version =
             snapshot_version_.load(std::memory_order_acquire);
@@ -145,15 +161,17 @@ struct RCUConcurrentSet {
           cleanup_old_snapshots();
         }
       } catch (...) {
-        generate_snapshot_.store(false, std::memory_order_release);
+        generate_snapshot_al_.store(false, std::memory_order_release);
         throw;
       }
 
-      generate_snapshot_.store(false, std::memory_order_release);
+      generate_snapshot_al_.store(false, std::memory_order_release);
     }
 
     return snapshot_;
   }
+
+  std::shared_ptr<std::set<T>> get_all() { return generate_snapshot_(); }
 };
 
 }  // namespace tundradb

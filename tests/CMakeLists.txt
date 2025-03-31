@@ -22,6 +22,33 @@ if(ENABLE_SANITIZERS)
         elseif(SANITIZER_TYPE STREQUAL "thread")
             list(APPEND SANITIZER_COMPILE_FLAGS "-fsanitize=thread")
             list(APPEND SANITIZER_LINK_FLAGS "-fsanitize=thread")
+            
+            # Add TSan suppression file
+            set(TSAN_SUPPRESSIONS_FILE "${CMAKE_CURRENT_SOURCE_DIR}/tsan_suppressions.txt")
+            if(EXISTS ${TSAN_SUPPRESSIONS_FILE})
+                message(STATUS "Using TSan suppressions file: ${TSAN_SUPPRESSIONS_FILE}")
+                # Create environment variables for running tests
+                set(TSAN_OPTIONS_VALUE "suppressions=${TSAN_SUPPRESSIONS_FILE}")
+                if(APPLE)
+                    # On macOS, we need to set this globally for the process
+                    add_compile_definitions(TSAN_OPTIONS="${TSAN_OPTIONS_VALUE}")
+                endif()
+                
+                # For GCC we can use this
+                if(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
+                    add_compile_options("-fno-sanitize-recover=all")
+                endif()
+                
+                # Set env var for all tests
+                foreach(test_target sharding_test snapshot_test concurrency_test)
+                    set_property(
+                        TEST ${test_target}
+                        PROPERTY ENVIRONMENT "TSAN_OPTIONS=${TSAN_OPTIONS_VALUE}"
+                    )
+                endforeach()
+            else()
+                message(WARNING "TSan suppressions file not found: ${TSAN_SUPPRESSIONS_FILE}")
+            endif()
         elseif(SANITIZER_TYPE STREQUAL "undefined")
             list(APPEND SANITIZER_COMPILE_FLAGS "-fsanitize=undefined")
             list(APPEND SANITIZER_LINK_FLAGS "-fsanitize=undefined")
