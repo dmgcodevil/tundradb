@@ -2,26 +2,24 @@
 #define CONCURRENCY_HPP
 
 #include <tbb/concurrent_hash_map.h>
-#include <tbb/concurrent_set.h>
-
 #include <iostream>
 #include <set>
-namespace tundradb {
-#include <tbb/concurrent_hash_map.h>
 
-#include <atomic>
-#include <memory>
-#include <set>
+namespace tundradb {
+
 
 template <typename T>
 struct ConcurrentSet {
+private:
   tbb::concurrent_hash_map<T, std::monostate> data_;
 
   // Cached snapshot and version tracking
-  std::shared_ptr<std::set<T>> cached_snapshot_{
+  mutable std::shared_ptr<std::set<T>> cached_snapshot_{
       std::make_shared<std::set<T>>()};
   std::atomic<int64_t> version_{0};
-  std::atomic<int64_t> snapshot_version_{0};
+  mutable std::atomic<int64_t> snapshot_version_{0};
+public:
+
 
   bool insert(T t) {
     typename tbb::concurrent_hash_map<T, std::monostate>::accessor acc;
@@ -58,7 +56,7 @@ struct ConcurrentSet {
     return data_.size();
   }
 
-  std::shared_ptr<std::set<T>> get_all() {
+  std::shared_ptr<std::set<T>> get_all() const {
     // Fast path: If cached snapshot is up-to-date, return it
     auto current_snapshot_version =
         snapshot_version_.load(std::memory_order_acquire);

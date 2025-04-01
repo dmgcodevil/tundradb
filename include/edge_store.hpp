@@ -3,7 +3,7 @@
 
 #include <arrow/api.h>
 #include <tbb/concurrent_hash_map.h>
-#include <tbb/concurrent_vector.h>
+#include "concurrency.hpp"
 
 #include <mutex>
 #include <set>
@@ -21,16 +21,18 @@ class EdgeStore {
  private:
   tbb::concurrent_hash_map<int64_t, std::shared_ptr<Edge>> edges;
 
-  tbb::concurrent_hash_map<std::string, tbb::concurrent_vector<int64_t>>
+  tbb::concurrent_hash_map<std::string, ConcurrentSet<int64_t>>
       edges_by_type;
-  tbb::concurrent_hash_map<int64_t, tbb::concurrent_vector<int64_t>>
+  tbb::concurrent_hash_map<int64_t, ConcurrentSet<int64_t>>
       outgoing_edges;
-  tbb::concurrent_hash_map<int64_t, tbb::concurrent_vector<int64_t>>
+  tbb::concurrent_hash_map<int64_t, ConcurrentSet<int64_t>>
       incoming_edges;
 
   tbb::concurrent_hash_map<std::string, std::atomic<int64_t>>
       versions;  // version
   std::atomic<int64_t> edge_id_counter{0};
+
+  ConcurrentSet<int64_t> edge_ids;
 
   tbb::concurrent_hash_map<std::string, std::shared_ptr<TableCache>>
       tables;  // cache
@@ -61,6 +63,8 @@ class EdgeStore {
   arrow::Result<bool> remove(int64_t edge_id);
 
   arrow::Result<std::shared_ptr<Edge>> get(int64_t edge_id) const;
+
+  std::vector<std::shared_ptr<Edge>> get(const std::set<int64_t>& ids) const;
 
   arrow::Result<std::vector<std::shared_ptr<Edge>>> get_outgoing_edges(
       int64_t id, const std::string &type = "") const;
