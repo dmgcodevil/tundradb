@@ -70,7 +70,7 @@ class MemoryUsageTracker {
 };
 
 // Test fixture for concurrent set tests
-class RCUConcurrentSetTest : public ::testing::Test {
+class ConcurrentSetTest : public ::testing::Test {
  protected:
   MemoryUsageTracker memory_tracker_;
 
@@ -86,7 +86,7 @@ class RCUConcurrentSetTest : public ::testing::Test {
 
   // Helper function to run worker threads with different operations
   template <typename T>
-  void run_concurrent_test(tundradb::RCUConcurrentSet<T>& set,
+  void run_concurrent_test(tundradb::ConcurrentSet<T>& set,
                            int num_insert_threads, int num_delete_threads,
                            int num_read_threads, int num_elements,
                            double delete_ratio = 1.0) {
@@ -267,11 +267,11 @@ struct ThreadConfig {
 };
 
 // Define test configurations
-class RCUConcurrentSetParamTest
-    : public RCUConcurrentSetTest,
+class ConcurrentSetParamTest
+    : public ConcurrentSetTest,
       public ::testing::WithParamInterface<ThreadConfig> {};
 
-TEST_P(RCUConcurrentSetParamTest, ConcurrentOperations) {
+TEST_P(ConcurrentSetParamTest, ConcurrentOperations) {
   // Get test parameters
   const ThreadConfig& config = GetParam();
 
@@ -283,7 +283,7 @@ TEST_P(RCUConcurrentSetParamTest, ConcurrentOperations) {
             << ", Delete ratio: " << config.delete_ratio << std::endl;
 
   // Create the set and run the test
-  tundradb::RCUConcurrentSet<int64_t> set;
+  tundradb::ConcurrentSet<int64_t> set;
 
   run_concurrent_test(set, config.insert_threads, config.delete_threads,
                       config.read_threads, config.elements,
@@ -306,7 +306,7 @@ TEST_P(RCUConcurrentSetParamTest, ConcurrentOperations) {
 
 // Define test configurations
 INSTANTIATE_TEST_SUITE_P(
-    VariousThreadConfigs, RCUConcurrentSetParamTest,
+    VariousThreadConfigs, ConcurrentSetParamTest,
     ::testing::Values(
         // All elements deleted
         ThreadConfig{2, 2, 4, 1000, 1.0, "All Elements Deleted"},
@@ -333,13 +333,13 @@ INSTANTIATE_TEST_SUITE_P(
     });
 
 // Standalone test for memory leak detection
-TEST_F(RCUConcurrentSetTest, MemoryLeakTest) {
+TEST_F(ConcurrentSetTest, MemoryLeakTest) {
   const int NUM_ITERATIONS = 10;
   const int NUM_ELEMENTS = 10000;
 
   // Create and destroy snapshots multiple times to check for leaks
   for (int i = 0; i < NUM_ITERATIONS; i++) {
-    tundradb::RCUConcurrentSet<int64_t> set;
+    tundradb::ConcurrentSet<int64_t> set;
 
     // Insert elements
     for (int64_t j = 0; j < NUM_ELEMENTS; j++) {
@@ -379,16 +379,16 @@ TEST_F(RCUConcurrentSetTest, MemoryLeakTest) {
 }
 
 // Test edge cases
-TEST_F(RCUConcurrentSetTest, EmptySetTest) {
-  tundradb::RCUConcurrentSet<int> set;
+TEST_F(ConcurrentSetTest, EmptySetTest) {
+  tundradb::ConcurrentSet<int> set;
   auto snapshot = set.get_all();
 
   EXPECT_EQ(snapshot->size(), 0);
   EXPECT_EQ(set.size(), 0);
 }
 
-TEST_F(RCUConcurrentSetTest, InsertDeleteSameElementRepeatedly) {
-  tundradb::RCUConcurrentSet<int> set;
+TEST_F(ConcurrentSetTest, InsertDeleteSameElementRepeatedly) {
+  tundradb::ConcurrentSet<int> set;
   const int VALUE = 42;
   const int ITERATIONS = 1000;
 

@@ -82,6 +82,11 @@ add_executable(concurrency_test
     concurrency_test.cpp
 )
 
+add_executable(
+        concurrent_set_stress_test
+        concurrent_set_stress_test.cpp
+)
+
 # Link against Arrow and GTest
 target_link_libraries(sharding_test
     PRIVATE
@@ -116,6 +121,15 @@ target_link_libraries(concurrency_test
         TBB::tbb
 )
 
+target_link_libraries(concurrent_set_stress_test
+        PRIVATE
+        core
+        GTest::GTest
+        GTest::Main
+        pthread
+        TBB::tbb
+)
+
 # Apply sanitizer flags to all test targets if enabled
 if(ENABLE_SANITIZERS)
     target_compile_options(sharding_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
@@ -132,3 +146,4 @@ endif()
 add_test(NAME ShardingTest COMMAND sharding_test)
 add_test(NAME SnapshotTest COMMAND snapshot_test)
 add_test(NAME ConcurrencyTest COMMAND concurrency_test)
+add_test(NAME ConcurrentSetStressTest COMMAND concurrent_set_stress_test)

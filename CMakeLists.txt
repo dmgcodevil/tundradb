@@ -1,9 +1,10 @@
 cmake_minimum_required(VERSION 3.30)
 project(tundradb)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
+#set(CMAKE_C_COMPILER "/opt/homebrew/opt/llvm/bin/clang")
+#set(CMAKE_CXX_COMPILER "/opt/homebrew/opt/llvm/bin/clang++")
 # Add Homebrew prefix to CMAKE_PREFIX_PATH
 list(APPEND CMAKE_PREFIX_PATH "/opt/homebrew")
 list(APPEND CMAKE_PREFIX_PATH "/usr/local")
