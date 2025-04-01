@@ -41,7 +41,8 @@ jobs:
           gnupg \
           ca-certificates \
           cmake \
-          uuid-dev
+          uuid-dev \
+          libtbb-dev
 
         # Add Arrow repository and install Arrow
         wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
