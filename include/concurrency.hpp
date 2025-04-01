@@ -4,6 +4,7 @@
 #include <tbb/concurrent_hash_map.h>
 #include <iostream>
 #include <set>
+#include <variant>
 
 namespace tundradb {
 
