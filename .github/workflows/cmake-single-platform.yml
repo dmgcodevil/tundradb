@@ -81,6 +81,8 @@ jobs:
         chmod u+x /tmp/cmake-install.sh
         sudo mkdir -p /opt/cmake
         sudo /tmp/cmake-install.sh --skip-license --prefix=/opt/cmake
+        # Remove existing links before creating new ones
+        sudo rm -f /usr/local/bin/ccmake /usr/local/bin/cmake /usr/local/bin/cmake-gui /usr/local/bin/cpack /usr/local/bin/ctest
         sudo ln -s /opt/cmake/bin/* /usr/local/bin/
         rm /tmp/cmake-install.sh
 
