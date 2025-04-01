@@ -69,13 +69,8 @@ add_library(core
         src/storage.cpp
         src/metadata.cpp
         src/file_utils.cpp
-        include/utils.hpp
         src/snapshot.cpp
-        include/edge_store.hpp
-        include/edge.hpp
         src/edge_store.cpp
-        src/edge.cpp
-        include/concurrency.hpp
 )
 
 target_include_directories(core

@@ -6,7 +6,7 @@ arrow::Result<std::shared_ptr<Edge>> EdgeStore::create_edge(
     int64_t source_id, int64_t target_id, const std::string& type,
     std::unordered_map<std::string, std::shared_ptr<arrow::Array>> properties) {
   int64_t id = edge_id_counter.fetch_add(1, std::memory_order_acq_rel);
-  return std::make_shared<Edge>(id, source_id, target_id, type, properties);
+  return std::make_shared<Edge>(id, source_id, target_id, type, properties, now_millis());
 }
 
 arrow::Result<bool> EdgeStore::add(std::shared_ptr<Edge> edge) {
@@ -173,7 +173,7 @@ arrow::Result<std::vector<std::shared_ptr<Edge>>> EdgeStore::get_by_type(
   return result;
 }
 
-arrow::Result<int64_t> EdgeStore::get_updated_ts(
+arrow::Result<int64_t> EdgeStore::get_version(
     const std::string& edge_type) const {
   typename tbb::concurrent_hash_map<std::string, std::atomic<int64_t>>::const_accessor acc;
   if (versions.find(acc, edge_type)) {

@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "edge.hpp"
+#include "utils.hpp"
 
 namespace tundradb {
 
@@ -78,7 +79,7 @@ class EdgeStore {
   arrow::Result<std::shared_ptr<arrow::Table>> get_table(
       const std::string &edge_type = "");
 
-  arrow::Result<int64_t> get_updated_ts(const std::string &edge_type) const;
+  arrow::Result<int64_t> get_version(const std::string &edge_type) const;
 
   std::set<std::string> get_edge_types() const;
 

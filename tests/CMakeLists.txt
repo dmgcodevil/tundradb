@@ -87,6 +87,11 @@ add_executable(
         concurrent_set_stress_test.cpp
 )
 
+# Add edge store test
+add_executable(edge_store_test
+    edge_store_test.cpp
+)
+
 # Link against Arrow and GTest
 target_link_libraries(sharding_test
     PRIVATE
@@ -130,6 +135,17 @@ target_link_libraries(concurrent_set_stress_test
         TBB::tbb
 )
 
+# Link against required libraries
+target_link_libraries(edge_store_test
+    PRIVATE
+        core
+        Arrow::arrow_shared
+        GTest::GTest
+        GTest::Main
+        pthread
+        TBB::tbb
+)
+
 # Apply sanitizer flags to all test targets if enabled
 if(ENABLE_SANITIZERS)
     target_compile_options(sharding_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
@@ -140,6 +156,9 @@ if(ENABLE_SANITIZERS)
     
     target_compile_options(concurrency_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
     target_link_options(concurrency_test PRIVATE ${SANITIZER_LINK_FLAGS})
+    
+    target_compile_options(edge_store_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
+    target_link_options(edge_store_test PRIVATE ${SANITIZER_LINK_FLAGS})
 endif()
 
 # Simple test registration
@@ -147,3 +166,4 @@ add_test(NAME ShardingTest COMMAND sharding_test)
 add_test(NAME SnapshotTest COMMAND snapshot_test)
 add_test(NAME ConcurrencyTest COMMAND concurrency_test)
 add_test(NAME ConcurrentSetStressTest COMMAND concurrent_set_stress_test)
+add_test(NAME EdgeStoreTest COMMAND edge_store_test)
