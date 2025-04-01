@@ -22,6 +22,68 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - name: Install dependencies
+      run: |
+        # Prevent interactive prompts
+        export DEBIAN_FRONTEND=noninteractive
+        
+        # Install basic build tools and dependencies
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          git \
+          pkg-config \
+          python3 \
+          python3-pip \
+          wget \
+          curl \
+          lsb-release \
+          gnupg \
+          ca-certificates \
+          cmake \
+          uuid-dev
+
+        # Add Arrow repository and install Arrow
+        wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+        wget https://apache.jfrog.io/artifactory/arrow/ubuntu/apache-arrow-apt-source-latest-$(lsb_release -cs).deb
+        sudo apt-get update
+        sudo apt-get install -y ./apache-arrow-apt-source-latest-$(lsb_release -cs).deb
+        sudo apt-get update
+        sudo apt-get install -y libarrow-dev libparquet-dev
+        rm ./apache-arrow-apt-source-latest-$(lsb_release -cs).deb
+
+        # Install GTest
+        sudo apt-get install -y libgtest-dev
+
+        # Install nlohmann-json
+        mkdir -p /tmp/json
+        cd /tmp/json
+        wget https://github.com/nlohmann/json/releases/download/v3.11.2/json.hpp
+        sudo mkdir -p /usr/include/nlohmann
+        sudo cp json.hpp /usr/include/nlohmann/
+        cd /
+        rm -rf /tmp/json
+
+        # Install Google Benchmark
+        cd /tmp
+        git clone https://github.com/google/benchmark.git
+        cd benchmark
+        mkdir build
+        cd build
+        cmake -DCMAKE_BUILD_TYPE=Release -DBENCHMARK_ENABLE_GTEST_TESTS=OFF ..
+        make -j
+        sudo make install
+        cd /
+        rm -rf /tmp/benchmark
+
+        # Install latest CMake
+        wget https://github.com/Kitware/CMake/releases/download/v3.30.0/cmake-3.30.0-linux-x86_64.sh -q -O /tmp/cmake-install.sh
+        chmod u+x /tmp/cmake-install.sh
+        sudo mkdir -p /opt/cmake
+        sudo /tmp/cmake-install.sh --skip-license --prefix=/opt/cmake
+        sudo ln -s /opt/cmake/bin/* /usr/local/bin/
+        rm /tmp/cmake-install.sh
+
     - name: Configure CMake
       # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
       # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
