@@ -11,7 +11,7 @@ namespace tundradb {
 template <typename T>
 struct ConcurrentSet {
 private:
-  tbb::concurrent_hash_map<T, std::monostate> data_;
+  mutable tbb::concurrent_hash_map<T, std::monostate> data_;
 
   // Cached snapshot and version tracking
   mutable std::shared_ptr<std::set<T>> cached_snapshot_{
