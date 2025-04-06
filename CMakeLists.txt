@@ -98,6 +98,12 @@ target_link_libraries(core
 #        uuid  # Directly use the library name
 #)
 
+# Enable testing
+enable_testing()
+
+# Add tests directory
+add_subdirectory(tests)
+
 # Main executable
 add_executable(tundradb src/main.cpp)
 target_link_libraries(tundradb
@@ -108,7 +114,4 @@ target_link_libraries(tundradb
         nlohmann_json::nlohmann_json
         ${UUID_LIBRARY}
 )
-
-# Add the tests subdirectory
-add_subdirectory(tests)
 
