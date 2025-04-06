@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "metadata.hpp"
+#include "table_info.hpp"
 
 namespace tundradb {
 
@@ -110,6 +111,9 @@ arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(
       shard_metadata.min_id, shard_metadata.max_id, shard_metadata.chunk_size,
       shard_metadata.schema_name, this->schema_registry);
 
+  // Create TableInfo for efficient chunk lookup
+  TableInfo table_info(table);
+
   // Convert table rows back to nodes and add to shard
   for (int64_t row_idx = 0; row_idx < table->num_rows(); ++row_idx) {
     // Extract fields for this row into a map
@@ -119,27 +123,9 @@ arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(
       auto column_name = table->schema()->field(col_idx)->name();
       auto column = table->column(col_idx);
 
-      // Calculate chunk index and offset directly (O(1) operation)
-      const int64_t chunk_size = shard_metadata.chunk_size;
-      int chunk_idx = row_idx / chunk_size;
-      int64_t chunk_offset = row_idx % chunk_size;
-
-      // Make sure chunk_idx is valid
-      if (chunk_idx >= column->num_chunks()) {
-        // This can happen if the last chunk is smaller than chunk_size
-        chunk_idx = column->num_chunks() - 1;
-        chunk_offset = row_idx - (chunk_idx * chunk_size);
-      }
-
-      auto chunk = column->chunk(chunk_idx);
-
-      // Validate the chunk offset
-      if (chunk_offset >= chunk->length()) {
-        return arrow::Status::IndexError("Invalid chunk offset for row ",
-                                         row_idx, ": chunk_size=", chunk_size,
-                                         ", chunk_idx=", chunk_idx,
-                                         ", chunk_length=", chunk->length());
-      }
+      // Use TableInfo to get chunk location
+      auto chunk_loc = table_info.get_chunk_info(col_idx, row_idx);
+      auto chunk = column->chunk(chunk_loc.chunk_index);
 
       // Extract this single value as a new array
       std::shared_ptr<arrow::Array> value_array;
@@ -148,11 +134,11 @@ arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(
         case arrow::Type::INT64: {
           arrow::Int64Builder builder;
           auto typed_chunk = std::static_pointer_cast<arrow::Int64Array>(chunk);
-          if (typed_chunk->IsNull(chunk_offset)) {
+          if (typed_chunk->IsNull(chunk_loc.offset_in_chunk)) {
             ARROW_RETURN_NOT_OK(builder.AppendNull());
           } else {
             ARROW_RETURN_NOT_OK(
-                builder.Append(typed_chunk->Value(chunk_offset)));
+                builder.Append(typed_chunk->Value(chunk_loc.offset_in_chunk)));
           }
           ARROW_RETURN_NOT_OK(builder.Finish(&value_array));
           break;
@@ -161,11 +147,11 @@ arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(
           arrow::StringBuilder builder;
           auto typed_chunk =
               std::static_pointer_cast<arrow::StringArray>(chunk);
-          if (typed_chunk->IsNull(chunk_offset)) {
+          if (typed_chunk->IsNull(chunk_loc.offset_in_chunk)) {
             ARROW_RETURN_NOT_OK(builder.AppendNull());
           } else {
-            ARROW_RETURN_NOT_OK(
-                builder.Append(typed_chunk->GetString(chunk_offset)));
+            ARROW_RETURN_NOT_OK(builder.Append(
+                typed_chunk->GetString(chunk_loc.offset_in_chunk)));
           }
           ARROW_RETURN_NOT_OK(builder.Finish(&value_array));
           break;
@@ -193,6 +179,25 @@ arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(
   }
 
   return shard;
+}
+
+arrow::Result<std::vector<Edge>> Storage::read_edges(
+    const EdgeMetadata& edge_metadata) {
+  ARROW_ASSIGN_OR_RAISE(auto input_file,
+                        arrow::io::ReadableFile::Open(edge_metadata.data_file));
+
+  // Read parquet file into table using the modern API that returns
+  // arrow::Result
+  std::unique_ptr<parquet::arrow::FileReader> reader;
+  ARROW_ASSIGN_OR_RAISE(reader, parquet::arrow::OpenFile(
+                                    input_file, arrow::default_memory_pool()));
+
+  std::shared_ptr<arrow::Table> table;
+  ARROW_RETURN_NOT_OK(reader->ReadTable(&table));
+
+  auto edges = std::make_shared<std::vector<Edge>>();
+  for (int64_t row_idx = 0; row_idx < table->num_rows(); ++row_idx) {
+  }
 }
 
 }  // namespace tundradb

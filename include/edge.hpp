@@ -30,11 +30,11 @@ class Edge {
   int64_t get_id() const { return id; }
   int64_t get_source_id() const { return source_id; }
   int64_t get_target_id() const { return target_id; }
-  const std::string &get_type() const { return type; }
+  const std::string& get_type() const { return type; }
   int64_t get_created_ts() const { return created_ts; }
- // arrow::Result<std::shared_ptr<arrow::Array>> get_property(
+  // arrow::Result<std::shared_ptr<arrow::Array>> get_property(
   //    const std::string &name) const;
-  //std::vector<std::string> get_property_names() const;
+  // std::vector<std::string> get_property_names() const;
 };
 }  // namespace tundradb
 #endif  // EDGE_HPP

@@ -151,9 +151,12 @@ struct ShardMetadata {
 };
 
 struct EdgeMetadata {
+  std::string id;
   std::string edge_type;
   std::string data_file;
   int64_t record_count = 0;
+  int64_t chunk_size = 0;
+  int64_t id_seq = 0;
   int64_t timestamp_ms = 0;
 
   NLOHMANN_DEFINE_TYPE_INTRUSIVE(EdgeMetadata, edge_type, data_file,
@@ -163,6 +166,7 @@ struct EdgeMetadata {
 struct Manifest {
   std::string id;
   std::vector<ShardMetadata> shards;
+  std::string edges_file;
   NLOHMANN_DEFINE_TYPE_INTRUSIVE(Manifest, id, shards);
 
   std::string toString() const {
@@ -198,6 +202,10 @@ class MetadataManager {
   arrow::Result<DatabaseInfo> read_db_info();
 
   arrow::Result<Metadata> load_current_metadata();
+
+  arrow::Result<std::string> write_edge_metadata(
+      const EdgeMetadata &edge_metadata);
+  arrow::Result<EdgeMetadata> read_edge_metadata(const std::string &id);
 
   const std::string &get_metadata_dir() const;
 

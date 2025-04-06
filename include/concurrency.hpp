@@ -2,16 +2,16 @@
 #define CONCURRENCY_HPP
 
 #include <tbb/concurrent_hash_map.h>
+
 #include <iostream>
 #include <set>
 #include <variant>
 
 namespace tundradb {
 
-
 template <typename T>
 struct ConcurrentSet {
-private:
+ private:
   mutable tbb::concurrent_hash_map<T, std::monostate> data_;
 
   // Cached snapshot and version tracking
@@ -19,9 +19,8 @@ private:
       std::make_shared<std::set<T>>()};
   std::atomic<int64_t> version_{0};
   mutable std::atomic<int64_t> snapshot_version_{0};
-public:
 
-
+ public:
   bool insert(T t) {
     typename tbb::concurrent_hash_map<T, std::monostate>::accessor acc;
     if (data_.insert(acc, t)) {

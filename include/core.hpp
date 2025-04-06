@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "config.hpp"
+#include "edge_store.hpp"
 #include "file_utils.hpp"
 #include "logger.hpp"
 #include "metadata.hpp"
@@ -39,7 +40,8 @@ class SnapshotManager {
  public:
   explicit SnapshotManager(std::shared_ptr<MetadataManager> metadata_manager,
                            std::shared_ptr<Storage> storage,
-                           std::shared_ptr<ShardManager> shard_manager);
+                           std::shared_ptr<ShardManager> shard_manager,
+                           std::shared_ptr<EdgeStore> edge_store);
 
   arrow::Result<bool> initialize();
 
@@ -52,7 +54,10 @@ class SnapshotManager {
   std::shared_ptr<MetadataManager> metadata_manager;
   std::shared_ptr<Storage> storage;
   std::shared_ptr<ShardManager> shard_manager;
+  std::shared_ptr<EdgeStore> edge_store;
   Metadata metadata;
+  std::shared_ptr<Manifest> manifest;
+  std::shared_ptr<EdgeMetadata> edge_metada;
 };
 
 // Schema registry class for managing node schemas
@@ -618,6 +623,7 @@ class Database {
   std::shared_ptr<Storage> storage;
   std::shared_ptr<MetadataManager> metadata_manager;
   std::shared_ptr<SnapshotManager> snapshot_manager;
+  std::shared_ptr<EdgeStore> edge_store;
 
   // std::atomic<int64_t> snapshot_counter;
 
@@ -642,7 +648,7 @@ class Database {
           std::make_shared<Storage>(std::move(data_path), schema_registry);
       metadata_manager = std::make_shared<MetadataManager>(db_path);
       snapshot_manager = std::make_shared<SnapshotManager>(
-          metadata_manager, storage, shard_manager);
+          metadata_manager, storage, shard_manager, edge_store);
     }
   }
 

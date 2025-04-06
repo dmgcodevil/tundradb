@@ -13,6 +13,7 @@
 // #include <unordered_map>
 // #include <vector>
 
+#include "edge.hpp"
 #include "metadata.hpp"
 
 namespace tundradb {
@@ -38,6 +39,9 @@ class Storage {
 
   arrow::Result<std::shared_ptr<Shard>> read_shard(
       const ShardMetadata& shard_metadata);
+
+  arrow::Result<std::vector<Edge>> read_edges(
+      const EdgeMetadata& edge_metadata);
 };
 
 }  // namespace tundradb

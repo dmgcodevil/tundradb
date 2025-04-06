@@ -8,10 +8,12 @@ namespace tundradb {
 SnapshotManager::SnapshotManager(
     std::shared_ptr<MetadataManager> metadata_manager,
     std::shared_ptr<Storage> storage,
-    std::shared_ptr<ShardManager> shard_manager)
+    std::shared_ptr<ShardManager> shard_manager,
+    std::shared_ptr<EdgeStore> edge_store)
     : metadata_manager(std::move(metadata_manager)),
       storage(std::move(storage)),
-      shard_manager(std::move(shard_manager)) {}
+      shard_manager(std::move(shard_manager)),
+      edge_store(std::move(edge_store)) {}
 
 arrow::Result<bool> SnapshotManager::initialize() {
   log_info("Initializing snapshot manager...");
@@ -43,14 +45,16 @@ arrow::Result<bool> SnapshotManager::initialize() {
             .status();  // Return the error instead of continuing
       }
 
-      Manifest manifest = manifest_result.ValueOrDie();
+      // Manifest manifest = manifest_result.ValueOrDie();
+      this->manifest = std::make_shared<Manifest>(manifest_result.ValueOrDie());
       log_info("Manifest loaded. shards count=" +
-               std::to_string(manifest.shards.size()) + ", id=" + manifest.id);
+               std::to_string(this->manifest->shards.size()) +
+               ", id=" + this->manifest->id);
 
       // Group shards by schema name
       std::unordered_map<std::string, std::vector<ShardMetadata>>
           grouped_shards;
-      for (auto &shard : manifest.shards) {
+      for (auto &shard : manifest->shards) {
         grouped_shards[shard.schema_name].push_back(shard);
       }
 
@@ -114,17 +118,17 @@ arrow::Result<Snapshot *> SnapshotManager::commit() {
   }
 
   // Create new manifest or load existing one
-  Manifest current_manifest;
-  if (this->snapshot != nullptr) {
-    current_manifest =
-        read_json_file<Manifest>(this->snapshot->manifest_location)
-            .ValueOrDie();
-  }
+  // Manifest current_manifest = this->manifest;
+  // if (this->snapshot != nullptr) {
+  //   current_manifest =
+  //       read_json_file<Manifest>(this->snapshot->manifest_location)
+  //           .ValueOrDie();
+  // }
 
   // Track shard metadata from current manifest
   std::unordered_map<std::string, std::unordered_map<int64_t, ShardMetadata>>
       curr_shard_metadata;
-  for (const auto &shard : current_manifest.shards) {
+  for (const auto &shard : this->manifest->shards) {
     curr_shard_metadata[shard.schema_name][shard.id] = shard;
   }
 
