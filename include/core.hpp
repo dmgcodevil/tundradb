@@ -149,6 +149,21 @@ class Shard {
         schema_registry(std::move(schema_registry)),
         schema_name(schema_name) {}
 
+  ~Shard() {
+    // Clear the nodes map first to release node resources
+    nodes.clear();
+
+    // Clear the nodes_ids set
+    nodes_ids.clear();
+
+    // Clear the table
+    table.reset();
+
+    // The memory_pool will be automatically destroyed
+    // The schema_registry is a shared_ptr, so it will be handled by reference
+    // counting
+  }
+
   bool is_updated() const { return updated; }
   bool set_updated(bool v) {
     updated = v;

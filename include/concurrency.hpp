@@ -82,6 +82,11 @@ struct ConcurrentSet {
 
     return cached_snapshot_;
   }
+
+  void clear() {
+    data_.clear();
+    cached_snapshot_.reset();
+  }
 };
 
 }  // namespace tundradb

@@ -39,6 +39,11 @@ class TableInfoTest : public ::testing::Test {
     table_ = arrow::Table::Make(schema, {chunked_array});
   }
 
+  void TearDown() override {
+    // Clean up any resources
+    table_.reset();
+  }
+
   std::shared_ptr<arrow::Table> table_;
 };
 

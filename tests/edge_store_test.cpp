@@ -10,6 +10,7 @@ class EdgeStoreTest : public ::testing::Test {
  protected:
   void SetUp() override { store = std::make_unique<EdgeStore>(0); }
 
+  void TearDown() override { store.reset(); }
   std::unique_ptr<EdgeStore> store;
 };
 

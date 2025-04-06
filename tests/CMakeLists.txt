@@ -207,3 +207,15 @@ add_test(NAME ConcurrentSetStressTest COMMAND concurrent_set_stress_test)
 add_test(NAME EdgeStoreTest COMMAND edge_store_test)
 add_test(NAME TableInfoTest COMMAND table_info_test)
 add_test(NAME SchemaUtilsTest COMMAND schema_utils_test)
+
+set_tests_properties(
+        ShardingTest
+        SnapshotTest
+        ConcurrencyTest
+        ConcurrentSetStressTest
+        EdgeStoreTest
+        TableInfoTest
+        SchemaUtilsTest
+        PROPERTIES
+        ISOLATED TRUE  # This ensures tests run in isolation
+)
