@@ -26,8 +26,8 @@ TableInfo::TableInfo(const std::shared_ptr<arrow::Table>& table)
   }
 }
 
-TableInfo::ChunkInfo TableInfo::get_chunk_info(
-    int column_index, int64_t row_index) const {
+TableInfo::ChunkInfo TableInfo::get_chunk_info(int column_index,
+                                               int64_t row_index) const {
   if (column_index < 0 ||
       column_index >= static_cast<int>(chunk_boundaries_.size())) {
     throw std::out_of_range("Column index out of range");

@@ -20,7 +20,11 @@ class ShardingTest : public ::testing::Test {
     auto config = make_config()
                       .with_shard_capacity(SHARD_SIZE)
                       .with_chunk_size(CHUNK_SIZE)
+                      .with_persistence_enabled(false)
                       .build();
+
+    std::cout << "is_persistence_enabled:" << config.is_persistence_enabled()
+              << std::endl;
 
     db = std::make_unique<Database>(config);
 
@@ -28,7 +32,6 @@ class ShardingTest : public ::testing::Test {
     auto name_field = arrow::field("name", arrow::utf8());
     auto count_field = arrow::field("count", arrow::int64());
     auto schema = arrow::schema({name_field, count_field});
-
     auto result = db->get_schema_registry()->add("test-schema", schema);
     ASSERT_TRUE(result.ok())
         << "Failed to register schema: " << result.status().ToString();
@@ -103,6 +106,7 @@ TEST_F(ShardingTest, UpdateNodes) {
   auto table_result = db->get_table("test-schema");
   ASSERT_TRUE(table_result.ok());
   auto table = table_result.ValueOrDie();
+  print_table(table);
 
   // Verify the update was applied
   auto name_array =
@@ -200,6 +204,7 @@ class CompactionTest : public ::testing::TestWithParam<CompactionScenario> {
     auto config = make_config()
                       .with_shard_capacity(scenario.shard_size)
                       .with_chunk_size(2)
+                      .with_persistence_enabled(false)
                       .build();
 
     db = std::make_unique<Database>(config);

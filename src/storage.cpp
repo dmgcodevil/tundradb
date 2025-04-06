@@ -171,6 +171,7 @@ arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(
     int64_t node_id = id_array->Value(0);
 
     // Create the node
+    node_data.erase("id");
     auto node =
         std::make_shared<Node>(node_id, shard_metadata.schema_name, node_data);
 

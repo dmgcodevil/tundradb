@@ -13,6 +13,7 @@
 
 #include "logger.hpp"
 #include "node.hpp"
+#include "schema_utils.hpp"
 
 namespace tundradb {
 static std::string generate_uuid() {
@@ -34,19 +35,22 @@ static int64_t now_millis() {
 static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
     const std::shared_ptr<arrow::Schema>& schema,
     const std::vector<std::shared_ptr<Node>>& nodes, size_t chunk_size) {
+  auto final_schema = prepend_id_field(schema);
   if (nodes.empty()) {
     // Return empty table with the given schema
     std::vector<std::shared_ptr<arrow::ChunkedArray>> empty_columns;
-    for (int i = 0; i < schema->num_fields(); i++) {
+    for (int i = 0; i < final_schema->num_fields(); i++) {
       empty_columns.push_back(std::make_shared<arrow::ChunkedArray>(
           std::vector<std::shared_ptr<arrow::Array>>{}));
     }
-    return arrow::Table::Make(schema, empty_columns);
+    return arrow::Table::Make(final_schema, empty_columns);
   }
 
   // Create builders for each field in the schema
   std::vector<std::unique_ptr<arrow::ArrayBuilder>> builders;
-  for (const auto& field : schema->fields()) {
+  builders.push_back(
+      std::make_unique<arrow::Int64Builder>());  // builder for id
+  for (const auto& field : final_schema->fields()) {
     switch (field->type()->id()) {
       case arrow::Type::INT64:
         builders.push_back(std::make_unique<arrow::Int64Builder>());
@@ -61,17 +65,19 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
   }
 
   // Process nodes in chunks
-  std::vector<std::shared_ptr<arrow::Array>> arrays_for_current_chunk;
   std::vector<std::vector<std::shared_ptr<arrow::Array>>> chunks_per_field(
-      schema->num_fields());
+      final_schema->num_fields());
   size_t nodes_in_current_chunk = 0;
 
   for (const auto& node : nodes) {
+    // explicitly add id field
+    ARROW_RETURN_NOT_OK(
+        static_cast<arrow::Int64Builder*>(builders[0].get())->Append(node->id));
     // For each field, extract the value from the node and append to the builder
-    for (int i = 0; i < schema->num_fields(); i++) {
-      const auto& field = schema->field(i);
+    // start from 1 to skip "id" field
+    for (int i = 1; i < final_schema->num_fields(); i++) {
+      const auto& field = final_schema->field(i);
       auto field_result = node->get_field(field->name());
-
       if (!field_result.ok()) {
         // Field not present, append null
         ARROW_RETURN_NOT_OK(builders[i]->AppendNull());
@@ -111,7 +117,7 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
     // If we've reached the chunk size, finalize the arrays and reset the
     // builders
     if (nodes_in_current_chunk >= chunk_size) {
-      for (int i = 0; i < schema->num_fields(); i++) {
+      for (int i = 0; i < final_schema->num_fields(); i++) {
         std::shared_ptr<arrow::Array> array;
         ARROW_RETURN_NOT_OK(builders[i]->Finish(&array));
         chunks_per_field[i].push_back(array);
@@ -123,7 +129,7 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
 
   // Finalize any remaining data
   if (nodes_in_current_chunk > 0) {
-    for (int i = 0; i < schema->num_fields(); i++) {
+    for (int i = 0; i < final_schema->num_fields(); i++) {
       std::shared_ptr<arrow::Array> array;
       ARROW_RETURN_NOT_OK(builders[i]->Finish(&array));
       chunks_per_field[i].push_back(array);
@@ -132,13 +138,13 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
 
   // Create chunked arrays for each field
   std::vector<std::shared_ptr<arrow::ChunkedArray>> chunked_arrays;
-  for (int i = 0; i < schema->num_fields(); i++) {
+  for (int i = 0; i < final_schema->num_fields(); i++) {
     chunked_arrays.push_back(
         std::make_shared<arrow::ChunkedArray>(chunks_per_field[i]));
   }
 
   // Create and return the table
-  return arrow::Table::Make(schema, chunked_arrays);
+  return arrow::Table::Make(final_schema, chunked_arrays);
 }
 
 // Contextual ValueOrDie helper that logs and provides context on errors

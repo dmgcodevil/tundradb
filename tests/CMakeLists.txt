@@ -97,6 +97,11 @@ add_executable(table_info_test
     table_info_test.cpp
 )
 
+# Add schema utils test
+add_executable(schema_utils_test
+    schema_utils_test.cpp
+)
+
 # Link against Arrow and GTest
 target_link_libraries(sharding_test
     PRIVATE
@@ -162,6 +167,17 @@ target_link_libraries(table_info_test
         TBB::tbb
 )
 
+# Link against required libraries
+target_link_libraries(schema_utils_test
+    PRIVATE
+        core
+        Arrow::arrow_shared
+        GTest::GTest
+        GTest::Main
+        pthread
+        TBB::tbb
+)
+
 # Apply sanitizer flags to all test targets if enabled
 if(ENABLE_SANITIZERS)
     target_compile_options(sharding_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
@@ -178,6 +194,9 @@ if(ENABLE_SANITIZERS)
     
     target_compile_options(table_info_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
     target_link_options(table_info_test PRIVATE ${SANITIZER_LINK_FLAGS})
+    
+    target_compile_options(schema_utils_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
+    target_link_options(schema_utils_test PRIVATE ${SANITIZER_LINK_FLAGS})
 endif()
 
 # Simple test registration
@@ -187,3 +206,4 @@ add_test(NAME ConcurrencyTest COMMAND concurrency_test)
 add_test(NAME ConcurrentSetStressTest COMMAND concurrent_set_stress_test)
 add_test(NAME EdgeStoreTest COMMAND edge_store_test)
 add_test(NAME TableInfoTest COMMAND table_info_test)
+add_test(NAME SchemaUtilsTest COMMAND schema_utils_test)
