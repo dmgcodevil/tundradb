@@ -51,10 +51,19 @@ class EdgeStore {
   };
 
  public:
-  explicit EdgeStore(int64_t init_edge_id_counter,
-
-                     int64_t chunk_size = 1000)
+  explicit EdgeStore(int64_t init_edge_id_counter, int64_t chunk_size = 1000)
       : edge_id_counter(init_edge_id_counter), chunk_size(chunk_size) {}
+
+  ~EdgeStore() {
+    // Clear all concurrent containers to ensure proper cleanup
+    edges.clear();
+    edges_by_type.clear();
+    outgoing_edges.clear();
+    incoming_edges.clear();
+    versions.clear();
+    edge_ids.clear();
+    tables.clear();
+  }
 
   arrow::Result<std::shared_ptr<Edge>> create_edge(
       int64_t source_id, int64_t target_id, const std::string &type,

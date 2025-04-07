@@ -204,10 +204,11 @@ arrow::Result<Metadata> MetadataManager::load_current_metadata() {
     Metadata metadata = metadata_result.ValueOrDie();
 
     // Set current_snapshot pointer if snapshots exist
-    if (!metadata.snapshots.empty() && metadata.current_snapshot == nullptr) {
-      metadata.current_snapshot = &metadata.snapshots.back();
-      log_info("Set current snapshot to latest snapshot: " +
-               metadata.current_snapshot->toString());
+    if (!metadata.snapshots.empty() &&
+        metadata.get_current_snapshot() == nullptr) {
+      metadata.current_snapshot_index = metadata.snapshots.size() - 1;
+      log_info("Set current snapshot to: " +
+               metadata.get_current_snapshot()->toString());
     }
 
     return metadata;

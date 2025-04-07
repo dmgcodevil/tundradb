@@ -58,13 +58,13 @@ struct ConcurrentSet {
 
   std::shared_ptr<std::set<T>> get_all() const {
     // Fast path: If cached snapshot is up-to-date, return it
-    auto current_snapshot_version =
-        snapshot_version_.load(std::memory_order_acquire);
-    auto current_version = version_.load(std::memory_order_acquire);
-
-    if (current_snapshot_version >= current_version) {
-      return cached_snapshot_;
-    }
+    // auto current_snapshot_version =
+    //     snapshot_version_.load(std::memory_order_acquire);
+    // auto current_version = version_.load(std::memory_order_acquire);
+    //
+    // if (current_snapshot_version >= current_version) {
+    //   return cached_snapshot_;
+    // }
 
     // Need to rebuild the cache
     auto new_snapshot = std::make_shared<std::set<T>>();
@@ -74,13 +74,15 @@ struct ConcurrentSet {
       new_snapshot->insert(it->first);
     }
 
-    if (snapshot_version_.compare_exchange_strong(current_snapshot_version,
-                                                  current_version)) {
-      cached_snapshot_ = new_snapshot;
-      return new_snapshot;
-    }
-
-    return cached_snapshot_;
+    // fixme:  cached_snapshot_ = new_snapshot; not safe and causes segfault
+    // if (snapshot_version_.compare_exchange_strong(current_snapshot_version,
+    //                                               current_version)) {
+    //   cached_snapshot_ = new_snapshot;
+    //   return new_snapshot;
+    // }
+    //
+    // return cached_snapshot_;
+    return new_snapshot;
   }
 
   void clear() {

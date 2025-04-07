@@ -84,14 +84,20 @@ struct SetOperation : public BaseOperation {
                const std::shared_ptr<arrow::Array> &v)
       : BaseOperation(id, field), value(v) {}
 
+  ~SetOperation() {
+    // Ensure the value is properly cleaned up
+    value.reset();
+  }
+
   arrow::Result<bool> apply(const std::shared_ptr<arrow::Array> &array,
                             int64_t row_index) const override {
-    auto array_data = array->data();
+    // Make a copy of the array data to avoid modifying the original
+    auto array_data = array->data()->Copy();
     switch (array->type_id()) {
       case arrow::Type::INT64: {
-        auto raw_values = array_data->GetMutableValues<int32_t>(1);
+        auto raw_values = array_data->GetMutableValues<int64_t>(1);
         raw_values[row_index] =
-            std::static_pointer_cast<arrow::Int32Array>(value)->Value(0);
+            std::static_pointer_cast<arrow::Int64Array>(value)->Value(0);
         return {true};
       }
       default:
@@ -126,7 +132,10 @@ class Node {
         schema_name(std::move(schema_name)),
         data(std::move(initial_data)) {}
 
-  ~Node() = default;
+  ~Node() {
+    // Clear the data map to ensure proper cleanup of Arrow arrays
+    data.clear();
+  }
 
   void add_field(const std::string &field_name,
                  const std::shared_ptr<arrow::Array> &value) {

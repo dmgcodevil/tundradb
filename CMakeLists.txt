@@ -3,6 +3,12 @@ project(tundradb)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Enable Address Sanitizer
+#set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address -fno-omit-frame-pointer")
+#set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address -fno-omit-frame-pointer")
+#set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address")
+
 #set(CMAKE_C_COMPILER "/opt/homebrew/opt/llvm/bin/clang")
 #set(CMAKE_CXX_COMPILER "/opt/homebrew/opt/llvm/bin/clang++")
 # Add Homebrew prefix to CMAKE_PREFIX_PATH
@@ -109,6 +115,9 @@ target_link_libraries(tundradb
         ${UUID_LIBRARY}
 )
 
-# Add the tests subdirectory
+# Enable testing
+enable_testing()
+
+# Add tests directory
 add_subdirectory(tests)
 

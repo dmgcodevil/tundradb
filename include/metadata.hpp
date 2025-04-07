@@ -42,49 +42,42 @@ struct Snapshot {
 };
 
 struct Metadata {
-  // use raw pointer instead of std::shared_ptr for serialization simplicity
-  Snapshot *current_snapshot = nullptr;
+  int current_snapshot_index = -1;
   std::vector<Snapshot> snapshots;
 
-  // Custom serialization for Metadata to handle pointer
-  friend void to_json(nlohmann::json &j, const Metadata &m) {
-    j = nlohmann::json{{"snapshots", m.snapshots}};
-
-    // Store the index of the current snapshot if it exists
-    if (m.current_snapshot) {
-      // Find the index of the current snapshot in the snapshots vector
-      for (size_t i = 0; i < m.snapshots.size(); ++i) {
-        if (m.current_snapshot == &m.snapshots[i]) {
-          j["current_snapshot_index"] = i;
-          break;
-        }
-      }
-    } else {
-      j["current_snapshot_index"] = -1;  // No current snapshot
+  // Get current snapshot safely
+  Snapshot *get_current_snapshot() {
+    if (current_snapshot_index >= 0 &&
+        current_snapshot_index < static_cast<int>(snapshots.size())) {
+      return &snapshots[current_snapshot_index];
     }
+    return nullptr;
   }
 
-  // Custom deserialization for Metadata to handle pointer
+  const Snapshot *get_current_snapshot() const {
+    if (current_snapshot_index >= 0 &&
+        current_snapshot_index < static_cast<int>(snapshots.size())) {
+      return &snapshots[current_snapshot_index];
+    }
+    return nullptr;
+  }
+
+  // Custom serialization for Metadata
+  friend void to_json(nlohmann::json &j, const Metadata &m) {
+    j = nlohmann::json{{"snapshots", m.snapshots},
+                       {"current_snapshot_index", m.current_snapshot_index}};
+  }
+
+  // Custom deserialization for Metadata
   friend void from_json(const nlohmann::json &j, Metadata &m) {
     j.at("snapshots").get_to(m.snapshots);
-
-    // Set the current snapshot pointer if it exists
-    if (j.contains("current_snapshot_index")) {
-      int index = j["current_snapshot_index"];
-      if (index >= 0 && index < static_cast<int>(m.snapshots.size())) {
-        m.current_snapshot = &m.snapshots[index];
-      } else {
-        m.current_snapshot = nullptr;
-      }
-    } else {
-      m.current_snapshot = nullptr;
-    }
+    m.current_snapshot_index = j.value("current_snapshot_index", -1);
   }
 
   std::string toString() const {
     std::stringstream ss;
     ss << "Metadata{current_snapshot="
-       << (current_snapshot ? current_snapshot->toString() : "null")
+       << (get_current_snapshot() ? get_current_snapshot()->toString() : "null")
        << ", snapshots_count=" << snapshots.size() << "}";
     return ss.str();
   }

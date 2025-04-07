@@ -18,33 +18,25 @@ SnapshotManager::SnapshotManager(
 arrow::Result<bool> SnapshotManager::initialize() {
   log_info("Initializing snapshot manager...");
   try {
-    // Load current metadata using the new loadMetadata method
-    auto metadata_result = this->metadata_manager->load_current_metadata();
-    if (!metadata_result.ok()) {
-      log_error("Failed to load metadata: " +
-                metadata_result.status().ToString());
-      return metadata_result
-          .status();  // Return the error instead of continuing
-    }
+    ARROW_ASSIGN_OR_RAISE(this->metadata,
+                          metadata_manager->load_current_metadata());
+    log_info("Metadata loaded.");
 
-    this->metadata = metadata_result.ValueOrDie();
-    log_info("Metadata loaded: " + this->metadata.toString());
-
-    // Check if we have a current snapshot
-    if (this->metadata.current_snapshot != nullptr) {
-      this->snapshot = this->metadata.current_snapshot;
-      log_info("Current snapshot loaded: " + this->snapshot->toString());
-
+    // Set current snapshot if it exists
+    if (this->metadata.get_current_snapshot() != nullptr) {
+      // this->snapshot = this->metadata.get_current_snapshot();
+      log_info("Current snapshot id = " +
+               this->metadata.get_current_snapshot()->id);
+      log_info("Load the manifest and initialize shards");
       // Load the manifest to initialize shards
-      auto manifest_result =
-          read_json_file<Manifest>(this->snapshot->manifest_location);
+      auto manifest_result = read_json_file<Manifest>(
+          this->metadata.get_current_snapshot()->manifest_location);
       if (!manifest_result.ok()) {
         log_error("Failed to load manifest: " +
                   manifest_result.status().ToString());
         return manifest_result
             .status();  // Return the error instead of continuing
       }
-
       // Manifest manifest = manifest_result.ValueOrDie();
       this->manifest = std::make_shared<Manifest>(manifest_result.ValueOrDie());
       log_info("Manifest loaded. shards count=" +
@@ -54,7 +46,7 @@ arrow::Result<bool> SnapshotManager::initialize() {
       // Group shards by schema name
       std::unordered_map<std::string, std::vector<ShardMetadata>>
           grouped_shards;
-      for (auto &shard : manifest->shards) {
+      for (auto &shard : manifest_result.ValueOrDie().shards) {
         grouped_shards[shard.schema_name].push_back(shard);
       }
 
@@ -113,8 +105,8 @@ arrow::Result<Snapshot *> SnapshotManager::commit() {
   new_snapshot.timestamp_ms = timestamp_ms;
 
   // Set parent ID if previous snapshot exists
-  if (this->snapshot != nullptr) {
-    new_snapshot.parent_id = this->snapshot->id;
+  if (this->metadata.get_current_snapshot() != nullptr) {
+    new_snapshot.parent_id = this->metadata.get_current_snapshot()->id;
   }
 
   // Create new manifest or load existing one
@@ -128,8 +120,10 @@ arrow::Result<Snapshot *> SnapshotManager::commit() {
   // Track shard metadata from current manifest
   std::unordered_map<std::string, std::unordered_map<int64_t, ShardMetadata>>
       curr_shard_metadata;
-  for (const auto &shard : this->manifest->shards) {
-    curr_shard_metadata[shard.schema_name][shard.id] = shard;
+  if (this->manifest != nullptr) {
+    for (const auto &shard : this->manifest->shards) {
+      curr_shard_metadata[shard.schema_name][shard.id] = shard;
+    }
   }
 
   // Create new manifest
@@ -173,9 +167,7 @@ arrow::Result<Snapshot *> SnapshotManager::commit() {
   // Add the new snapshot to metadata
   this->metadata.snapshots.push_back(new_snapshot);
 
-  // Set the current snapshot to the newly created one
-  this->snapshot = &this->metadata.snapshots.back();
-  this->metadata.current_snapshot = this->snapshot;
+  this->metadata.current_snapshot_index = this->metadata.snapshots.size() - 1;
 
   // Save the updated metadata
   std::string metadata_location =
@@ -196,8 +188,10 @@ arrow::Result<Snapshot *> SnapshotManager::commit() {
              reset_result.status().ToString());
   }
 
-  return this->snapshot;
+  return this->metadata.get_current_snapshot();
 }
 
-Snapshot *SnapshotManager::current_snapshot() { return this->snapshot; }
+Snapshot *SnapshotManager::current_snapshot() {
+  return this->metadata.get_current_snapshot();
+}
 }  // namespace tundradb

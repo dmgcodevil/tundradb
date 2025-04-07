@@ -50,7 +50,7 @@ class SnapshotManager {
   Snapshot *current_snapshot();
 
  private:
-  Snapshot *snapshot = nullptr;
+  // Snapshot *snapshot = nullptr;
   std::shared_ptr<MetadataManager> metadata_manager;
   std::shared_ptr<Storage> storage;
   std::shared_ptr<ShardManager> shard_manager;

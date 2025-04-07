@@ -48,8 +48,6 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
 
   // Create builders for each field in the schema
   std::vector<std::unique_ptr<arrow::ArrayBuilder>> builders;
-  builders.push_back(
-      std::make_unique<arrow::Int64Builder>());  // builder for id
   for (const auto& field : final_schema->fields()) {
     switch (field->type()->id()) {
       case arrow::Type::INT64:
@@ -99,9 +97,13 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
             case arrow::Type::STRING: {
               auto str_array =
                   std::static_pointer_cast<arrow::StringArray>(array);
-              ARROW_RETURN_NOT_OK(
-                  static_cast<arrow::StringBuilder*>(builders[i].get())
-                      ->Append(str_array->GetString(0)));
+              if (str_array->length() > 0 && !str_array->IsNull(0)) {
+                ARROW_RETURN_NOT_OK(
+                    static_cast<arrow::StringBuilder*>(builders[i].get())
+                        ->Append(str_array->GetString(0)));
+              } else {
+                ARROW_RETURN_NOT_OK(builders[i]->AppendNull());
+              }
               break;
             }
             default:

@@ -60,27 +60,29 @@ arrow::Result<bool> EdgeStore::remove(int64_t edge_id) {
   typename tbb::concurrent_hash_map<int64_t, std::shared_ptr<Edge>>::accessor
       acc;
 
-  if (edges.find(acc, edge_id) && edges.erase(acc)) {
+  if (edges.find(acc, edge_id)) {
     auto edge = acc->second;
-    {
-      typename tbb::concurrent_hash_map<
-          std::string, ConcurrentSet<int64_t>>::accessor edges_by_type_acc;
-      if (edges_by_type.find(edges_by_type_acc, edge->get_type())) {
-        edges_by_type_acc->second.remove(edge->get_id());
+    if (edges.erase(acc)) {
+      {
+        typename tbb::concurrent_hash_map<
+            std::string, ConcurrentSet<int64_t>>::accessor edges_by_type_acc;
+        if (edges_by_type.find(edges_by_type_acc, edge->get_type())) {
+          edges_by_type_acc->second.remove(edge->get_id());
+        }
       }
-    }
-    {
-      typename tbb::concurrent_hash_map<
-          int64_t, ConcurrentSet<int64_t>>::accessor outgoing_edges_acc;
-      if (outgoing_edges.find(outgoing_edges_acc, edge->get_source_id())) {
-        outgoing_edges_acc->second.remove(edge->get_id());
+      {
+        typename tbb::concurrent_hash_map<
+            int64_t, ConcurrentSet<int64_t>>::accessor outgoing_edges_acc;
+        if (outgoing_edges.find(outgoing_edges_acc, edge->get_source_id())) {
+          outgoing_edges_acc->second.remove(edge->get_id());
+        }
       }
-    }
-    {
-      typename tbb::concurrent_hash_map<
-          int64_t, ConcurrentSet<int64_t>>::accessor incoming_edges_acc;
-      if (incoming_edges.find(incoming_edges_acc, edge->get_target_id())) {
-        incoming_edges_acc->second.remove(edge->get_id());
+      {
+        typename tbb::concurrent_hash_map<
+            int64_t, ConcurrentSet<int64_t>>::accessor incoming_edges_acc;
+        if (incoming_edges.find(incoming_edges_acc, edge->get_target_id())) {
+          incoming_edges_acc->second.remove(edge->get_id());
+        }
       }
     }
   }
