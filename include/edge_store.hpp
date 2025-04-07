@@ -88,7 +88,7 @@ class EdgeStore {
       const std::string &type) const;
 
   arrow::Result<std::shared_ptr<arrow::Table>> get_table(
-      const std::string &edge_type = "");
+      const std::string &edge_type);
 
   arrow::Result<int64_t> get_version(const std::string &edge_type) const;
 

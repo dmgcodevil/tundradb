@@ -250,8 +250,11 @@ arrow::Result<bool> demo_snapshot_creation() {
   // }
 
   // Create a snapshot
-  std::cout << "Creating snapshot..." << std::endl;
-  ARROW_RETURN_NOT_OK(db.create_snapshot());
+  auto snap = db.create_snapshot().ValueOrDie();
+
+  // Create more snapshots
+  db.create_snapshot().ValueOrDie();
+  db.create_snapshot().ValueOrDie();
 
   // Check files were created
   // We would expect to have:

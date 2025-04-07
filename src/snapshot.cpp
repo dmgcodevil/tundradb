@@ -21,12 +21,17 @@ arrow::Result<bool> SnapshotManager::initialize() {
     ARROW_ASSIGN_OR_RAISE(this->metadata,
                           metadata_manager->load_current_metadata());
     log_info("Metadata loaded.");
+    log_info("Metadata current snapshot index=" +
+             std::to_string(this->metadata.current_snapshot_index));
+    log_info("Metadata current snapshots size=" +
+             std::to_string(this->metadata.snapshots.size()));
 
     // Set current snapshot if it exists
     if (this->metadata.get_current_snapshot() != nullptr) {
       // this->snapshot = this->metadata.get_current_snapshot();
       log_info("Current snapshot id = " +
-               this->metadata.get_current_snapshot()->id);
+               std::to_string(this->metadata.get_current_snapshot()->id));
+
       log_info("Load the manifest and initialize shards");
       // Load the manifest to initialize shards
       auto manifest_result = read_json_file<Manifest>(
@@ -95,7 +100,7 @@ arrow::Result<bool> SnapshotManager::initialize() {
   }
 }
 
-arrow::Result<Snapshot *> SnapshotManager::commit() {
+arrow::Result<Snapshot> SnapshotManager::commit() {
   log_info("Creating new snapshot");
   auto timestamp_ms = now_millis();
 
@@ -187,8 +192,11 @@ arrow::Result<Snapshot *> SnapshotManager::commit() {
     log_warn("Failed to reset shard updated flags: " +
              reset_result.status().ToString());
   }
+  this->manifest.reset();
+  this->manifest = std::make_shared<Manifest>(new_manifest);
 
-  return this->metadata.get_current_snapshot();
+  // Return a copy of the snapshot instead of a pointer
+  return new_snapshot;
 }
 
 Snapshot *SnapshotManager::current_snapshot() {

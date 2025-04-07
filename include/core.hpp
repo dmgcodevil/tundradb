@@ -45,7 +45,7 @@ class SnapshotManager {
 
   arrow::Result<bool> initialize();
 
-  arrow::Result<Snapshot *> commit();
+  arrow::Result<Snapshot> commit();
 
   Snapshot *current_snapshot();
 
@@ -826,8 +826,9 @@ class Database {
     return shard_manager->get_shard_ranges(schema_name);
   }
 
-  arrow::Result<Snapshot *> create_snapshot() {
-    return this->snapshot_manager->commit();
+  // Create a new snapshot of the current state
+  arrow::Result<Snapshot> create_snapshot() {
+    return snapshot_manager->commit();
   }
 
   // arrow::Result<bool> load_shard(const std::string &path) {

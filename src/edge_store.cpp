@@ -1,5 +1,6 @@
 #include "edge_store.hpp"
 
+#include "logger.hpp"
 namespace tundradb {
 
 arrow::Result<std::shared_ptr<Edge>> EdgeStore::create_edge(
@@ -85,7 +86,9 @@ arrow::Result<bool> EdgeStore::remove(int64_t edge_id) {
         }
       }
     }
+    return true;
   }
+  return false;
 }
 
 std::vector<std::shared_ptr<Edge>> EdgeStore::get(
@@ -207,6 +210,7 @@ std::set<std::string> EdgeStore::get_edge_types() const {
 
 arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::generate_table(
     const std::string& edge_type) const {
+  log_info("Generating table for edge type: '" + edge_type + "'");
   std::vector<std::shared_ptr<Edge>> selected_edges;
   if (edge_type.empty()) {
     selected_edges = get(*edge_ids.get_all());
@@ -334,6 +338,10 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::get_table(
     const std::string& edge_type) {
   const int MAX_RETRIES = 5;
   int retry_count = 0;
+
+  if (edges_by_type.empty() || edges_by_type.count(edge_type) == 0) {
+    return arrow::Status::KeyError("edge type doesn't exists");
+  }
 
   while (retry_count < MAX_RETRIES) {
     // First try to get the table with read-only access

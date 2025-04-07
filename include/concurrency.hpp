@@ -5,6 +5,7 @@
 
 #include <iostream>
 #include <set>
+#include <shared_mutex>
 #include <variant>
 
 namespace tundradb {
@@ -13,60 +14,41 @@ template <typename T>
 struct ConcurrentSet {
  private:
   mutable tbb::concurrent_hash_map<T, std::monostate> data_;
-
-  // Cached snapshot and version tracking
-  mutable std::shared_ptr<std::set<T>> cached_snapshot_{
-      std::make_shared<std::set<T>>()};
-  std::atomic<int64_t> version_{0};
-  mutable std::atomic<int64_t> snapshot_version_{0};
+  mutable std::shared_mutex rw_mutex_;
 
  public:
   bool insert(T t) {
+    std::unique_lock<std::shared_mutex> write_lock(rw_mutex_);
     typename tbb::concurrent_hash_map<T, std::monostate>::accessor acc;
     if (data_.insert(acc, t)) {
-      version_.fetch_add(1, std::memory_order_release);
       return true;
     }
     return false;
   }
 
   bool contains(T t) {
+    std::shared_lock<std::shared_mutex> read_lock(rw_mutex_);
     typename tbb::concurrent_hash_map<T, std::monostate>::const_accessor acc;
     return data_.find(acc, t);
   }
 
   bool remove(T t) {
+    std::unique_lock<std::shared_mutex> write_lock(rw_mutex_);
     if (data_.erase(t)) {
-      version_.fetch_add(1, std::memory_order_release);
       return true;
     }
     return false;
   }
 
   int64_t size() const {
-    // Use cached size if available and up-to-date
-    auto current_snapshot_version =
-        snapshot_version_.load(std::memory_order_acquire);
-    auto current_version = version_.load(std::memory_order_acquire);
-
-    if (current_snapshot_version >= current_version) {
-      return cached_snapshot_->size();
-    }
-
+    std::shared_lock<std::shared_mutex> read_lock(rw_mutex_);
+    // Simply return the size of the underlying data structure
     return data_.size();
   }
 
   std::shared_ptr<std::set<T>> get_all() const {
-    // Fast path: If cached snapshot is up-to-date, return it
-    // auto current_snapshot_version =
-    //     snapshot_version_.load(std::memory_order_acquire);
-    // auto current_version = version_.load(std::memory_order_acquire);
-    //
-    // if (current_snapshot_version >= current_version) {
-    //   return cached_snapshot_;
-    // }
-
-    // Need to rebuild the cache
+    std::shared_lock<std::shared_mutex> read_lock(rw_mutex_);
+    // Create a new snapshot
     auto new_snapshot = std::make_shared<std::set<T>>();
 
     // Collect all keys from the hash map
@@ -74,20 +56,14 @@ struct ConcurrentSet {
       new_snapshot->insert(it->first);
     }
 
-    // fixme:  cached_snapshot_ = new_snapshot; not safe and causes segfault
-    // if (snapshot_version_.compare_exchange_strong(current_snapshot_version,
-    //                                               current_version)) {
-    //   cached_snapshot_ = new_snapshot;
-    //   return new_snapshot;
-    // }
-    //
-    // return cached_snapshot_;
+    // Return the new snapshot directly without updating the cached one
+    // This avoids race conditions and use-after-free issues
     return new_snapshot;
   }
 
   void clear() {
+    std::unique_lock<std::shared_mutex> write_lock(rw_mutex_);
     data_.clear();
-    cached_snapshot_.reset();
   }
 };
 
