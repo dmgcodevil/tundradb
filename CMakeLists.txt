@@ -21,7 +21,8 @@ find_package(Parquet REQUIRED)
 find_package(benchmark REQUIRED)
 find_package(GTest REQUIRED)
 find_package(TBB REQUIRED)
-
+find_library(CDS_LIB cds PATHS /usr/local/lib)
+include_directories(/usr/local/include)
 # Try to find spdlog first, if not found we'll use FetchContent
 find_package(spdlog QUIET)
 
@@ -95,6 +96,7 @@ target_link_libraries(core
         nlohmann_json::nlohmann_json
         spdlog::spdlog
         ${UUID_LIBRARY}
+        ${CDS_LIB}
         TBB::tbb
 )
 

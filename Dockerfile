@@ -17,6 +17,11 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     cmake \
     uuid-dev \
+    libboost-all-dev \
+    libtbb-dev \
+    libgtest-dev \
+    libbenchmark-dev \
+    libcds-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Add Arrow repository
@@ -71,5 +76,25 @@ USER vscode
 # Set up the working directory
 WORKDIR /workspace
 
+# Install CDS from source (latest version)
+RUN git clone https://github.com/khizmax/libcds.git && \
+    cd libcds && \
+    mkdir build && \
+    cd build && \
+    cmake .. && \
+    make -j$(nproc) && \
+    make install && \
+    cd ../.. && \
+    rm -rf libcds
+
+# Copy source code
+COPY . .
+
+# Build the project
+RUN mkdir build && \
+    cd build && \
+    cmake .. && \
+    make -j$(nproc)
+
 # Default command
-CMD ["/bin/bash"] 
+CMD ["./build/tundradb"] 

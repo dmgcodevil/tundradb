@@ -92,6 +92,18 @@ jobs:
         sudo rm -f /usr/local/bin/ccmake /usr/local/bin/cmake /usr/local/bin/cmake-gui /usr/local/bin/cpack /usr/local/bin/ctest
         sudo ln -s /opt/cmake/bin/* /usr/local/bin/
         rm /tmp/cmake-install.sh
+        - name: Install CDS
+
+    - name:  Install CDS
+      run: |
+        git clone https://github.com/khizmax/libcds.git
+        cd libcds
+        mkdir build
+        cd build
+        cmake ..
+        make -j$(nproc)
+        sudo make install
+        cd ../..
 
     - name: Configure CMake
       # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
