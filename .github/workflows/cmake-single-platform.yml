@@ -98,7 +98,6 @@ jobs:
         cd /tmp
         git clone https://github.com/khizmax/libcds.git
         cd libcds
-        mkdir build
         cd build
         cmake ..
         make -j$(nproc)
