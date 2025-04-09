@@ -92,7 +92,6 @@ jobs:
         sudo rm -f /usr/local/bin/ccmake /usr/local/bin/cmake /usr/local/bin/cmake-gui /usr/local/bin/cpack /usr/local/bin/ctest
         sudo ln -s /opt/cmake/bin/* /usr/local/bin/
         rm /tmp/cmake-install.sh
-        - name: Install CDS
 
     - name:  Install CDS
       run: |
