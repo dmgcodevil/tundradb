@@ -6,6 +6,7 @@
 #include <set>
 #include <mutex>
 #include <shared_mutex>
+#include <variant>
 
 namespace tundradb {
 
