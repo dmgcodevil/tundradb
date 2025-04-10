@@ -140,20 +140,13 @@ class SimplifiedTest {
   }
 
   void monitor(std::atomic<bool>& running) {
-    size_t last_ops = 0;
-
     while (running) {
       std::this_thread::sleep_for(std::chrono::seconds(1));
-
-      auto current_ops = total_operations_.load();
-      auto ops_per_second = current_ops - last_ops;
-      last_ops = current_ops;
-
-      std::cout << "Progress: " << current_ops << "/"
-                << (NUM_THREADS * OPERATIONS_PER_THREAD) << " operations ("
-                << (current_ops * 100.0 / (NUM_THREADS * OPERATIONS_PER_THREAD))
-                << "%), " << ops_per_second << " ops/sec, "
-                << "Current size: " << concurrent_set_.size() << std::endl;
+      size_t total = total_operations_.load();
+      size_t inserts = successful_inserts_.load();
+      size_t removes = successful_removes_.load();
+      std::cout << "Progress: " << total << " operations (" << inserts
+                << " inserts, " << removes << " removes)" << std::endl;
     }
   }
 
@@ -283,9 +276,10 @@ class SimplifiedTest {
   }
 };
 
-int main(int argc, char** argv) {
+// Test case for the stress test
+TEST(ConcurrentSetTest, StressTest) {
   std::cout << "C++ version: " << __cplusplus << std::endl;
-  std::cout << "RCUConcurrentSet Simplified Test" << std::endl;
+  std::cout << "ConcurrentSet Stress Test" << std::endl;
   std::cout << "===============================" << std::endl;
   std::cout << "Threads: " << NUM_THREADS << std::endl;
   std::cout << "Operations per thread: " << OPERATIONS_PER_THREAD << std::endl;
@@ -294,4 +288,9 @@ int main(int argc, char** argv) {
 
   SimplifiedTest test;
   test.run_test();
+}
+
+int main(int argc, char** argv) {
+  testing::InitGoogleTest(&argc, argv);
+  return RUN_ALL_TESTS();
 }

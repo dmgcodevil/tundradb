@@ -100,6 +100,7 @@ target_include_directories(core
         ${CMAKE_CURRENT_SOURCE_DIR}/include
     PRIVATE
         ${ARROW_INCLUDE_DIR}
+        /usr/local/include
 )
 
 # Link dependencies

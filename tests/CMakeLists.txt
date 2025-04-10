@@ -38,14 +38,6 @@ if(ENABLE_SANITIZERS)
                 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU")
                     add_compile_options("-fno-sanitize-recover=all")
                 endif()
-                
-                # Set env var for all tests
-                foreach(test_target sharding_test snapshot_test concurrency_test)
-                    set_property(
-                        TEST ${test_target}
-                        PROPERTY ENVIRONMENT "TSAN_OPTIONS=${TSAN_OPTIONS_VALUE}"
-                    )
-                endforeach()
             else()
                 message(WARNING "TSan suppressions file not found: ${TSAN_SUPPRESSIONS_FILE}")
             endif()
@@ -207,6 +199,16 @@ add_test(NAME ConcurrentSetStressTest COMMAND concurrent_set_stress_test)
 add_test(NAME EdgeStoreTest COMMAND edge_store_test)
 add_test(NAME TableInfoTest COMMAND table_info_test)
 add_test(NAME SchemaUtilsTest COMMAND schema_utils_test)
+
+# Set TSan options for tests after they've been registered
+if(ENABLE_SANITIZERS AND SANITIZER_TYPE STREQUAL "thread" AND EXISTS ${TSAN_SUPPRESSIONS_FILE})
+    foreach(test_target ShardingTest SnapshotTest ConcurrencyTest ConcurrentSetStressTest EdgeStoreTest TableInfoTest SchemaUtilsTest)
+        set_property(
+            TEST ${test_target}
+            PROPERTY ENVIRONMENT "TSAN_OPTIONS=${TSAN_OPTIONS_VALUE}"
+        )
+    endforeach()
+endif()
 
 set_tests_properties(
         ShardingTest
