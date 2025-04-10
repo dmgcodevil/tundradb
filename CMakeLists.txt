@@ -21,8 +21,22 @@ find_package(Parquet REQUIRED)
 find_package(benchmark REQUIRED)
 find_package(GTest REQUIRED)
 find_package(TBB REQUIRED)
-find_library(CDS_LIB cds PATHS /usr/local/lib)
+
+# Find CDS library
+if(APPLE)
+    # On macOS, try both debug and release versions
+    find_library(CDS_LIB NAMES cds_d cds PATHS /usr/local/lib /usr/local/lib64)
+else()
+    # On Linux, try both debug and release versions
+    find_library(CDS_LIB NAMES cds_d cds PATHS /usr/local/lib /usr/local/lib64)
+endif()
+
+if(NOT CDS_LIB)
+    message(FATAL_ERROR "CDS library not found. Please install libcds.")
+endif()
+
 include_directories(/usr/local/include)
+
 # Try to find spdlog first, if not found we'll use FetchContent
 find_package(spdlog QUIET)
 
