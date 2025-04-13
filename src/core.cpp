@@ -348,10 +348,11 @@ std::shared_ptr<Node> create_user_node(Database& db, const std::string& name,
 
 arrow::Result<bool> demo() {
   Logger::getInstance().setLevel(LogLevel::DEBUG);
-  auto db_path =
-      "./testdb_" +
-      std::to_string(
-          std::chrono::system_clock::now().time_since_epoch().count());
+  // auto db_path =
+  //     "./testdb_" +
+  //     std::to_string(
+  //         std::chrono::system_clock::now().time_since_epoch().count());
+  auto db_path = "testdb_1744518985889565";
   auto config = make_config()
                     .with_db_path(db_path)
                     .with_shard_capacity(4)

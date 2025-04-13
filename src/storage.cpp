@@ -8,7 +8,6 @@
 #include <parquet/file_reader.h>
 #include <uuid/uuid.h>
 
-#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -87,14 +86,9 @@ arrow::Result<std::string> Storage::write_shard(
 
 arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(
     const ShardMetadata& shard_metadata) {
-  // Check if metadata file exists
-
-  // Open parquet file
   ARROW_ASSIGN_OR_RAISE(
       auto input_file, arrow::io::ReadableFile::Open(shard_metadata.data_file));
 
-  // Read parquet file into table using the modern API that returns
-  // arrow::Result
   std::unique_ptr<parquet::arrow::FileReader> reader;
   ARROW_ASSIGN_OR_RAISE(reader, parquet::arrow::OpenFile(
                                     input_file, arrow::default_memory_pool()));
@@ -109,7 +103,6 @@ arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(
       shard_metadata.min_id, shard_metadata.max_id, shard_metadata.chunk_size,
       shard_metadata.schema_name, this->schema_registry);
 
-  // Create TableInfo for efficient chunk lookup
   TableInfo table_info(table);
 
   // Convert table rows back to nodes and add to shard
@@ -163,17 +156,14 @@ arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(
       node_data[column_name] = value_array;
     }
 
-    // Get the ID from the node data
     auto id_array =
         std::static_pointer_cast<arrow::Int64Array>(node_data["id"]);
     int64_t node_id = id_array->Value(0);
 
-    // Create the node
     node_data.erase("id");
     auto node =
         std::make_shared<Node>(node_id, shard_metadata.schema_name, node_data);
 
-    // Add node to shard
     ARROW_RETURN_NOT_OK(shard->add(node));
   }
 
@@ -184,9 +174,6 @@ arrow::Result<std::vector<Edge>> Storage::read_edges(
     const EdgeMetadata& edge_metadata) const {
   ARROW_ASSIGN_OR_RAISE(auto input_file,
                         arrow::io::ReadableFile::Open(edge_metadata.data_file));
-
-  // Read parquet file into table using the modern API that returns
-  // arrow::Result
   std::unique_ptr<parquet::arrow::FileReader> reader;
   ARROW_ASSIGN_OR_RAISE(reader, parquet::arrow::OpenFile(
                                     input_file, arrow::default_memory_pool()));
@@ -194,15 +181,59 @@ arrow::Result<std::vector<Edge>> Storage::read_edges(
   std::shared_ptr<arrow::Table> table;
   ARROW_RETURN_NOT_OK(reader->ReadTable(&table));
 
-  auto edges = std::make_shared<std::vector<Edge>>();
-  edges->reserve(table->num_rows());
+  std::vector<Edge> edges;
+  edges.reserve(table->num_rows());
   if (table->num_rows() != edge_metadata.record_count) {
     log_warn(
         "edges row count from metadata doesn't match the actual table size");
   }
+
+  TableInfo table_info(table);
+
+  // Get column indices
+  const int id_col_idx = 0;
+  const int source_id_col_idx = 1;
+  const int target_id_col_idx = 2;
+  const int created_ts_col_idx = 3;
+
   for (int64_t row_idx = 0; row_idx < table->num_rows(); ++row_idx) {
-    // todo
+    auto id_chunk_info = table_info.get_chunk_info(id_col_idx, row_idx);
+    auto source_id_chunk_info =
+        table_info.get_chunk_info(source_id_col_idx, row_idx);
+    auto target_id_chunk_info =
+        table_info.get_chunk_info(target_id_col_idx, row_idx);
+    auto created_ts_chunk_info =
+        table_info.get_chunk_info(created_ts_col_idx, row_idx);
+
+    // Get chunks
+    auto id_chunk = std::static_pointer_cast<arrow::Int64Array>(
+        table->column(id_col_idx)->chunk(id_chunk_info.chunk_index));
+    auto source_id_chunk = std::static_pointer_cast<arrow::Int64Array>(
+        table->column(source_id_col_idx)
+            ->chunk(source_id_chunk_info.chunk_index));
+    auto target_id_chunk = std::static_pointer_cast<arrow::Int64Array>(
+        table->column(target_id_col_idx)
+            ->chunk(target_id_chunk_info.chunk_index));
+    auto created_ts_chunk = std::static_pointer_cast<arrow::Int64Array>(
+        table->column(created_ts_col_idx)
+            ->chunk(created_ts_chunk_info.chunk_index));
+
+    // Extract values
+    int64_t id = id_chunk->Value(id_chunk_info.offset_in_chunk);
+    int64_t source_id =
+        source_id_chunk->Value(source_id_chunk_info.offset_in_chunk);
+    int64_t target_id =
+        target_id_chunk->Value(target_id_chunk_info.offset_in_chunk);
+    int64_t created_ts =
+        created_ts_chunk->Value(created_ts_chunk_info.offset_in_chunk);
+
+    edges.emplace_back(
+        id, source_id, target_id, edge_metadata.edge_type,
+        std::unordered_map<std::string, std::shared_ptr<arrow::Array>>(),
+        created_ts);
   }
+
+  return edges;
 }
 
 }  // namespace tundradb

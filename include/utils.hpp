@@ -6,7 +6,6 @@
 #include <uuid/uuid.h>
 
 #include <chrono>
-#include <iostream>
 #include <random>
 #include <source_location>
 #include <string>
@@ -39,6 +38,7 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
   if (nodes.empty()) {
     // Return empty table with the given schema
     std::vector<std::shared_ptr<arrow::ChunkedArray>> empty_columns;
+    empty_columns.reserve(final_schema->num_fields());
     for (int i = 0; i < final_schema->num_fields(); i++) {
       empty_columns.push_back(std::make_shared<arrow::ChunkedArray>(
           std::vector<std::shared_ptr<arrow::Array>>{}));
@@ -140,6 +140,7 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
 
   // Create chunked arrays for each field
   std::vector<std::shared_ptr<arrow::ChunkedArray>> chunked_arrays;
+  chunked_arrays.reserve(final_schema->num_fields());
   for (int i = 0; i < final_schema->num_fields(); i++) {
     chunked_arrays.push_back(
         std::make_shared<arrow::ChunkedArray>(chunks_per_field[i]));

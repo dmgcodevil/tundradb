@@ -2,16 +2,9 @@
 #define STORAGE_HPP
 
 #include <arrow/result.h>
-// #include <parquet/arrow/reader.h>
-// #include <parquet/arrow/writer.h>
-// #include <parquet/file_reader.h>
 
 #include <filesystem>
-#include <fstream>
-// #include <nlohmann/json.hpp>
 #include <string>
-// #include <unordered_map>
-// #include <vector>
 
 #include "edge.hpp"
 #include "metadata.hpp"

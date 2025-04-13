@@ -7,7 +7,6 @@
 #include <iostream>
 #include <nlohmann/json.hpp>
 #include <string>
-#include <unordered_map>
 
 #include "logger.hpp"
 #include "utils.hpp"
@@ -183,7 +182,7 @@ arrow::Result<Metadata> MetadataManager::load_current_metadata() {
       return db_info_result.status();
     }
 
-    DatabaseInfo db_info = db_info_result.ValueOrDie();
+    const DatabaseInfo &db_info = db_info_result.ValueOrDie();
     if (db_info.metadata_location.empty()) {
       log_info(
           "No metadata location in database info - starting with fresh "

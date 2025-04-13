@@ -49,6 +49,8 @@ class SnapshotManager {
 
   Snapshot *current_snapshot();
 
+  std::shared_ptr<Manifest> get_manifest();
+
  private:
   // Snapshot *snapshot = nullptr;
   std::shared_ptr<MetadataManager> metadata_manager;

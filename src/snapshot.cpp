@@ -42,6 +42,7 @@ arrow::Result<bool> SnapshotManager::initialize() {
       this->manifest = std::make_shared<Manifest>(manifest_result.ValueOrDie());
       log_info("Manifest has been loaded");
       log_info(this->manifest->toString());
+      edge_store->set_id_seq(manifest->edge_id_seq);
 
       // Group shards by schema name
       std::unordered_map<std::string, std::vector<ShardMetadata>>
@@ -71,7 +72,7 @@ arrow::Result<bool> SnapshotManager::initialize() {
                 .status();  // Return the error instead of continuing
           }
 
-          auto shard = shard_result.ValueOrDie();
+          const auto &shard = shard_result.ValueOrDie();
           log_debug("Adding shard from snapshot: " + shard_metadata.toString());
           shard->set_updated(false);
 
@@ -82,6 +83,18 @@ arrow::Result<bool> SnapshotManager::initialize() {
                 .status();  // Return the error instead of continuing
           }
         }
+      }
+      log_info("Load edges");
+      for (const auto &edge_metadata : this->manifest->edges) {
+        auto edges = storage->read_edges(edge_metadata).ValueOrDie();
+        for (const auto &edge : edges) {
+          edge_store->add(std::make_shared<Edge>(edge)).ValueOrDie();
+        }
+      }
+      log_info("Edges have been loaded");
+      for (const auto &edge_type : edge_store->get_edge_types()) {
+        log_debug("edges type '" + edge_type + "' size = " +
+                  std::to_string(edge_store->get_count_by_type(edge_type)));
       }
     } else {
       log_info("No current snapshot exists");
@@ -108,14 +121,6 @@ arrow::Result<Snapshot> SnapshotManager::commit() {
   if (this->metadata.get_current_snapshot() != nullptr) {
     new_snapshot.parent_id = this->metadata.get_current_snapshot()->id;
   }
-
-  // Create new manifest or load existing one
-  // Manifest current_manifest = this->manifest;
-  // if (this->snapshot != nullptr) {
-  //   current_manifest =
-  //       read_json_file<Manifest>(this->snapshot->manifest_location)
-  //           .ValueOrDie();
-  // }
 
   // Track shard metadata from current manifest
   std::unordered_map<std::string, std::unordered_map<int64_t, ShardMetadata>>
@@ -222,4 +227,9 @@ arrow::Result<Snapshot> SnapshotManager::commit() {
 Snapshot *SnapshotManager::current_snapshot() {
   return this->metadata.get_current_snapshot();
 }
+
+std::shared_ptr<Manifest> SnapshotManager::get_manifest() {
+  return this->manifest;
+}
+
 }  // namespace tundradb

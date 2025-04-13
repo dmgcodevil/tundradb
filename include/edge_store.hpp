@@ -2,9 +2,7 @@
 #define EDGE_STORE_HPP
 
 #include <arrow/api.h>
-#include <tbb/concurrent_hash_map.h>
 
-#include <mutex>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -55,7 +53,6 @@ class EdgeStore {
       : edge_id_counter(init_edge_id_counter), chunk_size(chunk_size) {}
 
   ~EdgeStore() {
-    // Clear all concurrent containers to ensure proper cleanup
     edges.clear();
     edges_by_type.clear();
     outgoing_edges.clear();
@@ -109,6 +106,11 @@ class EdgeStore {
   size_t size() const { return edges.size(); }
 
   bool empty() const { return edges.empty(); }
+
+  // todo temporary solution, add initialize instead
+  void set_id_seq(int64_t v) {
+    edge_id_counter.store(v, std::memory_order_relaxed);
+  }
 };
 }  // namespace tundradb
 
