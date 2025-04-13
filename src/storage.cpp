@@ -17,6 +17,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "logger.hpp"
 #include "metadata.hpp"
 #include "table_info.hpp"
 
@@ -38,53 +39,50 @@ arrow::Result<bool> Storage::initialize() {
   }
 }
 
-arrow::Result<std::string> Storage::write_shard(
-    const std::shared_ptr<Shard>& shard) {
-  if (!shard) {
-    return arrow::Status::Invalid("Cannot write null shard");
-  }
-
-  // Get the schema name from the shard
-  const std::string& schema_name = shard->schema_name;
-
-  // Generate UUID for data file
+arrow::Result<std::string> Storage::write_table(
+    const std::shared_ptr<arrow::Table>& table, int64_t chunk_size,
+    const std::string& prefix_path) const {
   uuid_t uuid;
   uuid_generate(uuid);
   char uuid_str[37];
   uuid_unparse_lower(uuid, uuid_str);
-
-  // Create schema-specific directory path
-  std::string schema_dir = data_directory + "/" + schema_name;
-
-  // Create schema directory if needed
+  auto folder = data_directory;
+  if (!prefix_path.empty()) {
+    folder = folder + "/" + prefix_path;
+  }
   try {
-    std::filesystem::create_directories(schema_dir);
+    std::filesystem::create_directories(folder);
   } catch (const std::filesystem::filesystem_error& e) {
     return arrow::Status::IOError("Failed to create schema directory: ",
                                   e.what());
   }
 
-  // Create data file path using the new folder structure
-  std::string data_file_path = schema_dir + "/" + uuid_str + ".parquet";
+  std::string file_path = folder + "/" + uuid_str + ".parquet";
 
-  // Get the shard's table
-  ARROW_ASSIGN_OR_RAISE(auto table, shard->get_table());
-
-  // Open output file
+  log_debug("writing a table to parquet. path=" + file_path);
   ARROW_ASSIGN_OR_RAISE(auto output_file,
-                        arrow::io::FileOutputStream::Open(data_file_path));
-
-  // Write table to parquet
+                        arrow::io::FileOutputStream::Open(file_path));
   auto write_options = parquet::ArrowWriterProperties::Builder().build();
   auto parquet_props = parquet::WriterProperties::Builder()
                            .compression(parquet::Compression::SNAPPY)
                            ->build();
 
   ARROW_RETURN_NOT_OK(parquet::arrow::WriteTable(
-      *table, arrow::default_memory_pool(), output_file, shard->capacity,
+      *table, arrow::default_memory_pool(), output_file, chunk_size,
       parquet_props, write_options));
+  return file_path;
+}
 
-  return data_file_path;
+arrow::Result<std::string> Storage::write_shard(
+    const std::shared_ptr<Shard>& shard) const {
+  if (!shard) {
+    return arrow::Status::Invalid("Cannot write null shard");
+  }
+  ARROW_ASSIGN_OR_RAISE(auto table, shard->get_table());
+  const std::string& schema_name = shard->schema_name;
+
+  return write_table(table, static_cast<int64_t>(shard->chunk_size),
+                     schema_name);
 }
 
 arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(
@@ -183,7 +181,7 @@ arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(
 }
 
 arrow::Result<std::vector<Edge>> Storage::read_edges(
-    const EdgeMetadata& edge_metadata) {
+    const EdgeMetadata& edge_metadata) const {
   ARROW_ASSIGN_OR_RAISE(auto input_file,
                         arrow::io::ReadableFile::Open(edge_metadata.data_file));
 
@@ -197,7 +195,13 @@ arrow::Result<std::vector<Edge>> Storage::read_edges(
   ARROW_RETURN_NOT_OK(reader->ReadTable(&table));
 
   auto edges = std::make_shared<std::vector<Edge>>();
+  edges->reserve(table->num_rows());
+  if (table->num_rows() != edge_metadata.record_count) {
+    log_warn(
+        "edges row count from metadata doesn't match the actual table size");
+  }
   for (int64_t row_idx = 0; row_idx < table->num_rows(); ++row_idx) {
+    // todo
   }
 }
 

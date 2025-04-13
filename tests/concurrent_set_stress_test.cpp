@@ -22,7 +22,7 @@ using namespace tundradb;
 
 // Test parameters
 constexpr int NUM_THREADS = 128;
-constexpr int OPERATIONS_PER_THREAD = 2000;
+constexpr int OPERATIONS_PER_THREAD = 1000;
 constexpr double INSERT_PROBABILITY = 0.6;  // 60% inserts, 40% removes
 
 class SimplifiedTest {

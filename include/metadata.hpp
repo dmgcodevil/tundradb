@@ -21,8 +21,6 @@ struct Snapshot {
   int64_t parent_id = 0;
   std::string manifest_location;
   int64_t timestamp_ms = 0;
-  // int64_t node_id_counter; // todo
-  // int64_t edge_id_counter; // todo
 
   NLOHMANN_DEFINE_TYPE_INTRUSIVE(Snapshot, id, parent_id, manifest_location,
                                  timestamp_ms);
@@ -144,23 +142,21 @@ struct ShardMetadata {
 };
 
 struct EdgeMetadata {
-  std::string id;
   std::string edge_type;
   std::string data_file;
   int64_t record_count = 0;
-  int64_t chunk_size = 0;
-  int64_t id_seq = 0;
-  int64_t timestamp_ms = 0;
 
   NLOHMANN_DEFINE_TYPE_INTRUSIVE(EdgeMetadata, edge_type, data_file,
-                                 record_count, timestamp_ms);
+                                 record_count);
 };
 
 struct Manifest {
   std::string id;
   std::vector<ShardMetadata> shards;
-  std::string edges_file;
-  NLOHMANN_DEFINE_TYPE_INTRUSIVE(Manifest, id, shards);
+  std::vector<EdgeMetadata> edges;
+  // todo int64_t node_id_seq;
+  int64_t edge_id_seq;
+  NLOHMANN_DEFINE_TYPE_INTRUSIVE(Manifest, id, shards, edges, edge_id_seq);
 
   std::string toString() const {
     std::stringstream ss;

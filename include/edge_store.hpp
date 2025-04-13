@@ -65,8 +65,10 @@ class EdgeStore {
     tables.clear();
   }
 
+  int64_t get_edge_id_counter() const { return edge_id_counter; }
+
   arrow::Result<std::shared_ptr<Edge>> create_edge(
-      int64_t source_id, int64_t target_id, const std::string &type,
+      int64_t source_id, const std::string &type, int64_t target_id,
       std::unordered_map<std::string, std::shared_ptr<arrow::Array>>
           properties = {});
 
@@ -77,6 +79,14 @@ class EdgeStore {
   arrow::Result<std::shared_ptr<Edge>> get(int64_t edge_id) const;
 
   std::vector<std::shared_ptr<Edge>> get(const std::set<int64_t> &ids) const;
+
+  int64_t get_count_by_type(const std::string &type) const {
+    auto res = get_by_type(type);
+    if (res.ok()) {
+      return res.ValueOrDie().size();
+    }
+    return 0;
+  }
 
   arrow::Result<std::vector<std::shared_ptr<Edge>>> get_outgoing_edges(
       int64_t id, const std::string &type = "") const;

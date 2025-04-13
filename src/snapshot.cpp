@@ -20,7 +20,7 @@ arrow::Result<bool> SnapshotManager::initialize() {
   try {
     ARROW_ASSIGN_OR_RAISE(this->metadata,
                           metadata_manager->load_current_metadata());
-    log_info("Metadata loaded.");
+    log_info("Metadata has been loaded.");
     log_info("Metadata current snapshot index=" +
              std::to_string(this->metadata.current_snapshot_index));
     log_info("Metadata current snapshots size=" +
@@ -28,25 +28,20 @@ arrow::Result<bool> SnapshotManager::initialize() {
 
     // Set current snapshot if it exists
     if (this->metadata.get_current_snapshot() != nullptr) {
-      // this->snapshot = this->metadata.get_current_snapshot();
       log_info("Current snapshot id = " +
                std::to_string(this->metadata.get_current_snapshot()->id));
 
       log_info("Load the manifest and initialize shards");
-      // Load the manifest to initialize shards
       auto manifest_result = read_json_file<Manifest>(
           this->metadata.get_current_snapshot()->manifest_location);
       if (!manifest_result.ok()) {
         log_error("Failed to load manifest: " +
                   manifest_result.status().ToString());
-        return manifest_result
-            .status();  // Return the error instead of continuing
+        return manifest_result.status();
       }
-      // Manifest manifest = manifest_result.ValueOrDie();
       this->manifest = std::make_shared<Manifest>(manifest_result.ValueOrDie());
-      log_info("Manifest loaded. shards count=" +
-               std::to_string(this->manifest->shards.size()) +
-               ", id=" + this->manifest->id);
+      log_info("Manifest has been loaded");
+      log_info(this->manifest->toString());
 
       // Group shards by schema name
       std::unordered_map<std::string, std::vector<ShardMetadata>>
@@ -125,15 +120,40 @@ arrow::Result<Snapshot> SnapshotManager::commit() {
   // Track shard metadata from current manifest
   std::unordered_map<std::string, std::unordered_map<int64_t, ShardMetadata>>
       curr_shard_metadata;
+  std::unordered_map<std::string, EdgeMetadata> curr_edge_metadata;
+
   if (this->manifest != nullptr) {
     for (const auto &shard : this->manifest->shards) {
       curr_shard_metadata[shard.schema_name][shard.id] = shard;
+    }
+    for (const auto &edge : this->manifest->edges) {
+      curr_edge_metadata[edge.edge_type] = edge;
     }
   }
 
   // Create new manifest
   Manifest new_manifest;
   new_manifest.id = generate_uuid();
+  new_manifest.edge_id_seq = edge_store->get_edge_id_counter();
+
+  for (const auto &edge_type : edge_store->get_edge_types()) {
+    if (curr_edge_metadata.contains(edge_type) &&
+        curr_edge_metadata[edge_type].record_count ==
+            edge_store->get_count_by_type(edge_type)) {
+      log_debug("edges type '" + edge_type + "' has not changed");
+      new_manifest.edges.push_back(curr_edge_metadata[edge_type]);
+    } else {
+      log_debug("store edges type '" + edge_type + "'");
+      EdgeMetadata new_edge_metadata;
+      auto table = edge_store->get_table(edge_type).ValueOrDie();
+      new_edge_metadata.edge_type = edge_type;
+      new_edge_metadata.data_file =
+          storage->write_table(table, edge_store->get_chunk_size(), "edges")
+              .ValueOrDie();
+      new_edge_metadata.record_count = edge_store->get_count_by_type(edge_type);
+      new_manifest.edges.push_back(new_edge_metadata);
+    }
+  }
 
   // Go through all schemas and shards
   for (const auto &schema_name : this->shard_manager->get_schema_names()) {

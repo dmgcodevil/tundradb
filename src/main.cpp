@@ -10,7 +10,7 @@ using namespace std::string_literals;
 using namespace tundradb;
 
 int main() {
-  demo();
+  demo().ValueOrDie();
 
   return 0;
 }

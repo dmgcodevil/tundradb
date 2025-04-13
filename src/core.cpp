@@ -6,6 +6,8 @@
 #include <memory>
 #include <thread>
 #include <vector>
+
+#include "logger.hpp"
 namespace fs = std::filesystem;
 
 namespace tundradb {
@@ -345,8 +347,13 @@ std::shared_ptr<Node> create_user_node(Database& db, const std::string& name,
 }
 
 arrow::Result<bool> demo() {
+  Logger::getInstance().setLevel(LogLevel::DEBUG);
+  auto db_path =
+      "./testdb_" +
+      std::to_string(
+          std::chrono::system_clock::now().time_since_epoch().count());
   auto config = make_config()
-                    .with_db_path("./testdb")
+                    .with_db_path(db_path)
                     .with_shard_capacity(4)
                     .with_chunk_size(2)
                     .build();
@@ -369,10 +376,15 @@ arrow::Result<bool> demo() {
             << std::to_string(db.get_shard_count("users").ValueOrDie())
             << std::endl;
   print_table(db.get_table("users").ValueOrDie());
-
+  std::cout << "connect 1 and 2" << std::endl;
+  db.connect(1, "friend", 2).ValueOrDie();
+  std::cout << "friend edge count="
+            << db.get_edge_store()->get_count_by_type("friend") << std::endl;
+  std::cout << "Edges" << std::endl;
+  print_table(db.get_edge_store()->get_table("friend").ValueOrDie());
   auto snap = db.create_snapshot().ValueOrDie();
   db.create_snapshot().ValueOrDie();
-  db.create_snapshot().ValueOrDie();
+  // db.create_snapshot().ValueOrDie();
 
   return true;
 }

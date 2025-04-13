@@ -647,6 +647,7 @@ class Database {
   explicit Database(const DatabaseConfig &config = DatabaseConfig())
       : schema_registry(std::make_shared<SchemaRegistry>()),
         shard_manager(std::make_shared<ShardManager>(schema_registry, config)),
+        edge_store(std::make_shared<EdgeStore>(0, config.get_chunk_size())),
         id_counter(0),
         config(config),
         persistence_enabled(config.is_persistence_enabled()) {
@@ -750,8 +751,21 @@ class Database {
     return shard_manager->remove_node(schema_name, node_id);
   }
 
+  arrow::Result<bool> connect(int64_t source_id, const std::string &type,
+                              int64_t target_id) {
+    auto edge =
+        edge_store->create_edge(source_id, type, target_id).ValueOrDie();
+    ARROW_RETURN_NOT_OK(edge_store->add(edge));
+    return true;
+  }
+
   arrow::Result<bool> compact(const std::string &schema_name) {
     return shard_manager->compact(schema_name);
+  }
+
+  // internal api
+  [[nodiscard]] std::shared_ptr<EdgeStore> get_edge_store() const {
+    return edge_store;
   }
 
   // Compact all schemas in the database

@@ -4,7 +4,7 @@
 namespace tundradb {
 
 arrow::Result<std::shared_ptr<Edge>> EdgeStore::create_edge(
-    int64_t source_id, int64_t target_id, const std::string& type,
+    int64_t source_id, const std::string& type, int64_t target_id,
     std::unordered_map<std::string, std::shared_ptr<arrow::Array>> properties) {
   int64_t id = edge_id_counter.fetch_add(1, std::memory_order_acq_rel);
   return std::make_shared<Edge>(id, source_id, target_id, type, properties,
@@ -225,7 +225,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::generate_table(
   auto id_builder = arrow::Int64Builder();
   auto source_id_builder = arrow::Int64Builder();
   auto target_id_builder = arrow::Int64Builder();
-  auto type_builder = arrow::StringBuilder();
+  // auto type_builder = arrow::StringBuilder();
   auto created_ts_builder = arrow::Int64Builder();
 
   // Process edges in chunks. todo make configurable
@@ -234,7 +234,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::generate_table(
   std::vector<std::shared_ptr<arrow::Array>> id_chunks;
   std::vector<std::shared_ptr<arrow::Array>> source_id_chunks;
   std::vector<std::shared_ptr<arrow::Array>> target_id_chunks;
-  std::vector<std::shared_ptr<arrow::Array>> type_chunks;
+  // std::vector<std::shared_ptr<arrow::Array>> type_chunks;
   std::vector<std::shared_ptr<arrow::Array>> created_ts_chunks;
 
   size_t current_chunk_size = 0;
@@ -242,7 +242,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::generate_table(
     ARROW_RETURN_NOT_OK(id_builder.Append(edge->get_id()));
     ARROW_RETURN_NOT_OK(source_id_builder.Append(edge->get_source_id()));
     ARROW_RETURN_NOT_OK(target_id_builder.Append(edge->get_target_id()));
-    ARROW_RETURN_NOT_OK(type_builder.Append(edge->get_type()));
+    // ARROW_RETURN_NOT_OK(type_builder.Append(edge->get_type()));
     ARROW_RETURN_NOT_OK(created_ts_builder.Append(edge->get_created_ts()));
 
     current_chunk_size++;
@@ -257,20 +257,20 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::generate_table(
       ARROW_RETURN_NOT_OK(id_builder.Finish(&id_array));
       ARROW_RETURN_NOT_OK(source_id_builder.Finish(&source_id_array));
       ARROW_RETURN_NOT_OK(target_id_builder.Finish(&target_id_array));
-      ARROW_RETURN_NOT_OK(type_builder.Finish(&type_array));
+      // ARROW_RETURN_NOT_OK(type_builder.Finish(&type_array));
       ARROW_RETURN_NOT_OK(created_ts_builder.Finish(&created_ts_array));
 
       id_chunks.push_back(id_array);
       source_id_chunks.push_back(source_id_array);
       target_id_chunks.push_back(target_id_array);
-      type_chunks.push_back(type_array);
+      // type_chunks.push_back(type_array);
       created_ts_chunks.push_back(created_ts_array);
 
       // Reset builders for next chunk
       id_builder.Reset();
       source_id_builder.Reset();
       target_id_builder.Reset();
-      type_builder.Reset();
+      // type_builder.Reset();
       created_ts_builder.Reset();
 
       current_chunk_size = 0;
@@ -282,19 +282,19 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::generate_table(
     std::shared_ptr<arrow::Array> id_array;
     std::shared_ptr<arrow::Array> source_id_array;
     std::shared_ptr<arrow::Array> target_id_array;
-    std::shared_ptr<arrow::Array> type_array;
+    // std::shared_ptr<arrow::Array> type_array;
     std::shared_ptr<arrow::Array> created_ts_array;
 
     ARROW_RETURN_NOT_OK(id_builder.Finish(&id_array));
     ARROW_RETURN_NOT_OK(source_id_builder.Finish(&source_id_array));
     ARROW_RETURN_NOT_OK(target_id_builder.Finish(&target_id_array));
-    ARROW_RETURN_NOT_OK(type_builder.Finish(&type_array));
+    // ARROW_RETURN_NOT_OK(type_builder.Finish(&type_array));
     ARROW_RETURN_NOT_OK(created_ts_builder.Finish(&created_ts_array));
 
     id_chunks.push_back(id_array);
     source_id_chunks.push_back(source_id_array);
     target_id_chunks.push_back(target_id_array);
-    type_chunks.push_back(type_array);
+    // type_chunks.push_back(type_array);
     created_ts_chunks.push_back(created_ts_array);
   }
 
@@ -304,7 +304,8 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::generate_table(
       std::make_shared<arrow::ChunkedArray>(source_id_chunks);
   auto target_id_chunked_array =
       std::make_shared<arrow::ChunkedArray>(target_id_chunks);
-  auto type_chunked_array = std::make_shared<arrow::ChunkedArray>(type_chunks);
+  // auto type_chunked_array =
+  // std::make_shared<arrow::ChunkedArray>(type_chunks);
   auto created_ts_chunked_array =
       std::make_shared<arrow::ChunkedArray>(created_ts_chunks);
 
@@ -313,15 +314,15 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::generate_table(
       arrow::field("id", arrow::int64()),
       arrow::field("source_id", arrow::int64()),
       arrow::field("target_id", arrow::int64()),
-      arrow::field("type", arrow::utf8()),
+      // arrow::field("type", arrow::utf8()),
       arrow::field("created_ts", arrow::int64())};
   static auto schema = arrow::schema(fields);
 
   // Create and return the table
-  return arrow::Table::Make(
-      schema,
-      {id_chunked_array, source_id_chunked_array, target_id_chunked_array,
-       type_chunked_array, created_ts_chunked_array});
+  return arrow::Table::Make(schema, {id_chunked_array, source_id_chunked_array,
+                                     target_id_chunked_array,
+                                     // type_chunked_array,
+                                     created_ts_chunked_array});
 }
 
 arrow::Result<int64_t> EdgeStore::get_version_snapshot(

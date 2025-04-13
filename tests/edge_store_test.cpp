@@ -16,7 +16,7 @@ class EdgeStoreTest : public ::testing::Test {
 
 TEST_F(EdgeStoreTest, CreateAndAddEdge) {
   // Create an edge
-  auto edge_res = store->create_edge(1, 2, "test_type", {});
+  auto edge_res = store->create_edge(1, "test_type", 2, {});
   ASSERT_TRUE(edge_res.ok());
   auto edge = edge_res.ValueOrDie();
 
@@ -37,9 +37,9 @@ TEST_F(EdgeStoreTest, CreateAndAddEdge) {
 
 TEST_F(EdgeStoreTest, GetOutgoingAndIncomingEdges) {
   // Create and add multiple edges
-  auto edge1_res = store->create_edge(1, 2, "test_type", {});
-  auto edge2_res = store->create_edge(1, 3, "test_type", {});
-  auto edge3_res = store->create_edge(2, 1, "test_type", {});
+  auto edge1_res = store->create_edge(1, "test_type", 2, {});
+  auto edge2_res = store->create_edge(1, "test_type", 3, {});
+  auto edge3_res = store->create_edge(2, "test_type", 1, {});
 
   ASSERT_TRUE(store->add(edge1_res.ValueOrDie()).ok());
   ASSERT_TRUE(store->add(edge2_res.ValueOrDie()).ok());
@@ -60,8 +60,8 @@ TEST_F(EdgeStoreTest, GetOutgoingAndIncomingEdges) {
 
 TEST_F(EdgeStoreTest, GetByType) {
   // Create and add edges of different types
-  auto edge1_res = store->create_edge(1, 2, "type1", {});
-  auto edge2_res = store->create_edge(2, 3, "type2", {});
+  auto edge1_res = store->create_edge(1, "type1", 2, {});
+  auto edge2_res = store->create_edge(2, "type2", 3, {});
 
   ASSERT_TRUE(store->add(edge1_res.ValueOrDie()).ok());
   ASSERT_TRUE(store->add(edge2_res.ValueOrDie()).ok());
@@ -80,7 +80,7 @@ TEST_F(EdgeStoreTest, GetByType) {
 
 TEST_F(EdgeStoreTest, RemoveEdge) {
   // Create and add an edge
-  auto edge_res = store->create_edge(1, 2, "test_type", {});
+  auto edge_res = store->create_edge(1, "test_type", 2, {});
   ASSERT_TRUE(edge_res.ok());
   auto edge = edge_res.ValueOrDie();
   ASSERT_TRUE(store->add(edge).ok());
@@ -96,8 +96,8 @@ TEST_F(EdgeStoreTest, RemoveEdge) {
 
 TEST_F(EdgeStoreTest, GetEdgeTypes) {
   // Create and add edges of different types
-  auto edge1_res = store->create_edge(1, 2, "type1", {});
-  auto edge2_res = store->create_edge(2, 3, "type2", {});
+  auto edge1_res = store->create_edge(1, "type1", 2, {});
+  auto edge2_res = store->create_edge(2, "type2", 3, {});
 
   ASSERT_TRUE(store->add(edge1_res.ValueOrDie()).ok());
   ASSERT_TRUE(store->add(edge2_res.ValueOrDie()).ok());
@@ -111,9 +111,9 @@ TEST_F(EdgeStoreTest, GetEdgeTypes) {
 
 TEST_F(EdgeStoreTest, GetTable) {
   // Create and add multiple edges
-  auto edge1_res = store->create_edge(1, 2, "test_type", {});
-  auto edge2_res = store->create_edge(2, 3, "test_type", {});
-  auto edge3_res = store->create_edge(3, 1, "test_type", {});
+  auto edge1_res = store->create_edge(1, "test_type", 2, {});
+  auto edge2_res = store->create_edge(2, "test_type", 3, {});
+  auto edge3_res = store->create_edge(3, "test_type", 1, {});
 
   ASSERT_TRUE(store->add(edge1_res.ValueOrDie()).ok());
   ASSERT_TRUE(store->add(edge2_res.ValueOrDie()).ok());
@@ -126,7 +126,7 @@ TEST_F(EdgeStoreTest, GetTable) {
 
   // Verify table structure
   ASSERT_EQ(table->num_columns(),
-            5);  // id, source_id, target_id, type, created_ts
+            4);  // id, source_id, target_id, created_ts
   ASSERT_EQ(table->num_rows(), 3);
 
   // Verify data
@@ -136,20 +136,17 @@ TEST_F(EdgeStoreTest, GetTable) {
       std::static_pointer_cast<arrow::Int64Array>(table->column(1)->chunk(0));
   auto target_id_array =
       std::static_pointer_cast<arrow::Int64Array>(table->column(2)->chunk(0));
-  auto type_array =
-      std::static_pointer_cast<arrow::StringArray>(table->column(3)->chunk(0));
 
   // Check first row
   ASSERT_EQ(id_array->Value(0), edge1_res.ValueOrDie()->get_id());
   ASSERT_EQ(source_id_array->Value(0), 1);
   ASSERT_EQ(target_id_array->Value(0), 2);
-  ASSERT_EQ(type_array->GetString(0), "test_type");
 }
 
 TEST_F(EdgeStoreTest, GetTableWithEmptyType) {
   // Create and add edges of different types
-  auto edge1_res = store->create_edge(1, 2, "type1", {});
-  auto edge2_res = store->create_edge(2, 3, "type2", {});
+  auto edge1_res = store->create_edge(1, "type1", 2, {});
+  auto edge2_res = store->create_edge(2, "type2", 3, {});
 
   ASSERT_TRUE(store->add(edge1_res.ValueOrDie()).ok());
   ASSERT_TRUE(store->add(edge2_res.ValueOrDie()).ok());
@@ -174,7 +171,7 @@ TEST_F(EdgeStoreTest, ConcurrentAccess) {
   for (int i = 0; i < NUM_THREADS; i++) {
     threads.emplace_back([this, i]() {
       for (int j = 0; j < OPERATIONS_PER_THREAD; j++) {
-        auto edge_res = store->create_edge(i, j, "test_type", {});
+        auto edge_res = store->create_edge(i, "test_type", j, {});
         ASSERT_TRUE(edge_res.ok());
         ASSERT_TRUE(store->add(edge_res.ValueOrDie()).ok());
       }

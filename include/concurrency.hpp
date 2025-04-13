@@ -2,9 +2,10 @@
 #define CONCURRENCY_HPP
 
 #include <tbb/concurrent_hash_map.h>
+
 #include <memory>
-#include <set>
 #include <mutex>
+#include <set>
 #include <shared_mutex>
 #include <variant>
 
@@ -22,7 +23,7 @@ template <typename T>
 class ConcurrentSet {
  private:
   tbb::concurrent_hash_map<T, std::monostate> data_;
-  mutable std::shared_mutex mutex_; // Read-write mutex for synchronization
+  mutable std::shared_mutex mutex_;  // Read-write mutex for synchronization
 
  public:
   ConcurrentSet() = default;
@@ -60,7 +61,7 @@ class ConcurrentSet {
    * 3. Returns true if removed, false if not found
    */
   bool remove(const T& t) {
-    std::unique_lock<std::shared_mutex> lock(mutex_); // Write lock
+    std::unique_lock<std::shared_mutex> lock(mutex_);  // Write lock
     return data_.erase(t);
   }
 
@@ -70,9 +71,7 @@ class ConcurrentSet {
    * Thread-safe operation that returns
    * the current count of elements
    */
-  size_t size() const {
-    return data_.size();
-  }
+  size_t size() const { return data_.size(); }
 
   /**
    * @brief Get a snapshot of all elements
@@ -84,14 +83,14 @@ class ConcurrentSet {
    * 4. Returns shared pointer to snapshot
    */
   std::shared_ptr<std::set<T>> get_all() const {
-    std::shared_lock<std::shared_mutex> lock(mutex_); // Read lock
+    std::shared_lock<std::shared_mutex> lock(mutex_);  // Read lock
     auto snapshot = std::make_shared<std::set<T>>();
-    
+
     // Iterate over the map while holding the read lock
     for (auto it = data_.begin(); it != data_.end(); ++it) {
       snapshot->insert(it->first);
     }
-    
+
     return snapshot;
   }
 
@@ -103,7 +102,7 @@ class ConcurrentSet {
    * 2. Removes all elements
    */
   void clear() {
-    std::unique_lock<std::shared_mutex> lock(mutex_); // Write lock
+    std::unique_lock<std::shared_mutex> lock(mutex_);  // Write lock
     data_.clear();
   }
 };
