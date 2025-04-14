@@ -1,18 +1,24 @@
-#ifndef CORE_HPP
-#define CORE_HPP
+#pragma once
 
 #include <arrow/api.h>
 #include <arrow/compute/api.h>
+#include <arrow/io/api.h>
 #include <arrow/result.h>
 #include <arrow/table.h>
 #include <arrow/type.h>
+#include <parquet/arrow/reader.h>
+#include <parquet/arrow/writer.h>
+#include <spdlog/spdlog.h>
+#include <tbb/concurrent_map.h>
+#include <tbb/concurrent_vector.h>
 
-#include <algorithm>
-#include <chrono>
+#include <atomic>
 #include <iostream>
+#include <memory>
 #include <memory_resource>
+#include <mutex>
 #include <nlohmann/json.hpp>
-#include <set>
+#include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -25,7 +31,6 @@
 #include "node.hpp"
 #include "storage.hpp"
 #include "utils.hpp"
-using namespace std::string_literals;
 
 namespace tundradb {
 
@@ -35,32 +40,7 @@ class Shard;
 class ShardManager;
 class MetadataManager;
 class Storage;
-
-class SnapshotManager {
- public:
-  explicit SnapshotManager(std::shared_ptr<MetadataManager> metadata_manager,
-                           std::shared_ptr<Storage> storage,
-                           std::shared_ptr<ShardManager> shard_manager,
-                           std::shared_ptr<EdgeStore> edge_store);
-
-  arrow::Result<bool> initialize();
-
-  arrow::Result<Snapshot> commit();
-
-  Snapshot *current_snapshot();
-
-  std::shared_ptr<Manifest> get_manifest();
-
- private:
-  // Snapshot *snapshot = nullptr;
-  std::shared_ptr<MetadataManager> metadata_manager;
-  std::shared_ptr<Storage> storage;
-  std::shared_ptr<ShardManager> shard_manager;
-  std::shared_ptr<EdgeStore> edge_store;
-  Metadata metadata;
-  std::shared_ptr<Manifest> manifest;
-  std::shared_ptr<EdgeMetadata> edge_metada;
-};
+class NodeManager;
 
 // Schema registry class for managing node schemas
 class SchemaRegistry {
@@ -103,6 +83,89 @@ class SchemaRegistry {
   }
 };
 
+// NodeManager class for managing node creation and ID assignment
+class NodeManager {
+ public:
+  NodeManager() = default;
+
+  arrow::Result<int64_t> create_node(
+      const std::string &schema_name,
+      std::unordered_map<std::string, std::shared_ptr<arrow::Array>> &data,
+      std::shared_ptr<SchemaRegistry> schema_registry) {
+    if (schema_name.empty()) {
+      return arrow::Status::Invalid("Schema name cannot be empty");
+    }
+
+    ARROW_ASSIGN_OR_RAISE(auto schema, schema_registry->get(schema_name));
+    if (data.contains("id")) {
+      return arrow::Status::Invalid("'id' column is auto generated");
+    }
+
+    std::unordered_map<std::string, std::shared_ptr<arrow::Array>>
+        normalized_data;
+    for (auto field : schema->fields()) {
+      if (field->name() != "id" && !field->nullable() &&
+          (!data.contains(field->name()) ||
+           data.find(field->name())->second->IsNull(0))) {
+        return arrow::Status::Invalid("Field '", field->name(),
+                                      "' is required");
+      }
+      if (!data.contains(field->name())) {
+        normalized_data[field->name()] =
+            create_null_array(field->type()).ValueOrDie();
+      } else {
+        auto array = data.find(field->name())->second;
+        if (!array->type()->Equals(field->type())) {
+          return arrow::Status::Invalid("Type mismatch for field '",
+                                        field->name(), "'. Expected ",
+                                        field->type()->ToString(), " but got ",
+                                        array->type()->ToString());
+        }
+        normalized_data[field->name()] = array;
+      }
+    }
+
+    auto id = id_counter.fetch_add(1);
+    normalized_data["id"] = create_int64_array(id).ValueOrDie();
+    return id;
+  }
+
+  void set_id_counter(int64_t value) { id_counter.store(value); }
+  int64_t get_id_counter() const { return id_counter.load(); }
+
+ private:
+  std::atomic<int64_t> id_counter{0};
+};
+
+class SnapshotManager {
+ public:
+  explicit SnapshotManager(std::shared_ptr<MetadataManager> metadata_manager,
+                           std::shared_ptr<Storage> storage,
+                           std::shared_ptr<ShardManager> shard_manager,
+                           std::shared_ptr<EdgeStore> edge_store,
+                           std::shared_ptr<NodeManager> node_manager)
+      : metadata_manager(std::move(metadata_manager)),
+        storage(std::move(storage)),
+        shard_manager(std::move(shard_manager)),
+        edge_store(std::move(edge_store)),
+        node_manager(std::move(node_manager)) {}
+
+  arrow::Result<bool> initialize();
+  arrow::Result<Snapshot> commit();
+  Snapshot *current_snapshot();
+  std::shared_ptr<Manifest> get_manifest();
+
+ private:
+  std::shared_ptr<MetadataManager> metadata_manager;
+  std::shared_ptr<Storage> storage;
+  std::shared_ptr<ShardManager> shard_manager;
+  std::shared_ptr<EdgeStore> edge_store;
+  std::shared_ptr<NodeManager> node_manager;
+  Metadata metadata;
+  std::shared_ptr<Manifest> manifest;
+  std::shared_ptr<EdgeMetadata> edge_metada;
+};
+
 class Shard {
  private:
   std::pmr::monotonic_buffer_resource memory_pool;
@@ -117,17 +180,19 @@ class Shard {
 
  public:
   const int64_t id;         // Unique shard identifier
+  const int64_t index;      // index of the shard in the shard manager
   int64_t min_id;           // Minimum node ID in this shard
   int64_t max_id;           // Maximum node ID in this shard
   const size_t capacity;    // Maximum number of nodes
   const size_t chunk_size;  // Size of chunks for table creation
   std::string schema_name;  // Name of the schema this shard holds
 
-  Shard(int64_t id, size_t capacity, int64_t min_id, int64_t max_id,
-        size_t chunk_size, const std::string &schema_name,
+  Shard(int64_t id, int64_t index, size_t capacity, int64_t min_id,
+        int64_t max_id, size_t chunk_size, const std::string &schema_name,
         std::shared_ptr<SchemaRegistry> schema_registry,
         size_t buffer_size = 10 * 1024 * 1024)
       : id(id),
+        index(index),
         capacity(capacity),
         min_id(min_id),
         max_id(max_id),
@@ -138,10 +203,11 @@ class Shard {
         schema_name(schema_name) {}
 
   // Constructor that uses DatabaseConfig
-  Shard(int64_t id, const DatabaseConfig &config, int64_t min_id,
+  Shard(int64_t id, int64_t index, const DatabaseConfig &config, int64_t min_id,
         int64_t max_id, const std::string &schema_name,
         std::shared_ptr<SchemaRegistry> schema_registry)
       : id(id),
+        index(index),
         capacity(config.get_shard_capacity()),
         min_id(min_id),
         max_id(max_id),
@@ -190,6 +256,7 @@ class Shard {
     nodes.insert(std::make_pair(node->id, node));
     nodes_ids.insert(node->id);
     dirty = true;
+    updated = true;
     return true;
   }
 
@@ -299,13 +366,25 @@ class ShardManager {
   const size_t shard_capacity;
   const size_t chunk_size;
   const DatabaseConfig config;
-  std::unordered_map<std::string, std::atomic<int64_t>> id_counter;
+  std::atomic<int64_t> id_counter{
+      0};  // Global unique ID counter for all shards
+  std::unordered_map<std::string, std::atomic<int64_t>>
+      index_counters;  // Per-schema index/position counter
+  mutable std::mutex index_counter_mutex;
 
   void create_new_shard(const std::shared_ptr<Node> &node) {
     auto new_min_id = node->id;
     auto new_max_id = node->id + shard_capacity - 1;
 
-    auto shard = std::make_shared<Shard>(id_counter[node->schema_name]++,
+    // Get the next index for this schema
+    int64_t shard_index;
+    {
+      std::lock_guard<std::mutex> lock(index_counter_mutex);
+      shard_index = index_counters[node->schema_name]++;
+    }
+
+    // Create shard with global unique ID and schema-specific index
+    auto shard = std::make_shared<Shard>(id_counter.fetch_add(1), shard_index,
                                          config, new_min_id, new_max_id,
                                          node->schema_name, schema_registry);
 
@@ -328,6 +407,20 @@ class ShardManager {
         shard_capacity(config.get_shard_capacity()),
         chunk_size(config.get_chunk_size()),
         config(config) {}
+
+  void set_id_counter(int64_t value) { id_counter.store(value); }
+  int64_t get_id_counter() const { return id_counter.load(); }
+
+  void set_index_counter(const std::string &schema_name, int64_t value) {
+    std::lock_guard<std::mutex> lock(index_counter_mutex);
+    index_counters[schema_name].store(value);
+  }
+
+  int64_t get_index_counter(const std::string &schema_name) const {
+    std::lock_guard<std::mutex> lock(index_counter_mutex);
+    auto it = index_counters.find(schema_name);
+    return it != index_counters.end() ? it->second.load() : 0;
+  }
 
   // Get all schema names that have shards
   std::vector<std::string> get_schema_names() const {
@@ -401,9 +494,11 @@ class ShardManager {
   }
 
   arrow::Result<bool> insert_node(const std::shared_ptr<Node> &node) {
+    std::cout << "inserting node id " + std::to_string(node->id) << std::endl;
     auto it = shards.find(node->schema_name);
     if (it == shards.end()) {
-      // Create new schema entry if it doesn't exist
+      std::cout << " Create new schema entry for: " << node->schema_name
+                << std::endl;
       shards[node->schema_name] = std::vector<std::shared_ptr<Shard>>();
       create_new_shard(node);
       return true;
@@ -411,19 +506,46 @@ class ShardManager {
 
     auto &shard_list = it->second;
     if (shard_list.empty()) {
+      std::cout << "shard is empty schema: " << node->schema_name << std::endl;
       create_new_shard(node);
       return true;
     }
 
-    // Try to find an appropriate shard based on ID
+    // First try to find shards that can directly add the node (ID is in range)
     for (auto &shard : shard_list) {
+      std::cout << "check shard ranges" << std::endl;
+      std::cout << "shard id: " << shard->id << std::endl;
+      std::cout << "shard min_id: " << shard->min_id << std::endl;
+      std::cout << "max_id: " << shard->max_id << std::endl;
       if (node->id >= shard->min_id && node->id <= shard->max_id &&
           shard->has_space()) {
         auto result = shard->add(node);
         if (result.ok()) {
+          std::cout << "node id: '" + std::to_string(node->id)
+                    << "' inserted to shard id: " << std::to_string(shard->id)
+                    << std::endl;
           return true;
         }
         // If there was an error, we'll try the next shard
+      }
+    }
+
+    std::cout << "no shard with space to insert node: " << node->id
+              << std::endl;
+
+    // If no shard can directly add the node, try to find a shard that has space
+    // and can be extended with this node ID
+    for (auto &shard : shard_list) {
+      if (shard->has_space()) {
+        // If node ID is higher than max_id, we can extend the shard
+        if (node->id > shard->max_id) {
+          auto result = shard->extend(node);
+          if (result.ok()) {
+            return true;
+          }
+        }
+        // We don't handle node ID < min_id because that's rare in our
+        // design where IDs are normally assigned in increasing order
       }
     }
 
@@ -627,8 +749,8 @@ class Database {
   // Shard manager for node storage
   std::shared_ptr<ShardManager> shard_manager;
 
-  // ID counter for generating node IDs
-  std::atomic<int64_t> id_counter;
+  // Node manager for ID management
+  std::shared_ptr<NodeManager> node_manager;
 
   // Database configuration
   DatabaseConfig config;
@@ -642,15 +764,13 @@ class Database {
   std::shared_ptr<SnapshotManager> snapshot_manager;
   std::shared_ptr<EdgeStore> edge_store;
 
-  // std::atomic<int64_t> snapshot_counter;
-
  public:
   // Constructor that takes a DatabaseConfig
   explicit Database(const DatabaseConfig &config = DatabaseConfig())
       : schema_registry(std::make_shared<SchemaRegistry>()),
         shard_manager(std::make_shared<ShardManager>(schema_registry, config)),
+        node_manager(std::make_shared<NodeManager>()),
         edge_store(std::make_shared<EdgeStore>(0, config.get_chunk_size())),
-        id_counter(0),
         config(config),
         persistence_enabled(config.is_persistence_enabled()) {
     if (persistence_enabled) {
@@ -662,11 +782,11 @@ class Database {
       }
 
       std::string data_path = db_path + "/data";
-      storage =
-          std::make_shared<Storage>(std::move(data_path), schema_registry);
+      storage = std::make_shared<Storage>(std::move(data_path), schema_registry,
+                                          config);
       metadata_manager = std::make_shared<MetadataManager>(db_path);
       snapshot_manager = std::make_shared<SnapshotManager>(
-          metadata_manager, storage, shard_manager, edge_store);
+          metadata_manager, storage, shard_manager, edge_store, node_manager);
     }
   }
 
@@ -704,38 +824,12 @@ class Database {
       return arrow::Status::Invalid("Schema name cannot be empty");
     }
 
-    ARROW_ASSIGN_OR_RAISE(auto schema, schema_registry->get(schema_name));
-    if (data.contains("id")) {
-      return arrow::Status::Invalid("'id' column is auto generated");
-    }
+    // Use NodeManager to create node and generate ID
+    ARROW_ASSIGN_OR_RAISE(
+        auto id, node_manager->create_node(schema_name, data, schema_registry));
 
-    std::unordered_map<std::string, std::shared_ptr<arrow::Array>>
-        normalized_data;
-    for (auto field : schema->fields()) {
-      if (field->name() != "id" && !field->nullable() &&
-          (!data.contains(field->name()) ||
-           data.find(field->name())->second->IsNull(0))) {
-        return arrow::Status::Invalid("Field '", field->name(),
-                                      "' is required");
-      }
-      if (!data.contains(field->name())) {
-        normalized_data[field->name()] =
-            create_null_array(field->type()).ValueOrDie();
-      } else {
-        auto array = data.find(field->name())->second;
-        if (!array->type()->Equals(field->type())) {
-          return arrow::Status::Invalid("Type mismatch for field '",
-                                        field->name(), "'. Expected ",
-                                        field->type()->ToString(), " but got ",
-                                        array->type()->ToString());
-        }
-        normalized_data[field->name()] = array;
-      }
-    }
-
-    auto id = id_counter.fetch_add(1);
-    normalized_data["id"] = create_int64_array(id).ValueOrDie();
-    auto node = std::make_shared<Node>(id, schema_name, normalized_data);
+    // Create the node with the generated ID
+    auto node = std::make_shared<Node>(id, schema_name, data);
 
     // Insert node into shards
     ARROW_RETURN_NOT_OK(shard_manager->insert_node(node));
@@ -999,5 +1093,3 @@ arrow::Result<bool> demo();
 // arrow::Result<bool> load_shard_demo();
 
 }  // namespace tundradb
-
-#endif  // CORE_HPP

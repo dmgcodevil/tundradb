@@ -355,8 +355,8 @@ arrow::Result<bool> demo() {
   auto db_path = "testdb_1744518985889565";
   auto config = make_config()
                     .with_db_path(db_path)
-                    .with_shard_capacity(4)
-                    .with_chunk_size(2)
+                    .with_shard_capacity(1000)
+                    .with_chunk_size(1000)
                     .build();
 
   auto name_field = arrow::field("name", arrow::utf8());
@@ -368,7 +368,7 @@ arrow::Result<bool> demo() {
   db.initialize().ValueOrDie();
   // print_table(db.get_table("users").ValueOrDie());
 
-  auto users_count = 8;
+  auto users_count = 1;
   for (int64_t i = 0; i < users_count; i++) {
     create_user_node(db, "user" + std::to_string(i), i + 20);
   }
@@ -384,7 +384,7 @@ arrow::Result<bool> demo() {
   std::cout << "Edges" << std::endl;
   print_table(db.get_edge_store()->get_table("friend").ValueOrDie());
   auto snap = db.create_snapshot().ValueOrDie();
-  db.create_snapshot().ValueOrDie();
+  // db.create_snapshot().ValueOrDie();
   // db.create_snapshot().ValueOrDie();
 
   return true;

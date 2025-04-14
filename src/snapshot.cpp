@@ -5,16 +5,6 @@
 
 namespace tundradb {
 
-SnapshotManager::SnapshotManager(
-    std::shared_ptr<MetadataManager> metadata_manager,
-    std::shared_ptr<Storage> storage,
-    std::shared_ptr<ShardManager> shard_manager,
-    std::shared_ptr<EdgeStore> edge_store)
-    : metadata_manager(std::move(metadata_manager)),
-      storage(std::move(storage)),
-      shard_manager(std::move(shard_manager)),
-      edge_store(std::move(edge_store)) {}
-
 arrow::Result<bool> SnapshotManager::initialize() {
   log_info("Initializing snapshot manager...");
   try {
@@ -42,7 +32,27 @@ arrow::Result<bool> SnapshotManager::initialize() {
       this->manifest = std::make_shared<Manifest>(manifest_result.ValueOrDie());
       log_info("Manifest has been loaded");
       log_info(this->manifest->toString());
+
+      // Set ID counters for all managers
       edge_store->set_id_seq(manifest->edge_id_seq);
+      node_manager->set_id_counter(manifest->node_id_seq);
+      shard_manager->set_id_counter(manifest->shard_id_seq);
+
+      // Restore index counters for each schema
+      std::unordered_map<std::string, int64_t> max_index_per_schema;
+      for (const auto &shard : this->manifest->shards) {
+        auto &max_index = max_index_per_schema[shard.schema_name];
+        max_index =
+            std::max(max_index,
+                     shard.index + 1);  // Add 1 so next index is after highest
+      }
+
+      // Set the index counters based on max values
+      for (const auto &[schema_name, max_index] : max_index_per_schema) {
+        shard_manager->set_index_counter(schema_name, max_index);
+        log_debug("Set shard index counter for schema '" + schema_name +
+                  "' to " + std::to_string(max_index));
+      }
 
       // Group shards by schema name
       std::unordered_map<std::string, std::vector<ShardMetadata>>
@@ -73,7 +83,13 @@ arrow::Result<bool> SnapshotManager::initialize() {
           }
 
           const auto &shard = shard_result.ValueOrDie();
-          log_debug("Adding shard from snapshot: " + shard_metadata.toString());
+          log_debug("Adding shard from snapshot, shard_metadata:  " +
+                    shard_metadata.toString());
+          log_debug("shard id = " + std::to_string(shard->id) +
+                    ", min_id: " + std::to_string(shard->min_id) +
+                    ", max_id: " + std::to_string(shard->max_id) +
+                    ", size: " + std::to_string(shard->size()));
+
           shard->set_updated(false);
 
           auto add_result = this->shard_manager->add_shard(shard);
@@ -139,7 +155,16 @@ arrow::Result<Snapshot> SnapshotManager::commit() {
   // Create new manifest
   Manifest new_manifest;
   new_manifest.id = generate_uuid();
+
+  // Save all ID counters to the manifest
   new_manifest.edge_id_seq = edge_store->get_edge_id_counter();
+  new_manifest.node_id_seq = node_manager->get_id_counter();
+  new_manifest.shard_id_seq = shard_manager->get_id_counter();
+
+  log_info("Saving counters: edge_id_seq=" +
+           std::to_string(new_manifest.edge_id_seq) +
+           ", node_id_seq=" + std::to_string(new_manifest.node_id_seq) +
+           ", shard_id_seq=" + std::to_string(new_manifest.shard_id_seq));
 
   for (const auto &edge_type : edge_store->get_edge_types()) {
     if (curr_edge_metadata.contains(edge_type) &&
@@ -165,7 +190,8 @@ arrow::Result<Snapshot> SnapshotManager::commit() {
     log_info("Writing shards for schema: " + schema_name);
     for (const auto &shard :
          this->shard_manager->get_shards(schema_name).ValueOrDie()) {
-      log_debug("Snapshotting shard: " + std::to_string(shard->id));
+      log_debug("Snapshotting shard id: " + std::to_string(shard->id));
+      log_debug("Snapshotting shard size: " + std::to_string(shard->size()));
 
       // Only write updated shards, reuse unchanged ones
       if (shard->is_updated()) {
@@ -177,6 +203,8 @@ arrow::Result<Snapshot> SnapshotManager::commit() {
         shard_metadata.max_id = shard->max_id;
         shard_metadata.record_count = shard->size();
         shard_metadata.chunk_size = shard->chunk_size;
+        shard_metadata.index =
+            shard->index;  // shard_manager->get_index_counter(schema_name);
         shard_metadata.data_file =
             this->storage->write_shard(shard).ValueOrDie();
         new_manifest.shards.push_back(shard_metadata);

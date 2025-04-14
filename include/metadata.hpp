@@ -115,10 +115,11 @@ struct ShardMetadata {
   size_t chunk_size = 0;
   std::string data_file;
   int64_t timestamp_ms = 0;  // Time in milliseconds since epoch
+  int64_t index = 0;         // Position of the shard within its schema
 
   NLOHMANN_DEFINE_TYPE_INTRUSIVE(ShardMetadata, id, schema_name, min_id, max_id,
                                  record_count, chunk_size, data_file,
-                                 timestamp_ms);
+                                 timestamp_ms, index);
 
   [[nodiscard]] std::string toString() const {
     std::stringstream ss;
@@ -126,7 +127,7 @@ struct ShardMetadata {
        << "', min_id=" << min_id << ", max_id=" << max_id
        << ", record_count=" << record_count << ", chunk_size=" << chunk_size
        << ", data_file='" << data_file << "', timestamp_ms=" << timestamp_ms
-       << "}";
+       << ", index=" << index << "}";
     return ss.str();
   }
 
@@ -154,9 +155,12 @@ struct Manifest {
   std::string id;
   std::vector<ShardMetadata> shards;
   std::vector<EdgeMetadata> edges;
-  // todo int64_t node_id_seq;
-  int64_t edge_id_seq;
-  NLOHMANN_DEFINE_TYPE_INTRUSIVE(Manifest, id, shards, edges, edge_id_seq);
+  int64_t node_id_seq = 0;
+  int64_t edge_id_seq = 0;
+  int64_t shard_id_seq = 0;
+
+  NLOHMANN_DEFINE_TYPE_INTRUSIVE(Manifest, id, shards, edges, node_id_seq,
+                                 edge_id_seq, shard_id_seq);
 
   std::string toString() const {
     std::stringstream ss;
@@ -165,7 +169,15 @@ struct Manifest {
       ss << shards[i];
       if (i < shards.size() - 1) ss << ", ";
     }
-    ss << "]}";
+    ss << "], edges=[";
+    for (size_t i = 0; i < edges.size(); ++i) {
+      ss << "EdgeMetadata{edge_type='" << edges[i].edge_type << "', data_file='"
+         << edges[i].data_file << "', record_count=" << edges[i].record_count
+         << "}";
+      if (i < edges.size() - 1) ss << ", ";
+    }
+    ss << "], node_id_seq=" << node_id_seq << ", edge_id_seq=" << edge_id_seq
+       << ", shard_id_seq=" << shard_id_seq << "}";
     return ss.str();
   }
 

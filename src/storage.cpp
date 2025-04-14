@@ -23,9 +23,11 @@
 namespace tundradb {
 
 Storage::Storage(std::string data_dir,
-                 std::shared_ptr<SchemaRegistry> schema_registry)
+                 std::shared_ptr<SchemaRegistry> schema_registry,
+                 const DatabaseConfig& config)
     : data_directory(std::move(data_dir)),
-      schema_registry(std::move(schema_registry)) {}
+      schema_registry(std::move(schema_registry)),
+      config(config) {}
 
 arrow::Result<bool> Storage::initialize() {
   try {
@@ -98,8 +100,9 @@ arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(
 
   // Create a new shard with metadata properties
   auto shard = std::make_shared<Shard>(
-      shard_metadata.id,
-      shard_metadata.record_count,  // Use as capacity
+      shard_metadata.id, shard_metadata.index,
+      this->config
+          .get_shard_capacity(),  // Use configured capacity, not record count
       shard_metadata.min_id, shard_metadata.max_id, shard_metadata.chunk_size,
       shard_metadata.schema_name, this->schema_registry);
 

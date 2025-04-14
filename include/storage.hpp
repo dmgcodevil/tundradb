@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <string>
 
+#include "config.hpp"
 #include "edge.hpp"
 #include "metadata.hpp"
 
@@ -21,10 +22,12 @@ class Storage {
   std::shared_ptr<SchemaRegistry> schema_registry;
   std::string metadata_dir;
   std::string data_dir;
+  DatabaseConfig config;
 
  public:
   explicit Storage(std::string data_dir,
-                   std::shared_ptr<SchemaRegistry> schema_registry);
+                   std::shared_ptr<SchemaRegistry> schema_registry,
+                   const DatabaseConfig& config = DatabaseConfig());
 
   arrow::Result<bool> initialize();
 
