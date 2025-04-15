@@ -94,6 +94,11 @@ add_executable(schema_utils_test
     schema_utils_test.cpp
 )
 
+# Add database test
+add_executable(database_test
+    database_test.cpp
+)
+
 # Link against Arrow and GTest
 target_link_libraries(sharding_test
     PRIVATE
@@ -170,6 +175,19 @@ target_link_libraries(schema_utils_test
         TBB::tbb
 )
 
+# Link against required libraries
+target_link_libraries(database_test
+    PRIVATE
+        core
+        Arrow::arrow_shared
+        Parquet::parquet_shared
+        nlohmann_json::nlohmann_json
+        GTest::GTest
+        GTest::Main
+        pthread
+        TBB::tbb
+)
+
 # Apply sanitizer flags to all test targets if enabled
 if(ENABLE_SANITIZERS)
     target_compile_options(sharding_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
@@ -189,6 +207,9 @@ if(ENABLE_SANITIZERS)
     
     target_compile_options(schema_utils_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
     target_link_options(schema_utils_test PRIVATE ${SANITIZER_LINK_FLAGS})
+    
+    target_compile_options(database_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
+    target_link_options(database_test PRIVATE ${SANITIZER_LINK_FLAGS})
 endif()
 
 # Simple test registration
@@ -199,10 +220,11 @@ add_test(NAME ConcurrentSetStressTest COMMAND concurrent_set_stress_test)
 add_test(NAME EdgeStoreTest COMMAND edge_store_test)
 add_test(NAME TableInfoTest COMMAND table_info_test)
 add_test(NAME SchemaUtilsTest COMMAND schema_utils_test)
+add_test(NAME DatabaseTest COMMAND database_test)
 
 # Set TSan options for tests after they've been registered
 if(ENABLE_SANITIZERS AND SANITIZER_TYPE STREQUAL "thread" AND EXISTS ${TSAN_SUPPRESSIONS_FILE})
-    foreach(test_target ShardingTest SnapshotTest ConcurrencyTest ConcurrentSetStressTest EdgeStoreTest TableInfoTest SchemaUtilsTest)
+    foreach(test_target ShardingTest SnapshotTest ConcurrencyTest ConcurrentSetStressTest EdgeStoreTest TableInfoTest SchemaUtilsTest DatabaseTest)
         set_property(
             TEST ${test_target}
             PROPERTY ENVIRONMENT "TSAN_OPTIONS=${TSAN_OPTIONS_VALUE}"
@@ -218,6 +240,7 @@ set_tests_properties(
         EdgeStoreTest
         TableInfoTest
         SchemaUtilsTest
+        DatabaseTest
         PROPERTIES
         ISOLATED TRUE  # This ensures tests run in isolation
 )

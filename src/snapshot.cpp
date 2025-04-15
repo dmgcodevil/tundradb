@@ -61,11 +61,12 @@ arrow::Result<bool> SnapshotManager::initialize() {
         grouped_shards[shard.schema_name].push_back(shard);
       }
 
-      // Sort shards by ID for each schema
+      // Sort shards by index for each schema to ensure consistent ordering
+      // during restoration
       for (auto &[_, v] : grouped_shards) {
         std::sort(v.begin(), v.end(),
                   [](const ShardMetadata &a, const ShardMetadata &b) {
-                    return a.id < b.id;
+                    return a.index < b.index;
                   });
       }
 
@@ -112,6 +113,10 @@ arrow::Result<bool> SnapshotManager::initialize() {
         log_debug("edges type '" + edge_type + "' size = " +
                   std::to_string(edge_store->get_count_by_type(edge_type)));
       }
+
+      // Ensure all shards are properly sorted by index
+      // log_info("Sorting all shards by index");
+      // this->shard_manager->sort_shards();
     } else {
       log_info("No current snapshot exists");
     }
@@ -127,6 +132,41 @@ arrow::Result<bool> SnapshotManager::initialize() {
 arrow::Result<Snapshot> SnapshotManager::commit() {
   log_info("Creating new snapshot");
   auto timestamp_ms = now_millis();
+
+  // Save the original updated states of shards before compaction
+  std::unordered_map<std::string, std::unordered_map<int64_t, bool>>
+      original_update_states;
+
+  // Store the original update status for each shard
+  for (const auto &schema_name : this->shard_manager->get_schema_names()) {
+    for (const auto &shard :
+         this->shard_manager->get_shards(schema_name).ValueOrDie()) {
+      original_update_states[schema_name][shard->id] = shard->is_updated();
+    }
+  }
+
+  // Compact all shards before creating a new snapshot
+  log_info("Compacting all shards before snapshot creation");
+  auto compact_result = this->shard_manager->compact_all();
+  if (!compact_result.ok()) {
+    log_warn("Failed to compact all shards: " +
+             compact_result.status().ToString());
+  }
+
+  // Restore the original updated status for shards whose content didn't
+  // actually change
+  for (const auto &schema_name : this->shard_manager->get_schema_names()) {
+    for (const auto &shard :
+         this->shard_manager->get_shards(schema_name).ValueOrDie()) {
+      // If the shard existed before compaction and wasn't marked as updated,
+      // restore that status
+      if (original_update_states.count(schema_name) > 0 &&
+          original_update_states[schema_name].count(shard->id) > 0 &&
+          !original_update_states[schema_name][shard->id]) {
+        shard->set_updated(false);
+      }
+    }
+  }
 
   // Create new snapshot
   Snapshot new_snapshot;

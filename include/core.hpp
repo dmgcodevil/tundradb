@@ -2,12 +2,10 @@
 
 #include <arrow/api.h>
 #include <arrow/compute/api.h>
-#include <arrow/io/api.h>
 #include <arrow/result.h>
 #include <arrow/table.h>
 #include <arrow/type.h>
 #include <parquet/arrow/reader.h>
-#include <parquet/arrow/writer.h>
 #include <spdlog/spdlog.h>
 #include <tbb/concurrent_map.h>
 #include <tbb/concurrent_vector.h>
@@ -16,7 +14,6 @@
 #include <iostream>
 #include <memory>
 #include <memory_resource>
-#include <mutex>
 #include <nlohmann/json.hpp>
 #include <shared_mutex>
 #include <string>
@@ -261,18 +258,26 @@ class Shard {
   }
 
   arrow::Result<bool> extend(const std::shared_ptr<Node> &node) {
-    if (node->id < min_id) {
-      return arrow::Status::Invalid("Node id is below the minimum range");
-    }
     if (nodes.contains(node->id)) {
       return arrow::Status::KeyError("Node already exists: ", node->id);
     }
     if (nodes.size() >= capacity) {
       return arrow::Status::KeyError("Shard is full");
     }
+
+    if (empty()) {
+      min_id = node->id;
+      max_id = node->id;
+    } else {
+      if (node->id < min_id) {
+        return arrow::Status::Invalid("Node id is below the minimum range");
+      }
+      max_id = std::max(max_id, node->id);
+    }
+
     nodes.insert(std::make_pair(node->id, node));
     nodes_ids.insert(node->id);
-    max_id = std::max(max_id, node->id);
+
     dirty = true;
     updated = true;
     updated_ts = now_millis();
@@ -369,8 +374,8 @@ class ShardManager {
   std::atomic<int64_t> id_counter{
       0};  // Global unique ID counter for all shards
   std::unordered_map<std::string, std::atomic<int64_t>>
-      index_counters;  // Per-schema index/position counter
-  mutable std::mutex index_counter_mutex;
+      index_counters;                      // Per-schema index/position counter
+  mutable std::mutex index_counter_mutex;  // todo use tbb map instead
 
   void create_new_shard(const std::shared_ptr<Node> &node) {
     auto new_min_id = node->id;
@@ -416,6 +421,11 @@ class ShardManager {
     index_counters[schema_name].store(value);
   }
 
+  arrow::Result<std::shared_ptr<Shard>> get_shard(
+      const std::string &schema_name, int64_t id) {
+    return shards[schema_name][id];
+  }
+
   int64_t get_index_counter(const std::string &schema_name) const {
     std::lock_guard<std::mutex> lock(index_counter_mutex);
     auto it = index_counters.find(schema_name);
@@ -443,6 +453,10 @@ class ShardManager {
     return it->second;
   }
 
+  arrow::Result<bool> is_shard_clean(std::string s, int64_t id) {
+    return !shards[s][id]->is_updated();
+  }
+
   arrow::Result<bool> compact(const std::string &schema_name) {
     auto it = shards.find(schema_name);
     if (it == shards.end()) {
@@ -451,32 +465,28 @@ class ShardManager {
     }
 
     auto &shard_list = it->second;  // Use reference to modify actual collection
-    if (shard_list.empty()) {
+    if (shard_list.size() <= 1) {
+      // nothing to compact
       return true;
     }
 
-    // First pass: move nodes from later shards to fill earlier shards
-    for (size_t i = 0; i < shard_list.size(); i++) {
-      auto &shard = shard_list[i];
-      if (!shard->has_space()) {
-        continue;  // Skip full shards
-      }
+    for (size_t i = 1; i < shard_list.size(); i++) {
+      auto &prev = shard_list[i - 1];
+      auto &curr = shard_list[i];
 
-      // Try to fill this shard from later shards
-      for (size_t j = i + 1; j < shard_list.size(); j++) {
-        if (!shard_list[j]->empty()) {
-          while (!shard_list[j]->empty() && shard->has_space()) {
-            auto node_result = shard_list[j]->poll_first();
-            if (!node_result.ok()) {
-              break;  // Error polling from source shard
-            }
+      while (prev->has_space() && !curr->empty()) {
+        auto node = curr->poll_first().ValueOrDie();
+        prev->extend(node).ValueOrDie();
+        log_debug("node id: " + std::to_string(node->id) +
+                  " moved from shard: " + std::to_string(i) +
+                  " to shard: " + std::to_string(i - 1));
+        log_debug("prev shard id: " + std::to_string(i - 1) +
+                  " min_id=" + std::to_string(prev->min_id) +
+                  " max_id=" + std::to_string(prev->max_id));
 
-            auto extend_result = shard->extend(node_result.ValueOrDie());
-            if (!extend_result.ok()) {
-              break;  // Error extending target shard
-            }
-          }
-        }
+        log_debug("curr shard id: " + std::to_string(i) +
+                  " min_id=" + std::to_string(curr->min_id) +
+                  " max_id=" + std::to_string(curr->max_id));
       }
     }
 
@@ -493,8 +503,25 @@ class ShardManager {
     return true;
   }
 
+  // Compact all schemas in the database
+  arrow::Result<bool> compact_all() {
+    std::vector<std::string> schema_names = schema_registry->get_schema_names();
+    bool success = true;
+
+    for (const auto &schema_name : schema_names) {
+      auto result = compact(schema_name);
+      if (!result.ok()) {
+        std::cerr << "Error compacting schema '" << schema_name
+                  << "': " << result.status().ToString() << std::endl;
+        success = false;
+      }
+    }
+
+    return success;
+  }
+
   arrow::Result<bool> insert_node(const std::shared_ptr<Node> &node) {
-    std::cout << "inserting node id " + std::to_string(node->id) << std::endl;
+    log_debug("inserting node id " + std::to_string(node->id));
     auto it = shards.find(node->schema_name);
     if (it == shards.end()) {
       std::cout << " Create new schema entry for: " << node->schema_name
@@ -513,17 +540,12 @@ class ShardManager {
 
     // First try to find shards that can directly add the node (ID is in range)
     for (auto &shard : shard_list) {
-      std::cout << "check shard ranges" << std::endl;
-      std::cout << "shard id: " << shard->id << std::endl;
-      std::cout << "shard min_id: " << shard->min_id << std::endl;
-      std::cout << "max_id: " << shard->max_id << std::endl;
       if (node->id >= shard->min_id && node->id <= shard->max_id &&
           shard->has_space()) {
         auto result = shard->add(node);
         if (result.ok()) {
-          std::cout << "node id: '" + std::to_string(node->id)
-                    << "' inserted to shard id: " << std::to_string(shard->id)
-                    << std::endl;
+          log_debug("node id: '" + std::to_string(node->id) +
+                    "' inserted to shard id: " + std::to_string(shard->id));
           return true;
         }
         // If there was an error, we'll try the next shard
@@ -864,22 +886,12 @@ class Database {
     return edge_store;
   }
 
-  // Compact all schemas in the database
-  arrow::Result<bool> compact_all() {
-    std::vector<std::string> schema_names = schema_registry->get_schema_names();
-    bool success = true;
-
-    for (const auto &schema_name : schema_names) {
-      auto result = compact(schema_name);
-      if (!result.ok()) {
-        std::cerr << "Error compacting schema '" << schema_name
-                  << "': " << result.status().ToString() << std::endl;
-        success = false;
-      }
-    }
-
-    return success;
+  [[nodiscard]] std::shared_ptr<ShardManager> get_shard_manager() const {
+    return shard_manager;
   }
+
+  // Compact all schemas in the database
+  arrow::Result<bool> compact_all() { return shard_manager->compact_all(); }
 
   // Get a table for all nodes of a given schema
   arrow::Result<std::shared_ptr<arrow::Table>> get_table(
@@ -938,6 +950,7 @@ class Database {
 
   // Create a new snapshot of the current state
   arrow::Result<Snapshot> create_snapshot() {
+    // ARROW_RETURN_NOT_OK(shard_manager->compact_all());
     return snapshot_manager->commit();
   }
 
