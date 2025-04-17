@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <thread>
 
 #include "../include/core.hpp"
 #include "../include/logger.hpp"
@@ -133,7 +134,7 @@ TEST_F(DatabaseSnapshotTest, SnapshotWithoutChanges) {
   auto snapshot1 = db->create_snapshot().ValueOrDie();
   ASSERT_TRUE(snapshot1.id != 0);
   std::string first_manifest_location = snapshot1.manifest_location;
-
+  std::this_thread::sleep_for(std::chrono::seconds(1));
   // Step 4: Create second snapshot without changes
   auto snapshot2 = db->create_snapshot().ValueOrDie();
   ASSERT_TRUE(snapshot2.id != 0);

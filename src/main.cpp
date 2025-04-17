@@ -10,7 +10,19 @@ using namespace std::string_literals;
 using namespace tundradb;
 
 int main() {
-  demo().ValueOrDie();
+
+  auto db_path = "testdb_1744518985889565";
+  auto config = make_config()
+                    .with_db_path(db_path)
+                    .with_shard_capacity(1000)
+                    .with_chunk_size(1000)
+                    .build();
+
+  auto name_field = arrow::field("name", arrow::utf8());
+  auto age_field = arrow::field("age", arrow::int64());
+  auto schema = arrow::schema({name_field, age_field});
+
+  Database db(config);
 
   return 0;
 }

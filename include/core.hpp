@@ -27,7 +27,9 @@
 #include "metadata.hpp"
 #include "node.hpp"
 #include "storage.hpp"
+#include "query.hpp"
 #include "utils.hpp"
+
 
 namespace tundradb {
 
@@ -950,16 +952,11 @@ class Database {
 
   // Create a new snapshot of the current state
   arrow::Result<Snapshot> create_snapshot() {
-    // ARROW_RETURN_NOT_OK(shard_manager->compact_all());
     return snapshot_manager->commit();
   }
 
-  // arrow::Result<bool> load_shard(const std::string &path) {
-  //   auto shard = storage->read_shard(path).ValueOrDie();
-  //   std::cout << "Loaded shard '" << path << "'..." << std::endl;
-  //   ARROW_RETURN_NOT_OK(shard_manager->add_shard(shard));
-  //   return true;
-  // }
+  arrow::Result<std::shared_ptr<QueryResult>> query(const QueryBuilder& query_builder);
+
 };
 
 // Helper function to print a single row
@@ -1094,15 +1091,5 @@ static void print_table(const std::shared_ptr<arrow::Table> &table,
     std::cout << "Error while printing table: " << e.what() << std::endl;
   }
 }
-
-arrow::Result<bool> demo_single_node();
-
-arrow::Result<bool> demo_batch_update();
-
-arrow::Result<bool> demo_snapshot_creation();
-
-arrow::Result<bool> demo();
-
-// arrow::Result<bool> load_shard_demo();
 
 }  // namespace tundradb
