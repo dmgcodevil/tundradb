@@ -5,12 +5,12 @@
 // #include <arrow/api.h>
 #include "../include/core.hpp"
 #include "../include/metadata.hpp"
+#include "../include/query.hpp"
 
 using namespace std::string_literals;
 using namespace tundradb;
 
 int main() {
-
   auto db_path = "testdb_1744518985889565";
   auto config = make_config()
                     .with_db_path(db_path)
@@ -23,6 +23,9 @@ int main() {
   auto schema = arrow::schema({name_field, age_field});
 
   Database db(config);
+  auto query = Query::from_schema("users")
+                   .where("age", CompareOp::Gt, Value(30))
+                   .build();
 
   return 0;
 }

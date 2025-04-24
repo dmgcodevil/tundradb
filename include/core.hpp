@@ -26,10 +26,9 @@
 #include "logger.hpp"
 #include "metadata.hpp"
 #include "node.hpp"
-#include "storage.hpp"
 #include "query.hpp"
+#include "storage.hpp"
 #include "utils.hpp"
-
 
 namespace tundradb {
 
@@ -87,7 +86,19 @@ class NodeManager {
  public:
   NodeManager() = default;
 
-  arrow::Result<int64_t> create_node(
+  arrow::Result<std::shared_ptr<Node>> get_node(int64_t id) {
+    return nodes[id];
+  }
+
+  bool add_node(std::shared_ptr<Node> node) {
+    // todo check if node exists
+    nodes[node->id] = node;
+    return true;
+  }
+
+  bool remove_node(int64_t id) { return nodes.erase(id) > 0; }
+
+  arrow::Result<std::shared_ptr<Node>> create_node(
       const std::string &schema_name,
       std::unordered_map<std::string, std::shared_ptr<arrow::Array>> &data,
       std::shared_ptr<SchemaRegistry> schema_registry) {
@@ -126,7 +137,9 @@ class NodeManager {
 
     auto id = id_counter.fetch_add(1);
     normalized_data["id"] = create_int64_array(id).ValueOrDie();
-    return id;
+    auto node = std::make_shared<Node>(id, schema_name, normalized_data);
+    nodes[id] = node;
+    return node;
   }
 
   void set_id_counter(int64_t value) { id_counter.store(value); }
@@ -134,6 +147,7 @@ class NodeManager {
 
  private:
   std::atomic<int64_t> id_counter{0};
+  std::unordered_map<int64_t, std::shared_ptr<Node>> nodes;
 };
 
 class SnapshotManager {
@@ -848,12 +862,8 @@ class Database {
       return arrow::Status::Invalid("Schema name cannot be empty");
     }
 
-    // Use NodeManager to create node and generate ID
-    ARROW_ASSIGN_OR_RAISE(
-        auto id, node_manager->create_node(schema_name, data, schema_registry));
-
-    // Create the node with the generated ID
-    auto node = std::make_shared<Node>(id, schema_name, data);
+    ARROW_ASSIGN_OR_RAISE(auto node, node_manager->create_node(
+                                         schema_name, data, schema_registry));
 
     // Insert node into shards
     ARROW_RETURN_NOT_OK(shard_manager->insert_node(node));
@@ -955,8 +965,7 @@ class Database {
     return snapshot_manager->commit();
   }
 
-  arrow::Result<std::shared_ptr<QueryResult>> query(const QueryBuilder& query_builder);
-
+  arrow::Result<std::shared_ptr<QueryResult>> query(const Query &query);
 };
 
 // Helper function to print a single row
