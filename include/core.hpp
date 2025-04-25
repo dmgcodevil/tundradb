@@ -965,7 +965,7 @@ class Database {
     return snapshot_manager->commit();
   }
 
-  arrow::Result<std::shared_ptr<QueryResult>> query(const Query &query);
+  arrow::Result<QueryResult> query(const Query &query);
 };
 
 // Helper function to print a single row

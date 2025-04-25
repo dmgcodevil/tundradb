@@ -115,7 +115,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> filter(
 
   // Create the comparison scalar
   arrow::compute::Expression scalar_value;
-  arrow::compute::Expression field = arrow::compute::field_ref("field_name");
+  arrow::compute::Expression field = arrow::compute::field_ref(field_name);
 
   switch (value.type()) {
     case ValueType::Int64:
@@ -158,8 +158,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> filter(
   return scanner->ToTable();
 }
 
-arrow::Result<std::shared_ptr<QueryResult>> Database::query(
-    const Query& query) {
+arrow::Result<QueryResult> Database::query(const Query& query) {
   std::unordered_map<std::string, std::shared_ptr<arrow::Table>> front_tables;
 
   // initialize front
@@ -168,7 +167,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
 
   std::unordered_map<std::string, std::set<int64_t>> front_ids;
   front_ids[query.from_schema()] =
-      get_ids(get_table(query.from_schema()).ValueOrDie()).ValueOrDie();
+      get_ids(front_tables[query.from_schema()]).ValueOrDie();
   std::map<int64_t, std::vector<int64_t>> connections;  // node id -> [node id]
   // All nodes that are part of the query result, by schema
   std::unordered_map<std::string, std::set<int64_t>> selected;
@@ -185,43 +184,58 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           if (table->schema()->GetFieldIndex(where->field()) != -1) {
             front_tables[schema_name] = filter(table, where).ValueOrDie();
             auto filtered_ids = get_ids(front_tables[schema_name]).ValueOrDie();
-            new_front_ids[schema_name].insert(filtered_ids.begin(),
-                                              filtered_ids.end());
+            front_ids[schema_name] = filtered_ids;
+            selected[schema_name].insert(filtered_ids.begin(),
+                                         filtered_ids.end());
           }
         }
-        front_ids = std::move(new_front_ids);
+        // front_ids = std::move(new_front_ids); // todo is it correct ?
         break;
       }
       case Clause::Type::TRAVERSE: {
         auto traverse = std::static_pointer_cast<Traverse>(clause);
-        front_tables.clear();  // todo: do we need to clear front_tables ?
+        if (front_ids.empty()) {
+          return QueryResult();
+        }
+        if (!front_ids.contains(traverse->source())) {
+          return arrow::Status::Invalid("source not found: ",
+                                        traverse->source());
+        }
         std::unordered_map<std::string, std::vector<std::shared_ptr<Node>>>
             traversed_nodes;
+
         std::unordered_map<std::string, std::set<int64_t>> new_front_ids;
-        for (auto& [schema_name, ids] : front_ids) {
-          if (traverse->target_schema().empty() ||
-              traverse->target_schema().contains(schema_name)) {
-            for (auto id : ids) {
-              for (int64_t target_id :
-                   edge_store->get_outgoing_edges(id, traverse->edge_type())) {
-                auto node = node_manager->get_node(target_id).ValueOrDie();
-                traversed_nodes[node->schema_name].push_back(node);
-                new_front_ids[node->schema_name].insert(node->id);
-              }
+        for (auto source_id : front_ids[traverse->source()]) {
+          for (auto target :
+               edge_store->get_outgoing_edges(source_id, traverse->edge_type())
+                   .ValueOrDie()) {
+            auto target_id = target->get_target_id();
+            auto node = node_manager->get_node(target_id).ValueOrDie();
+            if (traverse->target_schema().empty() ||
+                traverse->target_schema().contains(node->schema_name)) {
+              traversed_nodes[node->schema_name].push_back(node);
+              new_front_ids[node->schema_name].insert(target_id);
+              connections[source_id].push_back(
+                  target_id);  // todo do we need to include label and schema ?
             }
           }
         }
 
-        for (const auto& [schema, nodes] : traversed_nodes) {
+        for (const auto& [schema_name, nodes] : traversed_nodes) {
           if (!nodes.empty()) {
+            auto full_name = traverse->label() + "_" + schema_name;
             auto table_result = create_table_from_nodes(schema_registry, nodes);
             if (table_result.ok()) {
-              front_tables[schema] = table_result.ValueOrDie();
+              front_tables[full_name] = table_result.ValueOrDie();
             }
           }
         }
+        for (const auto& [schema_name, ids] : new_front_ids) {
+          auto full_name = traverse->label() + "_" + schema_name;
+          front_ids[full_name] = ids;
+        }
 
-        front_ids = std::move(new_front_ids);
+        break;
       }
       default:
         return arrow::Status::NotImplemented(
@@ -230,7 +244,11 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
     }
   }
 
-  return arrow::Status::NotImplemented("Database::query");
+  QueryResult result;
+  for (const auto& [schema_name, table] : front_tables) {
+    result.add_table(schema_name, table);
+  }
+  return result;
 }
 
 }  // namespace tundradb

@@ -53,18 +53,24 @@ class Where : public Clause {
 
 class Traverse : public Clause {
  private:
+  std::string source_;
   std::string edge_type_;
+  std::string label_;
   std::set<std::string> target_schema_;
 
  public:
-  Traverse(std::string edge_type,
+  Traverse(std::string source, std::string edge_type, std::string label,
            std::set<std::string> target_schema = std::set<std::string>())
-      : edge_type_(std::move(edge_type)),
+      : source_(std::move(source)),
+        edge_type_(std::move(edge_type)),
+        label_(std::move(label)),
         target_schema_(std::move(target_schema)) {}
 
   Type type() const override { return Type::TRAVERSE; }
 
+  const std::string& source() const { return source_; }
   const std::string& edge_type() const { return edge_type_; }
+  const std::string& label() const { return label_; }
   const std::set<std::string>& target_schema() const { return target_schema_; }
 };
 
@@ -105,10 +111,11 @@ class Query {
     }
 
     Builder& traverse(
-        std::string edge_type,
+        std::string source, std::string edge_type, std::string label,
         std::set<std::string> target_schema = std::set<std::string>()) {
-      clauses_.push_back(std::make_shared<Traverse>(std::move(edge_type),
-                                                    std::move(target_schema)));
+      clauses_.push_back(std::make_shared<Traverse>(
+          std::move(source), std::move(edge_type), std::move(label),
+          std::move(target_schema)));
       return *this;
     }
 
@@ -135,9 +142,18 @@ class QueryResult {
   // Access as Arrow Table
   std::shared_ptr<arrow::Table> as_table() const { return table_; }
 
+  void add_table(std::string schema_name, std::shared_ptr<arrow::Table>) {
+    tables_[schema_name] = std::move(table_);
+  }
+  std::unordered_map<std::string, std::shared_ptr<arrow::Table>> tables() const {
+    return tables_;
+  }
+
+
  private:
   std::vector<std::shared_ptr<Node>> nodes_;
   std::shared_ptr<arrow::Table> table_;
+  std::unordered_map<std::string, std::shared_ptr<arrow::Table>> tables_;
 };
 
 }  // namespace tundradb
