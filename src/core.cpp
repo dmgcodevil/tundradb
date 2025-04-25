@@ -3,6 +3,7 @@
 #include <arrow/compute/api.h>
 #include <arrow/dataset/dataset.h>
 #include <arrow/dataset/scanner.h>
+#include <fmt/ranges.h>
 
 #include <chrono>
 #include <future>
@@ -15,6 +16,27 @@
 namespace fs = std::filesystem;
 
 namespace tundradb {
+
+struct GraphConnection {
+  std::string source;
+  int64_t source_id;
+  std::string edge_type;
+  std::string label;
+  std::string target;
+  int64_t target_id;
+
+  [[nodiscard]] std::string toString() const {
+    std::stringstream ss;
+    ss << "{(" << source << ":id=" << source_id << "->[:" << label << "]->"
+       << "(" << target << ":id=" << target_id << ")}";
+    return ss.str();
+  }
+
+  friend std::ostream& operator<<(std::ostream& os, const GraphConnection& c) {
+    os << c.toString();
+    return os;
+  }
+};
 
 arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
     std::shared_ptr<SchemaRegistry> schema_registry,
@@ -266,6 +288,20 @@ arrow::Result<std::shared_ptr<arrow::Table>> filter(
   return result_table;
 }
 
+void debug_connections(
+    int64_t id,
+    const std::map<int64_t, std::vector<GraphConnection>>& connections,
+    std::vector<std::string> path, std::vector<std::string>& res) {
+  if (!connections.contains(id)) {
+    res.push_back(fmt::format("{}", fmt::join(path, ", ")));
+    return;
+  }
+  for (const auto& conn : connections.at(id)) {
+    path.push_back(conn.toString());
+    debug_connections(conn.target_id, connections, path, res);
+  }
+}
+
 arrow::Result<std::shared_ptr<QueryResult>> Database::query(
     const Query& query) {
   log_info("Executing query starting from schema '{}'", query.from_schema());
@@ -294,7 +330,8 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
   log_debug("Initial front contains {} IDs from schema '{}'",
             front_ids[query.from_schema()].size(), query.from_schema());
 
-  std::map<int64_t, std::vector<int64_t>> connections;  // node id -> [node id]
+  std::map<int64_t, std::vector<GraphConnection>>
+      connections;  // node id -> [node id]
   // All nodes that are part of the query result, by schema
   std::unordered_map<std::string, std::set<int64_t>> selected;
 
@@ -334,15 +371,12 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
             auto filtered_ids = filtered_ids_result.ValueOrDie();
             log_debug("Filter resulted in {} matching IDs for schema '{}'",
                       filtered_ids.size(), schema_name);
-
-            new_front_ids[schema_name].insert(filtered_ids.begin(),
-                                              filtered_ids.end());
+            front_ids[schema_name] = filtered_ids;
           } else {
             log_debug("Schema '{}' does not have field '{}', skipping filter",
                       schema_name, where->field());
           }
         }
-        front_ids = std::move(new_front_ids);
         log_info("After WHERE: front contains {} schemas", front_ids.size());
         break;
       }
@@ -393,7 +427,9 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
                   target_id, node->schema_name);
               traversed_nodes[node->schema_name].push_back(node);
               new_front_ids[node->schema_name].insert(target_id);
-              connections[source_id].push_back(target_id);
+              connections[source_id].push_back(GraphConnection{
+                  traverse->source(), source_id, traverse->edge_type(),
+                  traverse->label(), node->schema_name, target_id});
             } else {
               log_debug(
                   "Target node {} with schema '{}' not in target schemas, "
@@ -464,6 +500,13 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
   for (const auto& [schema_name, table] : front_tables) {
     result->add_table(schema_name, table);
   }
+  std::vector<std::string> paths;
+  for (const auto& [id, _] : connections) {
+    debug_connections(id, connections, {}, paths);
+  }
+
+  log_debug("Paths {}", fmt::join(paths, "\n "));
+
   return result;
 }
 
