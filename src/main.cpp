@@ -62,7 +62,7 @@ std::vector<std::shared_ptr<Node>> create_companies(
     size_builder.Finish(&size_array);
 
     std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
-      {"name", name_array}, {"size", size_array}};
+        {"name", name_array}, {"size", size_array}};
 
     auto node = db.create_node("companies", data).ValueOrDie();
     nodes.push_back(node);
@@ -71,20 +71,17 @@ std::vector<std::shared_ptr<Node>> create_companies(
   return nodes;
 }
 
-
 std::shared_ptr<arrow::Schema> create_users_schema() {
   auto name_field = arrow::field("name", arrow::utf8());
   auto age_field = arrow::field("age", arrow::int64());
   return arrow::schema({name_field, age_field});
 }
 
-
 std::shared_ptr<arrow::Schema> create_companies_schema() {
   auto name_field = arrow::field("name", arrow::utf8());
   auto size_field = arrow::field("size", arrow::int64());
   return arrow::schema({name_field, size_field});
 }
-
 
 int main() {
   Logger::getInstance().setLevel(LogLevel::DEBUG);
@@ -96,7 +93,6 @@ int main() {
                     .with_chunk_size(1000)
                     .build();
 
-
   auto users_schema = create_users_schema();
   auto companies_schema = create_companies_schema();
   Database db(config);
@@ -106,9 +102,11 @@ int main() {
       std::vector({User{"alex", 25}, User{"bob", 31}, User{"jeff", 33},
                    User{"sam", 21}, User{"matt", 40}});
   create_users(db, users);
-  const auto companies = std::vector{{Company{"ibm", 1000}, Company{"google", 3000}}};
+  const auto companies =
+      std::vector{{Company{"ibm", 1000}, Company{"google", 3000}}};
   create_companies(db, companies);
   db.connect(1, "friend", 0).ValueOrDie();
+  db.connect(4, "works-at", 6).ValueOrDie();
 
   auto users_table = db.get_table("users").ValueOrDie();
   auto companies_table = db.get_table("companies").ValueOrDie();
@@ -118,6 +116,7 @@ int main() {
   auto query = Query::from_schema("users")
                    .where("age", CompareOp::Gt, Value(30))
                    .traverse("users", "friend", "friends")
+                   .traverse("users", "works-at", "employed")
                    .build();
   auto result = db.query(query).ValueOrDie();
   auto tables = result->tables();

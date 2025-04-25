@@ -27,8 +27,8 @@ struct GraphConnection {
 
   [[nodiscard]] std::string toString() const {
     std::stringstream ss;
-    ss << "{(" << source << ":id=" << source_id << "->[:" << label << "]->"
-       << "(" << target << ":id=" << target_id << ")}";
+    ss << "{(" << source << ":id=" << source_id << "->[:" << edge_type << "]->"
+       << "(" << label << ":" << target << ":id=" << target_id << ")}";
     return ss.str();
   }
 
@@ -386,12 +386,13 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
             "Processing TRAVERSE on edge type '{}' from source '{}' with label "
             "'{}'",
             traverse->edge_type(), traverse->source(), traverse->label());
-
         if (!front_ids.contains(traverse->source())) {
-          log_error("Source '{}' not found in current front",
+          log_debug("Source '{}' not found in current front. Loading",
                     traverse->source());
-          return arrow::Status::Invalid("source not found: ",
-                                        traverse->source());
+          front_tables[traverse->source()] =
+              get_table(traverse->source()).ValueOrDie();
+          front_ids[traverse->source()] =
+              get_ids(front_tables[traverse->source()]).ValueOrDie();
         }
 
         std::unordered_map<std::string, std::vector<std::shared_ptr<Node>>>
