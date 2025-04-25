@@ -501,12 +501,14 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
   for (const auto& [schema_name, table] : front_tables) {
     result->add_table(schema_name, table);
   }
-  std::vector<std::string> paths;
+
   for (const auto& [id, _] : connections) {
+    std::vector<std::string> paths;
+    log_debug("Node id: {} paths: ", id);
     debug_connections(id, connections, {}, paths);
+    log_debug("   {}", fmt::join(paths, "\n "));
   }
 
-  log_debug("Paths {}", fmt::join(paths, "\n "));
 
   return result;
 }
