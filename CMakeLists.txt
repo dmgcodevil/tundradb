@@ -17,10 +17,13 @@ list(APPEND CMAKE_PREFIX_PATH "/usr/local")
 
 # Find required packages
 find_package(Arrow REQUIRED)
+find_package(ArrowDataset REQUIRED)
 find_package(Parquet REQUIRED)
 find_package(benchmark REQUIRED)
 find_package(GTest REQUIRED)
 find_package(TBB REQUIRED)
+
+message(STATUS "ArrowDataset libs: ${ARROW_DATASET_LIBRARIES}")
 
 # Find CDS library
 if(APPLE)
@@ -64,6 +67,17 @@ if(NOT TARGET nlohmann_json::nlohmann_json)
 else()
   message(STATUS "nlohmann_json target already exists, skipping FetchContent")
 endif()
+# Check if we already have json in a local path
+#set(JSON_SOURCE_DIR "${CMAKE_SOURCE_DIR}/external/json" CACHE PATH "Path to json source")
+#
+#if(NOT EXISTS "${JSON_SOURCE_DIR}/CMakeLists.txt")
+#    # Clone it only if it doesn't exist
+#    execute_process(
+#            COMMAND git clone https://github.com/nlohmann/json.git ${JSON_SOURCE_DIR}
+#            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/external
+#    )
+#endif()
+#add_subdirectory(${JSON_SOURCE_DIR})
 
 # Add spdlog if not found with find_package
 if(NOT spdlog_FOUND AND NOT TARGET spdlog::spdlog)
@@ -107,6 +121,7 @@ target_include_directories(core
 target_link_libraries(core
     PUBLIC
         Arrow::arrow_shared
+        ArrowDataset::arrow_dataset_shared
         Parquet::parquet_shared
         nlohmann_json::nlohmann_json
         spdlog::spdlog

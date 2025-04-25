@@ -142,13 +142,13 @@ class QueryResult {
   // Access as Arrow Table
   std::shared_ptr<arrow::Table> as_table() const { return table_; }
 
-  void add_table(std::string schema_name, std::shared_ptr<arrow::Table>) {
-    tables_[schema_name] = std::move(table_);
+  void add_table(std::string schema_name, std::shared_ptr<arrow::Table> table) {
+    tables_[schema_name] = std::move(table);
   }
-  std::unordered_map<std::string, std::shared_ptr<arrow::Table>> tables() const {
+  std::unordered_map<std::string, std::shared_ptr<arrow::Table>> tables()
+      const {
     return tables_;
   }
-
 
  private:
   std::vector<std::shared_ptr<Node>> nodes_;

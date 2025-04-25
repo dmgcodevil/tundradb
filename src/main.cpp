@@ -67,14 +67,13 @@ int main() {
                    .where("age", CompareOp::Gt, Value(30))
                    .build();
   auto result = db.query(query).ValueOrDie();
-  auto tables =  result.tables();
+  auto tables = result->tables();
 
   std::cout << "result:" << std::endl;
-  for (auto &[schema_name, table] : tables) {
+  for (auto& [schema_name, table] : tables) {
     std::cout << schema_name << std::endl;
     print_table(table);
   }
-
 
   return 0;
 }
