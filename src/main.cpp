@@ -128,6 +128,9 @@ int main() {
     std::cout << "=============================" << std::endl;
     std::cout << std::endl;
   }
+  auto schema = result->build_denormalized_schema().ValueOrDie();
+  std::cout << "schema:" << std::endl;
+  std::cout << schema->ToString() << std::endl;
 
   return 0;
 }

@@ -107,6 +107,7 @@ add_library(core
         src/snapshot.cpp
         src/edge_store.cpp
         src/table_info.cpp
+        include/schema.hpp
 )
 
 target_include_directories(core

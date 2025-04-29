@@ -1,15 +1,42 @@
 #ifndef QUERY_HPP
 #define QUERY_HPP
 
+#include <arrow/api.h>
+#include <arrow/result.h>
+
+#include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "node.hpp"
 #include "types.hpp"
 
 namespace tundradb {
+
+struct GraphConnection {
+  std::string source;
+  int64_t source_id;
+  std::string edge_type;
+  std::string label;
+  std::string target;
+  int64_t target_id;
+
+  [[nodiscard]] std::string toString() const {
+    std::stringstream ss;
+    ss << "{(" << source << ":id=" << source_id << "->[:" << edge_type << "]->"
+       << "(" << label << ":" << target << ":id=" << target_id << ")}";
+    return ss.str();
+  }
+
+  friend std::ostream& operator<<(std::ostream& os, const GraphConnection& c) {
+    os << c.toString();
+    return os;
+  }
+};
 
 // Comparison operators
 enum class CompareOp {
@@ -140,20 +167,54 @@ class QueryResult {
   size_t count() const { return nodes_.size(); }
 
   // Access as Arrow Table
-  std::shared_ptr<arrow::Table> as_table() const { return table_; }
+  std::shared_ptr<arrow::Table> as_table() const {
+    if (!table_) {
+      // Create a simple table with our schema
+      auto schema_result = build_denormalized_schema();
+      if (schema_result.ok()) {
+        // For now, just return an empty table with the right schema
+        table_ =
+            arrow::Table::Make(schema_result.ValueOrDie(),
+                               std::vector<std::shared_ptr<arrow::Array>>{});
+      }
+    }
+    return table_;
+  }
 
   void add_table(std::string schema_name, std::shared_ptr<arrow::Table> table) {
     tables_[schema_name] = std::move(table);
   }
+
   std::unordered_map<std::string, std::shared_ptr<arrow::Table>> tables()
       const {
     return tables_;
   }
 
+  void set_connections(
+      const std::map<int64_t, std::vector<GraphConnection>>& connections) {
+    connections_ = connections;
+  }
+
+  void set_node_manager(const std::shared_ptr<NodeManager>& node_manager) {
+    node_manager_ = node_manager;
+  }
+  void set_schema_registry(
+      const std::shared_ptr<SchemaRegistry>& schema_registry) {
+    schema_registry_ = schema_registry;
+  }
+
+  // Build a schema for the denormalized table that combines all connected
+  // tables
+  arrow::Result<std::shared_ptr<arrow::Schema>> build_denormalized_schema()
+      const;
+
  private:
   std::vector<std::shared_ptr<Node>> nodes_;
-  std::shared_ptr<arrow::Table> table_;
+  mutable std::shared_ptr<arrow::Table> table_;
   std::unordered_map<std::string, std::shared_ptr<arrow::Table>> tables_;
+  std::map<int64_t, std::vector<GraphConnection>> connections_;
+  std::shared_ptr<NodeManager> node_manager_;
+  std::shared_ptr<SchemaRegistry> schema_registry_;
 };
 
 }  // namespace tundradb

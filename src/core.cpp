@@ -17,27 +17,6 @@ namespace fs = std::filesystem;
 
 namespace tundradb {
 
-struct GraphConnection {
-  std::string source;
-  int64_t source_id;
-  std::string edge_type;
-  std::string label;
-  std::string target;
-  int64_t target_id;
-
-  [[nodiscard]] std::string toString() const {
-    std::stringstream ss;
-    ss << "{(" << source << ":id=" << source_id << "->[:" << edge_type << "]->"
-       << "(" << label << ":" << target << ":id=" << target_id << ")}";
-    return ss.str();
-  }
-
-  friend std::ostream& operator<<(std::ostream& os, const GraphConnection& c) {
-    os << c.toString();
-    return os;
-  }
-};
-
 arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
     std::shared_ptr<SchemaRegistry> schema_registry,
     const std::vector<std::shared_ptr<Node>>& nodes) {
@@ -302,6 +281,36 @@ void debug_connections(
   }
 }
 
+std::set<int64_t> get_roots(
+    const std::map<int64_t, std::vector<GraphConnection>>& connections) {
+  std::set<int64_t> roots;
+  std::unordered_map<int64_t, int64_t> count;
+  // roots.insert(connections.begin(), connections.end());
+  std::vector<int64_t> stack;
+  for (const auto& conn : connections) {
+    count[conn.first] = 0;
+    stack.push_back(conn.first);
+  }
+
+  while (!stack.empty()) {
+    auto curr = stack[stack.size() - 1];
+    stack.pop_back();
+
+    if (connections.contains(curr)) {
+      for (auto const next : connections.at(curr)) {
+        count[next.target_id]++;
+        stack.push_back(next.target_id);
+      }
+    }
+  }
+  for (const auto& [id, c] : count) {
+    if (c == 0) {
+      roots.insert(id);
+    }
+  }
+  return roots;
+}
+
 arrow::Result<std::shared_ptr<QueryResult>> Database::query(
     const Query& query) {
   log_info("Executing query starting from schema '{}'", query.from_schema());
@@ -493,9 +502,12 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
     result->add_table(label, table);
   }
 
+  result->set_node_manager(node_manager);
+  result->set_schema_registry(schema_registry);
+
   // Set connections
   log_debug("Adding {} connections to result", connections.size());
-  // result->set_connections(connections);
+  result->set_connections(connections);
 
   log_info("Returning query result with {} tables", front_tables.size());
   for (const auto& [schema_name, table] : front_tables) {
@@ -509,8 +521,63 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
     log_debug("   {}", fmt::join(paths, "\n "));
   }
 
+  auto roots = get_roots(connections);
+  log_debug("roots: {}", fmt::join(roots, ", "));
 
   return result;
+}
+
+arrow::Result<std::shared_ptr<arrow::Schema>>
+QueryResult::build_denormalized_schema() const {
+  log_info("Building schema for denormalized table");
+
+  std::unordered_map<std::string, std::shared_ptr<arrow::Field>> fields_map;
+
+  auto roots = get_roots(connections_);
+  std::set<std::string> processed;
+
+  std::vector<int64_t> stack;
+  for (auto id : roots) {
+    stack.push_back(id);
+
+    auto schema_name = node_manager_->get_node(id).ValueOrDie()->schema_name;
+    if (processed.insert(schema_name).second) {
+      for (auto field :
+           schema_registry_->get(schema_name).ValueOrDie()->fields()) {
+        fields_map[field->name()] = field;
+      }
+    }
+  }
+
+  while (stack.size() > 0) {
+    auto id = stack.back();
+    stack.pop_back();
+
+    if (connections_.contains(id)) {
+      for (auto const& conn : connections_.at(id)) {
+        std::string schema_name =
+            conn.label.empty() ? conn.target : conn.label + "_" + conn.target;
+        if (processed.insert(schema_name).second) {
+          auto schema = schema_registry_->get(conn.target).ValueOrDie();
+          for (auto field_name : schema->field_names()) {
+            auto full_field_name = schema_name + "." + field_name;
+            if (fields_map.contains(full_field_name)) {
+              return arrow::Status::KeyError("Field '{}' already exists",
+                                             full_field_name);
+            }
+            fields_map[full_field_name] = schema->GetFieldByName(field_name);
+          }
+        }
+        stack.push_back(conn.target_id);
+      }
+    }
+  }
+
+  std::vector<std::shared_ptr<arrow::Field>> fields;
+  for (auto const& [name, f] : fields_map) {
+    fields.push_back(arrow::field(name, f->type()));
+  }
+  return std::make_shared<arrow::Schema>(fields);
 }
 
 }  // namespace tundradb

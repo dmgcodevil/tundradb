@@ -27,6 +27,7 @@
 #include "metadata.hpp"
 #include "node.hpp"
 #include "query.hpp"
+#include "schema.hpp"
 #include "storage.hpp"
 #include "utils.hpp"
 
@@ -39,116 +40,6 @@ class ShardManager;
 class MetadataManager;
 class Storage;
 class NodeManager;
-
-// Schema registry class for managing node schemas
-class SchemaRegistry {
- private:
-  std::unordered_map<std::string, std::shared_ptr<arrow::Schema>> schemas;
-
- public:
-  SchemaRegistry() = default;
-
-  // Add a schema with the given name
-  arrow::Result<bool> add(const std::string &name,
-                          std::shared_ptr<arrow::Schema> schema) {
-    schemas.insert(std::make_pair(name, schema));
-    return {true};
-  }
-
-  // Get a schema by name, returning an error if not found
-  arrow::Result<std::shared_ptr<arrow::Schema>> get(
-      const std::string &name) const {
-    auto it = schemas.find(name);
-    if (it == schemas.end()) {
-      return arrow::Status::KeyError("Schema not found: ", name);
-    }
-    return it->second;
-  }
-
-  // Check if a schema exists
-  [[nodiscard]] bool exists(const std::string &name) const {
-    return schemas.find(name) != schemas.end();
-  }
-
-  // Get all schema names
-  [[nodiscard]] std::vector<std::string> get_schema_names() const {
-    std::vector<std::string> names;
-    names.reserve(schemas.size());
-    for (const auto &schema_pair : schemas) {
-      names.push_back(schema_pair.first);
-    }
-    return names;
-  }
-};
-
-// NodeManager class for managing node creation and ID assignment
-class NodeManager {
- public:
-  NodeManager() = default;
-
-  arrow::Result<std::shared_ptr<Node>> get_node(int64_t id) {
-    return nodes[id];
-  }
-
-  bool add_node(std::shared_ptr<Node> node) {
-    // todo check if node exists
-    nodes[node->id] = node;
-    return true;
-  }
-
-  bool remove_node(int64_t id) { return nodes.erase(id) > 0; }
-
-  arrow::Result<std::shared_ptr<Node>> create_node(
-      const std::string &schema_name,
-      std::unordered_map<std::string, std::shared_ptr<arrow::Array>> &data,
-      std::shared_ptr<SchemaRegistry> schema_registry) {
-    if (schema_name.empty()) {
-      return arrow::Status::Invalid("Schema name cannot be empty");
-    }
-
-    ARROW_ASSIGN_OR_RAISE(auto schema, schema_registry->get(schema_name));
-    if (data.contains("id")) {
-      return arrow::Status::Invalid("'id' column is auto generated");
-    }
-
-    std::unordered_map<std::string, std::shared_ptr<arrow::Array>>
-        normalized_data;
-    for (auto field : schema->fields()) {
-      if (field->name() != "id" && !field->nullable() &&
-          (!data.contains(field->name()) ||
-           data.find(field->name())->second->IsNull(0))) {
-        return arrow::Status::Invalid("Field '", field->name(),
-                                      "' is required");
-      }
-      if (!data.contains(field->name())) {
-        normalized_data[field->name()] =
-            create_null_array(field->type()).ValueOrDie();
-      } else {
-        auto array = data.find(field->name())->second;
-        if (!array->type()->Equals(field->type())) {
-          return arrow::Status::Invalid("Type mismatch for field '",
-                                        field->name(), "'. Expected ",
-                                        field->type()->ToString(), " but got ",
-                                        array->type()->ToString());
-        }
-        normalized_data[field->name()] = array;
-      }
-    }
-
-    auto id = id_counter.fetch_add(1);
-    normalized_data["id"] = create_int64_array(id).ValueOrDie();
-    auto node = std::make_shared<Node>(id, schema_name, normalized_data);
-    nodes[id] = node;
-    return node;
-  }
-
-  void set_id_counter(int64_t value) { id_counter.store(value); }
-  int64_t get_id_counter() const { return id_counter.load(); }
-
- private:
-  std::atomic<int64_t> id_counter{0};
-  std::unordered_map<int64_t, std::shared_ptr<Node>> nodes;
-};
 
 class SnapshotManager {
  public:
