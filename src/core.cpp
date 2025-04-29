@@ -9,6 +9,7 @@
 #include <future>
 #include <iostream>
 #include <memory>
+#include <stack>
 #include <thread>
 #include <vector>
 
@@ -578,6 +579,163 @@ QueryResult::build_denormalized_schema() const {
   }
 
   return std::make_shared<arrow::Schema>(fields);
+}
+
+arrow::Result<std::shared_ptr<arrow::Table>>
+QueryResult::populate_denormalized_table(
+    const std::shared_ptr<arrow::Schema>& schema) const {
+  log_info("Populating denormalized table with data");
+
+  // Create builders for each field in the schema
+  std::vector<std::unique_ptr<arrow::ArrayBuilder>> builders;
+  for (const auto& field : schema->fields()) {
+    ARROW_ASSIGN_OR_RAISE(auto builder, arrow::MakeBuilder(field->type()));
+    builders.push_back(std::move(builder));
+  }
+
+  // Map field names to their positions in the schema
+  std::unordered_map<std::string, int> field_indices;
+  for (int i = 0; i < schema->num_fields(); i++) {
+    field_indices[schema->field(i)->name()] = i;
+  }
+
+  // Get roots of the connection graph
+  std::set<int64_t> roots = get_roots(connections_);
+  log_debug("Creating table with {} root nodes", roots.size());
+
+  // For each root node, create a row in the denormalized table
+  for (int64_t root_id : roots) {
+    // Find the root node's schema
+    auto node_result = node_manager_->get_node(root_id);
+    if (!node_result.ok()) {
+      log_warn("Could not find node with ID {}, skipping", root_id);
+      continue;
+    }
+
+    auto root_node = node_result.ValueOrDie();
+    std::string root_schema = root_node->schema_name;
+
+    // Add each field from the root schema
+    for (const auto& field_name :
+         schema_registry_->get(root_schema).ValueOrDie()->field_names()) {
+      if (field_indices.find(field_name) != field_indices.end()) {
+        int idx = field_indices[field_name];
+        auto field_result = root_node->get_field(field_name);
+        if (field_result.ok()) {
+          auto array = field_result.ValueOrDie();
+          if (array->length() > 0) {
+            auto scalar_result = array->GetScalar(0);
+            if (scalar_result.ok()) {
+              auto scalar = scalar_result.ValueOrDie();
+              auto status = builders[idx]->AppendScalar(*scalar);
+              if (!status.ok()) {
+                return status;
+              }
+            } else {
+              ARROW_RETURN_NOT_OK(builders[idx]->AppendNull());
+            }
+          } else {
+            ARROW_RETURN_NOT_OK(builders[idx]->AppendNull());
+          }
+        } else {
+          ARROW_RETURN_NOT_OK(builders[idx]->AppendNull());
+        }
+      }
+    }
+
+    // Track nodes we've already processed to avoid cycles
+    std::set<int64_t> visited;
+    visited.insert(root_id);
+
+    // Process connected nodes
+    std::stack<std::pair<int64_t, std::string>> node_stack;
+    node_stack.push({root_id, ""});
+
+    while (!node_stack.empty()) {
+      auto [node_id, parent_prefix] = node_stack.top();
+      node_stack.pop();
+
+      // Add connected nodes' data
+      if (connections_.find(node_id) != connections_.end()) {
+        for (const auto& conn : connections_.at(node_id)) {
+          if (visited.find(conn.target_id) != visited.end()) continue;
+          visited.insert(conn.target_id);
+
+          std::string target_schema = conn.target;
+          std::string prefix = conn.label.empty()
+                                   ? target_schema
+                                   : conn.label + "_" + target_schema;
+
+          // Get target node
+          auto target_node_result = node_manager_->get_node(conn.target_id);
+          if (!target_node_result.ok()) {
+            log_warn("Could not find target node with ID {}, skipping",
+                     conn.target_id);
+            continue;
+          }
+
+          auto target_node = target_node_result.ValueOrDie();
+          auto target_arrow_schema =
+              schema_registry_->get(target_schema).ValueOrDie();
+
+          // Add each field from the target node with the appropriate prefix
+          for (const auto& field : target_arrow_schema->fields()) {
+            std::string field_name = field->name();
+            std::string prefixed_field = prefix + "." + field_name;
+
+            if (field_indices.find(prefixed_field) != field_indices.end()) {
+              int idx = field_indices[prefixed_field];
+              auto field_result = target_node->get_field(field_name);
+              if (field_result.ok()) {
+                auto array = field_result.ValueOrDie();
+                if (array->length() > 0) {
+                  auto scalar_result = array->GetScalar(0);
+                  if (scalar_result.ok()) {
+                    auto scalar = scalar_result.ValueOrDie();
+                    auto status = builders[idx]->AppendScalar(*scalar);
+                    if (!status.ok()) {
+                      return status;
+                    }
+                  } else {
+                    ARROW_RETURN_NOT_OK(builders[idx]->AppendNull());
+                  }
+                } else {
+                  ARROW_RETURN_NOT_OK(builders[idx]->AppendNull());
+                }
+              } else {
+                ARROW_RETURN_NOT_OK(builders[idx]->AppendNull());
+              }
+            }
+          }
+
+          // Add this node to the stack to traverse its connections
+          node_stack.push({conn.target_id, prefix});
+        }
+      }
+    }
+
+    // Fill in nulls for any missing fields in this row
+    for (size_t i = 0; i < builders.size(); i++) {
+      // Check current lengths to see if we need to append null
+      int64_t expected_length = builders[0]->length();
+      if (builders[i]->length() < expected_length) {
+        ARROW_RETURN_NOT_OK(builders[i]->AppendNull());
+      }
+    }
+  }
+
+  // Finish builders and create arrays
+  std::vector<std::shared_ptr<arrow::Array>> arrays;
+  arrays.reserve(builders.size());
+
+  for (auto& builder : builders) {
+    std::shared_ptr<arrow::Array> array;
+    ARROW_RETURN_NOT_OK(builder->Finish(&array));
+    arrays.push_back(array);
+  }
+
+  // Create and return the table
+  return arrow::Table::Make(schema, arrays);
 }
 
 }  // namespace tundradb

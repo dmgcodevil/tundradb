@@ -169,13 +169,18 @@ class QueryResult {
   // Access as Arrow Table
   std::shared_ptr<arrow::Table> as_table() const {
     if (!table_) {
-      // Create a simple table with our schema
+      // Create table with our schema and populate with data
       auto schema_result = build_denormalized_schema();
       if (schema_result.ok()) {
-        // For now, just return an empty table with the right schema
-        table_ =
-            arrow::Table::Make(schema_result.ValueOrDie(),
-                               std::vector<std::shared_ptr<arrow::Array>>{});
+        auto result = populate_denormalized_table(schema_result.ValueOrDie());
+        if (result.ok()) {
+          table_ = result.ValueOrDie();
+        } else {
+          // If population fails, return empty table with the schema
+          table_ =
+              arrow::Table::Make(schema_result.ValueOrDie(),
+                                 std::vector<std::shared_ptr<arrow::Array>>{});
+        }
       }
     }
     return table_;
@@ -207,6 +212,10 @@ class QueryResult {
   // tables
   arrow::Result<std::shared_ptr<arrow::Schema>> build_denormalized_schema()
       const;
+
+  // Populate the denormalized table with data from all connected nodes
+  arrow::Result<std::shared_ptr<arrow::Table>> populate_denormalized_table(
+      const std::shared_ptr<arrow::Schema>& schema) const;
 
  private:
   std::vector<std::shared_ptr<Node>> nodes_;

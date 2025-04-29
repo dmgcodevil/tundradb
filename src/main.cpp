@@ -131,6 +131,7 @@ int main() {
   auto schema = result->build_denormalized_schema().ValueOrDie();
   std::cout << "output table schema:" << std::endl;
   std::cout << schema->ToString() << std::endl;
-
+  auto output =  result->populate_denormalized_table(schema).ValueOrDie();
+  print_table(output);
   return 0;
 }
