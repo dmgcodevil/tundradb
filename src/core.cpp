@@ -531,7 +531,8 @@ arrow::Result<std::shared_ptr<arrow::Schema>>
 QueryResult::build_denormalized_schema() const {
   log_info("Building schema for denormalized table");
 
-  std::unordered_map<std::string, std::shared_ptr<arrow::Field>> fields_map;
+  std::set<std::string> processed_fields;
+  std::vector<std::shared_ptr<arrow::Field>> fields;
 
   auto roots = get_roots(connections_);
   std::set<std::string> processed;
@@ -544,7 +545,8 @@ QueryResult::build_denormalized_schema() const {
     if (processed.insert(schema_name).second) {
       for (auto field :
            schema_registry_->get(schema_name).ValueOrDie()->fields()) {
-        fields_map[field->name()] = field;
+        processed_fields.insert(field->name());
+        fields.push_back(field);
       }
     }
   }
@@ -561,11 +563,13 @@ QueryResult::build_denormalized_schema() const {
           auto schema = schema_registry_->get(conn.target).ValueOrDie();
           for (auto field_name : schema->field_names()) {
             auto full_field_name = schema_name + "." + field_name;
-            if (fields_map.contains(full_field_name)) {
+            if (processed_fields.contains(full_field_name)) {
               return arrow::Status::KeyError("Field '{}' already exists",
                                              full_field_name);
             }
-            fields_map[full_field_name] = schema->GetFieldByName(field_name);
+            processed_fields.insert(full_field_name);
+            fields.push_back(arrow::field(
+                full_field_name, schema->GetFieldByName(field_name)->type()));
           }
         }
         stack.push_back(conn.target_id);
@@ -573,10 +577,6 @@ QueryResult::build_denormalized_schema() const {
     }
   }
 
-  std::vector<std::shared_ptr<arrow::Field>> fields;
-  for (auto const& [name, f] : fields_map) {
-    fields.push_back(arrow::field(name, f->type()));
-  }
   return std::make_shared<arrow::Schema>(fields);
 }
 
