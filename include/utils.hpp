@@ -32,7 +32,7 @@ static int64_t now_millis() {
 static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
     const std::shared_ptr<arrow::Schema>& schema,
     const std::vector<std::shared_ptr<Node>>& nodes, size_t chunk_size) {
-  auto final_schema = prepend_id_field(schema);
+  auto final_schema = schema;  // prepend_id_field(schema);
   if (nodes.empty()) {
     // Return empty table with the given schema
     std::vector<std::shared_ptr<arrow::ChunkedArray>> empty_columns;

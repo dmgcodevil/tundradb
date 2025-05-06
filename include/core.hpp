@@ -798,7 +798,7 @@ class Database {
 
   // Get a table for all nodes of a given schema
   arrow::Result<std::shared_ptr<arrow::Table>> get_table(
-      const std::string &schema_name, size_t chunk_size = 10000) {
+      const std::string &schema_name, size_t chunk_size = 10000) const {
     // Get the schema
     ARROW_ASSIGN_OR_RAISE(auto schema, schema_registry->get(schema_name));
 
@@ -856,7 +856,7 @@ class Database {
     return snapshot_manager->commit();
   }
 
-  arrow::Result<std::shared_ptr<QueryResult>> query(const Query &query);
+  arrow::Result<std::shared_ptr<QueryResult>> query(const Query &query) const;
 };
 
 // Helper function to print a single row

@@ -41,6 +41,8 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
     return schema_result.status();
   }
   auto arrow_schema = schema_result.ValueOrDie();
+
+  log_debug("Creating table from schema: {}", arrow_schema->ToString());
   log_debug("Retrieved schema with {} fields", arrow_schema->num_fields());
 
   // Create builders for each field
@@ -158,11 +160,8 @@ arrow::Result<std::set<int64_t>> get_ids(std::shared_ptr<arrow::Table> table) {
 }
 
 arrow::Result<std::shared_ptr<arrow::Table>> filter(
-    std::shared_ptr<arrow::Table> table, std::shared_ptr<Where> where) {
-  auto value = where->value();
-  auto op = where->op();
-  auto field_name = where->field();
-
+    std::shared_ptr<arrow::Table> table, const std::string& field_name,
+    const CompareOp& op, const Value& value) {
   log_info("Filtering table on field '{}' with {} operator", field_name,
            static_cast<int>(op));
 
@@ -312,114 +311,141 @@ std::set<int64_t> get_roots(
   return roots;
 }
 
+struct QueryState {
+  std::unordered_map<std::string, std::shared_ptr<arrow::Table>> tables;
+  std::unordered_map<std::string, std::set<int64_t>> ids;
+  std::unordered_map<std::string, std::string> aliases;
+  std::map<int64_t, std::vector<GraphConnection>> connections;
+
+  arrow::Result<bool> init_table(const std::shared_ptr<arrow::Table> table,
+                                 const SchemaRef& schema_ref) {
+    if (this->aliases.contains(schema_ref.value())) {
+      return arrow::Status::Invalid("Duplicated alias: {}", schema_ref.value());
+    }
+    this->aliases[schema_ref.value()] = schema_ref.schema();
+
+    this->tables[schema_ref.value()] = table;
+    log_debug("Getting IDs from initial table: {}", schema_ref.toString());
+    auto initial_ids_result = get_ids(this->tables[schema_ref.value()]);
+    if (!initial_ids_result.ok()) {
+      log_error("Failed to get IDs from initial table '{}': {}",
+                schema_ref.toString(), initial_ids_result.status().ToString());
+      return initial_ids_result.status();
+    }
+    this->ids[schema_ref.value()] = initial_ids_result.ValueOrDie();
+
+    return true;
+  }
+
+  arrow::Result<bool> init_table(const Database& db,
+                                 const SchemaRef& schema_ref) {
+    auto initial_table_result = db.get_table(schema_ref.schema());
+    if (!initial_table_result.ok()) {
+      log_error("Failed to get initial table for schema '{}': {}",
+                schema_ref.toString(),
+                initial_table_result.status().ToString());
+      return initial_table_result.status();
+    }
+    return init_table(initial_table_result.ValueOrDie(), schema_ref);
+  }
+
+  arrow::Result<bool> update_table(std::shared_ptr<arrow::Table> table,
+                                   const std::string& table_name) {
+    if (!this->tables.contains(table_name)) {
+      return arrow::Status::Invalid("Table '{}' does not exist", table_name);
+    }
+    this->tables[table_name] = table;
+    auto ids_result = get_ids(table);
+    if (!ids_result.ok()) {
+      log_error("Failed to get IDs from table: {}", table_name);
+      return ids_result.status();
+    }
+    return true;
+  }
+};
+
 arrow::Result<std::shared_ptr<QueryResult>> Database::query(
-    const Query& query) {
-  log_info("Executing query starting from schema '{}'", query.from_schema());
-  std::unordered_map<std::string, std::shared_ptr<arrow::Table>> front_tables;
+    const Query& query) const {
+  QueryState query_state;
+  log_info("Executing query starting from schema '{}'",
+           query.from().toString());
 
-  // initialize front
-  log_debug("Initializing query with schema '{}'", query.from_schema());
-  auto initial_table_result = get_table(query.from_schema());
-  if (!initial_table_result.ok()) {
-    log_error("Failed to get initial table for schema '{}': {}",
-              query.from_schema(), initial_table_result.status().ToString());
-    return initial_table_result.status();
-  }
-  front_tables[query.from_schema()] = initial_table_result.ValueOrDie();
-
-  log_debug("Getting IDs from initial table");
-  auto initial_ids_result = get_ids(front_tables[query.from_schema()]);
-  if (!initial_ids_result.ok()) {
-    log_error("Failed to get IDs from initial table: {}",
-              initial_ids_result.status().ToString());
-    return initial_ids_result.status();
-  }
-
-  std::unordered_map<std::string, std::set<int64_t>> front_ids;
-  front_ids[query.from_schema()] = initial_ids_result.ValueOrDie();
-  log_debug("Initial front contains {} IDs from schema '{}'",
-            front_ids[query.from_schema()].size(), query.from_schema());
-
-  std::map<int64_t, std::vector<GraphConnection>>
-      connections;  // node id -> [node id]
+  // node id -> [node id]
   // All nodes that are part of the query result, by schema
   std::unordered_map<std::string, std::set<int64_t>> selected;
+
+  auto init_from_table_result = query_state.init_table(*this, query.from());
+  if (!init_from_table_result.ok()) {
+    log_error("Failed to get initial table from schema '{}'",
+              query.from().toString());
+    return init_from_table_result.status();
+  }
 
   log_info("Processing {} query clauses", query.clauses().size());
   for (const auto& clause : query.clauses()) {
     switch (clause->type()) {
-      // note: consecutive where clauses should be combined into one
+      // note: consecutive 'where' clauses should be combined into one
       case Clause::Type::WHERE: {
         auto where = std::static_pointer_cast<Where>(clause);
         log_info("Processing WHERE clause on field '{}' with operator {}",
                  where->field(), static_cast<int>(where->op()));
 
-        // applies to ALL tables in the active front that have the given field
-        // then we need add filtered tables ids selected
         std::unordered_map<std::string, std::set<int64_t>> new_front_ids;
-        log_debug("Applying WHERE to {} schemas in current front",
-                  front_tables.size());
-
-        for (auto& [schema_name, table] : front_tables) {
-          if (table->schema()->GetFieldIndex(where->field()) != -1) {
-            log_debug("Filtering table for schema '{}' on field '{}'",
-                      schema_name, where->field());
-            auto filtered_table_result = filter(table, where);
-            if (!filtered_table_result.ok()) {
-              log_error("Failed to filter table for schema '{}': {}",
-                        schema_name, filtered_table_result.status().ToString());
-              return filtered_table_result.status();
-            }
-            front_tables[schema_name] = filtered_table_result.ValueOrDie();
-
-            auto filtered_ids_result = get_ids(front_tables[schema_name]);
-            if (!filtered_ids_result.ok()) {
-              log_error("Failed to get IDs from filtered table: {}",
-                        filtered_ids_result.status().ToString());
-              return filtered_ids_result.status();
-            }
-            auto filtered_ids = filtered_ids_result.ValueOrDie();
-            log_debug("Filter resulted in {} matching IDs for schema '{}'",
-                      filtered_ids.size(), schema_name);
-            front_ids[schema_name] = filtered_ids;
-          } else {
-            log_debug("Schema '{}' does not have field '{}', skipping filter",
-                      schema_name, where->field());
-          }
+        size_t pos = where->field().find('.');
+        std::string variable;
+        std::string field;
+        if (pos == std::string::npos) {
+          return arrow::Status::Invalid("expected <var>.<field>, actual={}",
+                                        where->field());
         }
-        log_info("After WHERE: front contains {} schemas", front_ids.size());
+        variable = where->field().substr(0, pos);
+        field = where->field().substr(pos + 1);
+        if (!query_state.tables.contains(variable)) {
+          return arrow::Status::Invalid("Unknown variable '{}'", variable);
+        }
+        auto table = query_state.tables.at(variable);
+        if (table->schema()->GetFieldIndex(field) == -1) {
+          return arrow::Status::Invalid("Unknown field '{}'", field);
+        }
+        auto filtered_table_result =
+            filter(table, field, where->op(), where->value());
+        if (!filtered_table_result.ok()) {
+          log_error("Failed to filter table '{}': {}", where->field(),
+                    filtered_table_result.status().ToString());
+          return filtered_table_result.status();
+        }
+        auto res = query_state.update_table(filtered_table_result.ValueOrDie(),
+                                            variable);
+        if (!res.ok()) {
+          return res.status();
+        }
         break;
       }
       case Clause::Type::TRAVERSE: {
         auto traverse = std::static_pointer_cast<Traverse>(clause);
-        log_info(
-            "Processing TRAVERSE on edge type '{}' from source '{}' with label "
-            "'{}'",
-            traverse->edge_type(), traverse->source(), traverse->label());
-        if (!front_ids.contains(traverse->source())) {
-          log_debug("Source '{}' not found in current front. Loading",
-                    traverse->source());
-          front_tables[traverse->source()] =
-              get_table(traverse->source()).ValueOrDie();
-          front_ids[traverse->source()] =
-              get_ids(front_tables[traverse->source()]).ValueOrDie();
+        log_info("Processing TRAVERSE on edge type '{}' from source '{}'",
+                 traverse->edge_type(), traverse->source().toString());
+        auto source = traverse->source();
+        if (!query_state.tables.contains(source.value())) {
+          log_debug("Source '{}' not found. Loading",
+                    traverse->source().toString());
+          auto res = query_state.init_table(*this, traverse->source());
+          if (!res.ok()) {
+            return res.status();
+          }
         }
 
-        std::unordered_map<std::string, std::vector<std::shared_ptr<Node>>>
-            traversed_nodes;
-
-        std::unordered_map<std::string, std::set<int64_t>> new_front_ids;
         log_debug("Traversing from {} source nodes",
-                  front_ids[traverse->source()].size());
+                  query_state.ids[source.value()].size());
 
-        int edge_count = 0;
-        for (auto source_id : front_ids[traverse->source()]) {
+        auto source_schema = query_state.aliases[source.value()];
+        std::vector<std::shared_ptr<Node>> neighbors;
+        for (auto source_id : query_state.ids[source.value()]) {
           auto outgoing_edges =
               edge_store->get_outgoing_edges(source_id, traverse->edge_type())
-                  .ValueOrDie();
+                  .ValueOrDie();  // todo check result
           log_debug("Node {} has {} outgoing edges of type '{}'", source_id,
                     outgoing_edges.size(), traverse->edge_type());
-          edge_count += outgoing_edges.size();
 
           for (auto edge : outgoing_edges) {
             auto target_id = edge->get_target_id();
@@ -427,62 +453,33 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
             if (!node_result.ok()) {
               log_error("Failed to get node {}: {}", target_id,
                         node_result.status().ToString());
+              // should probably skip in case of concurrent remove
               return node_result.status();
             }
             auto node = node_result.ValueOrDie();
 
-            if (traverse->target_schema().empty() ||
-                traverse->target_schema().contains(node->schema_name)) {
-              log_debug(
-                  "Adding target node {} with schema '{}' to traversed nodes",
-                  target_id, node->schema_name);
-              traversed_nodes[node->schema_name].push_back(node);
-              new_front_ids[node->schema_name].insert(target_id);
-              connections[source_id].push_back(GraphConnection{
-                  traverse->source(), source_id, traverse->edge_type(),
-                  traverse->label(), node->schema_name, target_id});
-            } else {
-              log_debug(
-                  "Target node {} with schema '{}' not in target schemas, "
-                  "skipping",
-                  target_id, node->schema_name);
+            if (source_schema == node->schema_name) {
+              neighbors.push_back(node);
+              query_state.connections[source_id].push_back(GraphConnection{
+                  traverse->source(), source_id, traverse->edge_type(), "",
+                  traverse->target(), target_id});
             }
           }
         }
-        log_info("Traversed {} edges, found {} target nodes across {} schemas",
-                 edge_count,
-                 std::accumulate(new_front_ids.begin(), new_front_ids.end(), 0,
-                                 [](size_t sum, const auto& pair) {
-                                   return sum + pair.second.size();
-                                 }),
-                 new_front_ids.size());
-
-        for (const auto& [schema_name, nodes] : traversed_nodes) {
-          if (!nodes.empty()) {
-            log_debug("Creating table for {} nodes with schema '{}'",
-                      nodes.size(), schema_name);
-            auto full_name = traverse->label() + "_" + schema_name;
-            auto table_result = create_table_from_nodes(schema_registry, nodes);
-            if (!table_result.ok()) {
-              log_error("Failed to create table from nodes: {}",
-                        table_result.status().ToString());
-              return table_result.status();
-            }
-            front_tables[full_name] = table_result.ValueOrDie();
-            log_debug("Created table with label '{}' for schema '{}'",
-                      full_name, schema_name);
-          }
+        log_debug("found {} neighbors", neighbors.size());
+        auto table_result = create_table_from_nodes(schema_registry, neighbors);
+        if (!table_result.ok()) {
+          log_error("Failed to create table from nodes: {}",
+                    table_result.status().ToString());
+          return table_result.status();
         }
-
-        log_debug("Updating front IDs with {} new schemas",
-                  new_front_ids.size());
-        for (const auto& [schema_name, ids] : new_front_ids) {
-          auto full_name = traverse->label() + "_" + schema_name;
-          front_ids[full_name] = ids;
-          log_debug("Added {} IDs to front with label '{}'", ids.size(),
-                    full_name);
+        auto target_table_init_result = query_state.init_table(
+            table_result.ValueOrDie(), traverse->target());
+        if (!target_table_init_result.ok()) {
+          log_error("Failed to init table from neighbors: {}",
+                    target_table_init_result.status().ToString());
+          return target_table_init_result.status();
         }
-
         break;
       }
       default:
@@ -497,32 +494,19 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
   auto result = std::make_shared<QueryResult>();
 
   // Add tables
-  for (const auto& [label, table] : front_tables) {
-    log_debug("Adding table with label '{}' ({} rows) to result", label,
-              table->num_rows());
-    result->add_table(label, table);
-  }
+  // for (const auto& [label, table] : front_tables) {
+  //   log_debug("Adding table with label '{}' ({} rows) to result", label,
+  //             table->num_rows());
+  //   result->add_table(label, table);
+  // }
 
+  result->set_tables(query_state.tables);
+  result->set_aliases(query_state.aliases);
+  result->set_connections(query_state.connections);
   result->set_node_manager(node_manager);
   result->set_schema_registry(schema_registry);
 
-  // Set connections
-  log_debug("Adding {} connections to result", connections.size());
-  result->set_connections(connections);
-
-  log_info("Returning query result with {} tables", front_tables.size());
-  for (const auto& [schema_name, table] : front_tables) {
-    result->add_table(schema_name, table);
-  }
-
-  for (const auto& [id, _] : connections) {
-    std::vector<std::string> paths;
-    log_debug("Node id: {} paths: ", id);
-    debug_connections(id, connections, {}, paths);
-    log_debug("   {}", fmt::join(paths, "\n "));
-  }
-
-  auto roots = get_roots(connections);
+  auto roots = get_roots(query_state.connections);
   log_debug("roots: {}", fmt::join(roots, ", "));
 
   return result;
@@ -558,10 +542,10 @@ QueryResult::build_denormalized_schema() const {
 
     if (connections_.contains(id)) {
       for (auto const& conn : connections_.at(id)) {
-        std::string schema_name =
-            conn.label.empty() ? conn.target : conn.label + "_" + conn.target;
+        std::string schema_name = conn.target.value();
         if (processed.insert(schema_name).second) {
-          auto schema = schema_registry_->get(conn.target).ValueOrDie();
+          auto schema =
+              schema_registry_->get(conn.target.schema()).ValueOrDie();
           for (auto field_name : schema->field_names()) {
             auto full_field_name = schema_name + "." + field_name;
             if (processed_fields.contains(full_field_name)) {
@@ -615,21 +599,25 @@ QueryResult::populate_denormalized_table(
     auto root_node = node_result.ValueOrDie();
     std::string root_schema = root_node->schema_name;
 
-    // Add each field from the root schema
-    for (const auto& field_name :
-         schema_registry_->get(root_schema).ValueOrDie()->field_names()) {
-      if (field_indices.find(field_name) != field_indices.end()) {
-        int idx = field_indices[field_name];
-        auto field_result = root_node->get_field(field_name);
-        if (field_result.ok()) {
-          auto array = field_result.ValueOrDie();
-          if (array->length() > 0) {
-            auto scalar_result = array->GetScalar(0);
-            if (scalar_result.ok()) {
-              auto scalar = scalar_result.ValueOrDie();
-              auto status = builders[idx]->AppendScalar(*scalar);
-              if (!status.ok()) {
-                return status;
+    for (auto i = 0; i < connections_.at(root_id).size(); i++) {
+      // Add each field from the root schema
+      for (const auto& field_name :
+           schema_registry_->get(root_schema).ValueOrDie()->field_names()) {
+        if (field_indices.find(field_name) != field_indices.end()) {
+          int idx = field_indices[field_name];
+          auto field_result = root_node->get_field(field_name);
+          if (field_result.ok()) {
+            auto array = field_result.ValueOrDie();
+            if (array->length() > 0) {
+              auto scalar_result = array->GetScalar(0);
+              if (scalar_result.ok()) {
+                auto scalar = scalar_result.ValueOrDie();
+                auto status = builders[idx]->AppendScalar(*scalar);
+                if (!status.ok()) {
+                  return status;
+                }
+              } else {
+                ARROW_RETURN_NOT_OK(builders[idx]->AppendNull());
               }
             } else {
               ARROW_RETURN_NOT_OK(builders[idx]->AppendNull());
@@ -637,8 +625,6 @@ QueryResult::populate_denormalized_table(
           } else {
             ARROW_RETURN_NOT_OK(builders[idx]->AppendNull());
           }
-        } else {
-          ARROW_RETURN_NOT_OK(builders[idx]->AppendNull());
         }
       }
     }
@@ -661,10 +647,8 @@ QueryResult::populate_denormalized_table(
           if (visited.find(conn.target_id) != visited.end()) continue;
           visited.insert(conn.target_id);
 
-          std::string target_schema = conn.target;
-          std::string prefix = conn.label.empty()
-                                   ? target_schema
-                                   : conn.label + "_" + target_schema;
+          std::string target_schema = conn.target.schema();
+          std::string prefix = conn.target.value();
 
           // Get target node
           auto target_node_result = node_manager_->get_node(conn.target_id);

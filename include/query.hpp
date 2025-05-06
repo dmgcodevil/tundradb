@@ -17,12 +17,54 @@
 
 namespace tundradb {
 
+struct SchemaRef {
+ private:
+  std::string schema_;
+  std::string value_;
+  bool has_alias_;
+
+ public:
+  [[nodiscard]] std::string schema() const { return schema_; }
+  [[nodiscard]] std::string value() const { return value_; }
+  [[nodiscard]] bool has_alias() const { return has_alias_; }
+
+  static SchemaRef parse(const std::string& s) {
+    SchemaRef r;
+    size_t pos = s.find(':');
+    if (pos == std::string::npos) {
+      r.schema_ = s;
+      r.value_ = s;
+      r.has_alias_ = false;
+    } else {
+      r.value_ = s.substr(0, pos);
+      r.schema_ = s.substr(pos + 1);
+      r.has_alias_ = true;
+    }
+    return r;
+  }
+
+  [[nodiscard]] std::string toString() const {
+    std::stringstream ss;
+    if (has_alias_) {
+      ss << value_;
+      ss << ":";
+    }
+    ss << schema_;
+    return ss.str();
+  }
+
+  friend std::ostream& operator<<(std::ostream& os, const SchemaRef& obj) {
+    os << obj.toString();
+    return os;
+  }
+};
+
 struct GraphConnection {
-  std::string source;
+  SchemaRef source;
   int64_t source_id;
   std::string edge_type;
   std::string label;
-  std::string target;
+  SchemaRef target;
   int64_t target_id;
 
   [[nodiscard]] std::string toString() const {
@@ -73,63 +115,61 @@ class Where : public Clause {
 
   Type type() const override { return Type::WHERE; }
 
-  const std::string& field() const { return field_; }
-  CompareOp op() const { return op_; }
-  const Value& value() const { return value_; }
+  [[nodiscard]] const std::string& field() const { return field_; }
+  [[nodiscard]] CompareOp op() const { return op_; }
+  [[nodiscard]] const Value& value() const { return value_; }
 };
+
+enum class TraverseType { Inner };
 
 class Traverse : public Clause {
  private:
-  std::string source_;
+  SchemaRef source_;
   std::string edge_type_;
-  std::string label_;
-  std::set<std::string> target_schema_;
+  SchemaRef target_;
+  TraverseType traverse_type_ = TraverseType::Inner;
 
  public:
-  Traverse(std::string source, std::string edge_type, std::string label,
-           std::set<std::string> target_schema = std::set<std::string>())
+  Traverse(SchemaRef source, std::string edge_type, SchemaRef target)
       : source_(std::move(source)),
         edge_type_(std::move(edge_type)),
-        label_(std::move(label)),
-        target_schema_(std::move(target_schema)) {}
+        target_(std::move(target)) {}
 
   Type type() const override { return Type::TRAVERSE; }
 
-  const std::string& source() const { return source_; }
-  const std::string& edge_type() const { return edge_type_; }
-  const std::string& label() const { return label_; }
-  const std::set<std::string>& target_schema() const { return target_schema_; }
+  [[nodiscard]] const SchemaRef& source() const { return source_; }
+  [[nodiscard]] const std::string& edge_type() const { return edge_type_; }
+  [[nodiscard]] const SchemaRef& target() const { return target_; }
+  [[nodiscard]] TraverseType traverse_type() const { return traverse_type_; }
 };
 
 class Query {
  private:
-  std::string from_schema_;
+  SchemaRef from_;
   std::vector<std::shared_ptr<Clause>> clauses_;
 
   // Constructor used by Builder
-  Query(std::string from_schema, std::vector<std::shared_ptr<Clause>> clauses)
-      : from_schema_(std::move(from_schema)), clauses_(std::move(clauses)) {}
+  Query(SchemaRef from, std::vector<std::shared_ptr<Clause>> clauses)
+      : from_(std::move(from)), clauses_(std::move(clauses)) {}
 
  public:
   class Builder;
-  const std::string& from_schema() const { return from_schema_; }
+  const SchemaRef& from() const { return from_; }
   const std::vector<std::shared_ptr<Clause>>& clauses() const {
     return clauses_;
   }
 
   // Builder creation
-  static Builder from_schema(std::string schema) {
-    return Builder(std::move(schema));
-  }
+  static Builder from(std::string schema) { return Builder(std::move(schema)); }
 
   // Builder class
   class Builder {
    private:
-    std::string from_schema_;
+    SchemaRef from_;
     std::vector<std::shared_ptr<Clause>> clauses_;
 
    public:
-    explicit Builder(std::string schema) : from_schema_(std::move(schema)) {}
+    explicit Builder(std::string schema) : from_(SchemaRef::parse(schema)) {}
 
     Builder& where(std::string field, CompareOp op, Value value) {
       clauses_.push_back(
@@ -137,18 +177,17 @@ class Query {
       return *this;
     }
 
-    Builder& traverse(
-        std::string source, std::string edge_type, std::string label,
-        std::set<std::string> target_schema = std::set<std::string>()) {
+    Builder& traverse(std::string source, std::string edge_type,
+                      std::string target) {
       clauses_.push_back(std::make_shared<Traverse>(
-          std::move(source), std::move(edge_type), std::move(label),
-          std::move(target_schema)));
+          std::move(SchemaRef::parse(source)), std::move(edge_type),
+          std::move(SchemaRef::parse(target))));
       return *this;
     }
 
     // Additional builder methods for other clause types
 
-    Query build() { return Query(from_schema_, std::move(clauses_)); }
+    Query build() { return Query(from_, std::move(clauses_)); }
   };
 };
 
@@ -186,23 +225,34 @@ class QueryResult {
     return table_;
   }
 
-  void add_table(std::string schema_name, std::shared_ptr<arrow::Table> table) {
-    tables_[schema_name] = std::move(table);
+  // void add_table(std::string schema_name, std::shared_ptr<arrow::Table>
+  // table) {
+  //   tables_[schema_name] = std::move(table);
+  // }
+
+  void set_tables(
+      std::unordered_map<std::string, std::shared_ptr<arrow::Table>> tables) {
+    tables_ = std::move(tables);
   }
 
-  std::unordered_map<std::string, std::shared_ptr<arrow::Table>> tables()
+  void set_aliases(std::unordered_map<std::string, std::string> aliases) {
+    aliases_ = std::move(aliases);
+  }
+
+  const std::unordered_map<std::string, std::shared_ptr<arrow::Table>>& tables()
       const {
     return tables_;
   }
 
   void set_connections(
-      const std::map<int64_t, std::vector<GraphConnection>>& connections) {
-    connections_ = connections;
+      std::map<int64_t, std::vector<GraphConnection>> connections) {
+    connections_ = std::move(connections);
   }
 
   void set_node_manager(const std::shared_ptr<NodeManager>& node_manager) {
     node_manager_ = node_manager;
   }
+
   void set_schema_registry(
       const std::shared_ptr<SchemaRegistry>& schema_registry) {
     schema_registry_ = schema_registry;
@@ -220,7 +270,9 @@ class QueryResult {
  private:
   std::vector<std::shared_ptr<Node>> nodes_;
   mutable std::shared_ptr<arrow::Table> table_;
+
   std::unordered_map<std::string, std::shared_ptr<arrow::Table>> tables_;
+  std::unordered_map<std::string, std::string> aliases_;
   std::map<int64_t, std::vector<GraphConnection>> connections_;
   std::shared_ptr<NodeManager> node_manager_;
   std::shared_ptr<SchemaRegistry> schema_registry_;
