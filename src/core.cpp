@@ -501,6 +501,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
   // }
 
   result->set_tables(query_state.tables);
+  result->set_ids(query_state.ids);
   result->set_aliases(query_state.aliases);
   result->set_connections(query_state.connections);
   result->set_node_manager(node_manager);

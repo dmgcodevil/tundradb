@@ -258,6 +258,15 @@ class QueryResult {
     schema_registry_ = schema_registry;
   }
 
+  void set_ids(std::unordered_map<std::string, std::set<int64_t>> ids) {
+    _ids = std::move(ids);
+  }
+
+  [[nodiscard]] const std::unordered_map<std::string, std::set<int64_t>>& ids()
+      const {
+    return _ids;
+  }
+
   // Build a schema for the denormalized table that combines all connected
   // tables
   arrow::Result<std::shared_ptr<arrow::Schema>> build_denormalized_schema()
@@ -272,6 +281,7 @@ class QueryResult {
   mutable std::shared_ptr<arrow::Table> table_;
 
   std::unordered_map<std::string, std::shared_ptr<arrow::Table>> tables_;
+  std::unordered_map<std::string, std::set<int64_t>> _ids;
   std::unordered_map<std::string, std::string> aliases_;
   std::map<int64_t, std::vector<GraphConnection>> connections_;
   std::shared_ptr<NodeManager> node_manager_;
