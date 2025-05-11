@@ -195,97 +195,12 @@ class Query {
 class QueryResult {
  public:
   // Get a vector of matching nodes
-  std::vector<std::shared_ptr<Node>> nodes() const { return nodes_; }
 
-  // Get the first node or null
-  std::shared_ptr<Node> first() const {
-    return nodes_.empty() ? nullptr : nodes_[0];
-  }
-
-  // Get count of results
-  size_t count() const { return nodes_.size(); }
-
-  // Access as Arrow Table
-  std::shared_ptr<arrow::Table> as_table() const {
-    if (!table_) {
-      // Create table with our schema and populate with data
-      auto schema_result = build_denormalized_schema();
-      if (schema_result.ok()) {
-        auto result = populate_denormalized_table(schema_result.ValueOrDie());
-        if (result.ok()) {
-          table_ = result.ValueOrDie();
-        } else {
-          // If population fails, return empty table with the schema
-          table_ =
-              arrow::Table::Make(schema_result.ValueOrDie(),
-                                 std::vector<std::shared_ptr<arrow::Array>>{});
-        }
-      }
-    }
-    return table_;
-  }
-
-  // void add_table(std::string schema_name, std::shared_ptr<arrow::Table>
-  // table) {
-  //   tables_[schema_name] = std::move(table);
-  // }
-
-  void set_tables(
-      std::unordered_map<std::string, std::shared_ptr<arrow::Table>> tables) {
-    tables_ = std::move(tables);
-  }
-
-  void set_aliases(std::unordered_map<std::string, std::string> aliases) {
-    aliases_ = std::move(aliases);
-  }
-
-  const std::unordered_map<std::string, std::shared_ptr<arrow::Table>>& tables()
-      const {
-    return tables_;
-  }
-
-  void set_connections(
-      std::map<int64_t, std::vector<GraphConnection>> connections) {
-    connections_ = std::move(connections);
-  }
-
-  void set_node_manager(const std::shared_ptr<NodeManager>& node_manager) {
-    node_manager_ = node_manager;
-  }
-
-  void set_schema_registry(
-      const std::shared_ptr<SchemaRegistry>& schema_registry) {
-    schema_registry_ = schema_registry;
-  }
-
-  void set_ids(std::unordered_map<std::string, std::set<int64_t>> ids) {
-    _ids = std::move(ids);
-  }
-
-  [[nodiscard]] const std::unordered_map<std::string, std::set<int64_t>>& ids()
-      const {
-    return _ids;
-  }
-
-  // Build a schema for the denormalized table that combines all connected
-  // tables
-  arrow::Result<std::shared_ptr<arrow::Schema>> build_denormalized_schema()
-      const;
-
-  // Populate the denormalized table with data from all connected nodes
-  arrow::Result<std::shared_ptr<arrow::Table>> populate_denormalized_table(
-      const std::shared_ptr<arrow::Schema>& schema) const;
+  [[nodiscard]] std::shared_ptr<arrow::Table> table() const { return table_; }
+  void set_table(const std::shared_ptr<arrow::Table>& table) { table_ = table; }
 
  private:
-  std::vector<std::shared_ptr<Node>> nodes_;
-  mutable std::shared_ptr<arrow::Table> table_;
-
-  std::unordered_map<std::string, std::shared_ptr<arrow::Table>> tables_;
-  std::unordered_map<std::string, std::set<int64_t>> _ids;
-  std::unordered_map<std::string, std::string> aliases_;
-  std::map<int64_t, std::vector<GraphConnection>> connections_;
-  std::shared_ptr<NodeManager> node_manager_;
-  std::shared_ptr<SchemaRegistry> schema_registry_;
+  std::shared_ptr<arrow::Table> table_;
 };
 
 }  // namespace tundradb

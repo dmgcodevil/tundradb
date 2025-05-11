@@ -312,11 +312,13 @@ std::set<int64_t> get_roots(
 }
 
 struct QueryState {
+  SchemaRef from;
   std::unordered_map<std::string, std::shared_ptr<arrow::Table>> tables;
   std::unordered_map<std::string, std::set<int64_t>> ids;
   std::unordered_map<std::string, std::string> aliases;
   std::map<int64_t, std::vector<GraphConnection>> connections;
   std::shared_ptr<NodeManager> node_manager;
+  std::shared_ptr<SchemaRegistry> schema_registry;
 
   arrow::Result<bool> init_table(const std::shared_ptr<arrow::Table> table,
                                  const SchemaRef& schema_ref) {
@@ -365,12 +367,204 @@ struct QueryState {
   }
 };
 
+arrow::Result<std::shared_ptr<arrow::Schema>> build_denormalized_schema(
+    const QueryState& query_state) {
+  log_info("Building schema for denormalized table");
+
+  std::set<std::string> processed_fields;
+  std::vector<std::shared_ptr<arrow::Field>> fields;
+
+  auto roots = get_roots(query_state.connections);
+  std::set<std::string> processed;
+
+  std::vector<int64_t> stack;
+  for (auto id : roots) {
+    stack.push_back(id);
+
+    auto schema_name =
+        query_state.node_manager->get_node(id).ValueOrDie()->schema_name;
+    if (processed.insert(schema_name).second) {
+      for (auto field : query_state.schema_registry->get(schema_name)
+                            .ValueOrDie()
+                            ->fields()) {
+        processed_fields.insert(field->name());
+        fields.push_back(field);
+      }
+    }
+  }
+
+  while (stack.size() > 0) {
+    auto id = stack.back();
+    stack.pop_back();
+
+    if (query_state.connections.contains(id)) {
+      for (auto const& conn : query_state.connections.at(id)) {
+        std::string schema_name = conn.target.value();
+        if (processed.insert(schema_name).second) {
+          auto schema = query_state.schema_registry->get(conn.target.schema())
+                            .ValueOrDie();
+          for (auto field_name : schema->field_names()) {
+            auto full_field_name = schema_name + "." + field_name;
+            if (processed_fields.contains(full_field_name)) {
+              return arrow::Status::KeyError("Field '{}' already exists",
+                                             full_field_name);
+            }
+            processed_fields.insert(full_field_name);
+            fields.push_back(arrow::field(
+                full_field_name, schema->GetFieldByName(field_name)->type()));
+          }
+        }
+        stack.push_back(conn.target_id);
+      }
+    }
+  }
+
+  return std::make_shared<arrow::Schema>(fields);
+}
+
+struct Row {
+  // int64_t id;
+  std::unordered_map<std::string, std::shared_ptr<arrow::Array>> cells;
+
+  void set_cell(const std::string& name, std::shared_ptr<arrow::Array> array) {
+    cells[name] = std::move(array);
+  }
+};
+
+static Row create_empty_row_from_schema(
+    const std::shared_ptr<arrow::Schema>& final_output_schema) {
+  Row new_row;
+  for (const auto& field : final_output_schema->fields()) {
+    // Initialize with a null scalar of the correct type.
+    // arrow::MakeNullScalar(field->type()) can create this.
+    // If that's complex, a placeholder like `nullptr` could be used,
+    // and the final append-to-builders step would handle it.
+    // For true "no padding needed later", explicit typed nulls are best.
+    new_row.cells[field->name()] = arrow::MakeNullScalar(
+        field->type());  // Or your preferred null representation
+    // fix compile error
+  }
+  return new_row;
+}
+
+arrow::Result<bool> populate_rows_dfs(Row& row, int64_t node_id,
+                                      const SchemaRef& schema_ref,
+                                      std::vector<Row>& rows,
+                                      const QueryState& query_state,
+                                      std::set<int64_t>& visited) {
+  if (!visited.insert(node_id).second) {
+    return false;
+  }
+  auto node_result = query_state.node_manager->get_node(node_id);
+  if (!node_result.ok()) {
+    return node_result.status();
+  }
+  auto node = node_result.ValueOrDie();
+  for (const auto& [name, value] : node->data()) {
+    auto full_name = schema_ref.value() + "." + name;
+    row.set_cell(full_name, value);
+  }
+  if (query_state.connections.contains(node_id)) {
+    for (const auto& conn : query_state.connections.at(node_id)) {
+      Row next_row = row;
+      auto res = populate_rows_dfs(next_row, conn.target_id, conn.target, rows,
+                                   query_state, visited);
+      if (!res.ok()) {
+        return res.status();
+      }
+    }
+
+  } else {
+    rows.emplace_back(std::move(row));
+  }
+  return true;
+}
+
+// process all schemas used in traverse
+// it only processes connected nodes
+arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows(
+    const QueryState& query_state, const std::vector<Traverse>& traverses,
+    const std::shared_ptr<arrow::Schema>& output_schema) {
+  std::vector<Row> rows;
+  std::set<int64_t> visited;
+  std::set<std::string> unique_schemas;
+  std::vector<SchemaRef> schemas;
+
+  // first phase:
+  // Process each schema from the traverse chain (A, B, C) independently
+  // For each node in a schema, do a DFS of its connections
+  // Build complete rows for valid paths
+  // Track visited nodes to avoid duplicates
+  unique_schemas.insert(query_state.from.value());
+  schemas.push_back(query_state.from);
+
+  for (const auto& traverse : traverses) {
+    if (unique_schemas.insert(traverse.source().value()).second) {
+      schemas.push_back(traverse.source());
+    }
+    if (unique_schemas.insert(traverse.target().value()).second) {
+      schemas.push_back(traverse.target());
+    }
+  }
+
+  for (const auto& schema_ref : schemas) {
+    for (auto id : query_state.ids.at(schema_ref.value())) {
+      Row row = create_empty_row_from_schema(output_schema);
+      auto res =
+          populate_rows_dfs(row, id, schema_ref, rows, query_state, visited);
+      if (res.ok()) {
+        return res.status();
+      }
+    }
+  }
+
+  // second phase:
+  // After all connected paths are processed
+  // For each schema with outer joins (LEFT/RIGHT/FULL)
+  // Check which nodes weren't visited in Phase 1
+  // Add appropriate rows with NULLs for the missing sides
+  for (const auto& traverse : traverses) {
+    if (traverse.traverse_type() == TraverseType::Left ||
+        traverse.traverse_type() == TraverseType::Full) {
+      for (auto id : query_state.ids.at(traverse.source().value())) {
+        Row row = create_empty_row_from_schema(output_schema);
+        auto res = populate_rows_dfs(row, id, traverse.source(), rows,
+                                     query_state, visited);
+        if (res.ok()) {
+          return res.status();
+        }
+      }
+    }
+
+    if (traverse.traverse_type() == TraverseType::Right ||
+        traverse.traverse_type() == TraverseType::Full) {
+      for (auto id : query_state.ids.at(traverse.target().value())) {
+        Row row = create_empty_row_from_schema(output_schema);
+        auto res = populate_rows_dfs(row, id, traverse.target(), rows,
+                                     query_state, visited);
+        if (res.ok()) {
+          return res.status();
+        }
+      }
+    }
+  }
+
+  return {std::make_shared<std::vector<Row>>(rows)};
+}
+
+arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_rows(
+    const std::shared_ptr<std::vector<Row>>& rows) {
+  // todo
+}
+
 arrow::Result<std::shared_ptr<QueryResult>> Database::query(
     const Query& query) const {
   QueryState query_state;
   log_info("Executing query starting from schema '{}'",
            query.from().toString());
   query_state.node_manager = this->node_manager;
+  query_state.schema_registry = this->schema_registry;
+  query_state.from = query.from();
 
   // node id -> [node id]
   // All nodes that are part of the query result, by schema
@@ -382,7 +576,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
               query.from().toString());
     return init_from_table_result.status();
   }
-
+  std::vector<Traverse> traverses;
   log_info("Processing {} query clauses", query.clauses().size());
   for (const auto& clause : query.clauses()) {
     switch (clause->type()) {
@@ -425,6 +619,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
       }
       case Clause::Type::TRAVERSE: {
         auto traverse = std::static_pointer_cast<Traverse>(clause);
+        traverses.push_back(*traverse);
         log_info("Processing TRAVERSE on edge type '{}' from source '{}'",
                  traverse->edge_type(), traverse->source().toString());
         auto source = traverse->source();
@@ -496,290 +691,23 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
   log_info("Query processing complete, building result");
   auto result = std::make_shared<QueryResult>();
 
-  // Add tables
-  // for (const auto& [label, table] : front_tables) {
-  //   log_debug("Adding table with label '{}' ({} rows) to result", label,
-  //             table->num_rows());
-  //   result->add_table(label, table);
-  // }
-
-  result->set_tables(query_state.tables);
-  result->set_ids(query_state.ids);
-  result->set_aliases(query_state.aliases);
-  result->set_connections(query_state.connections);
-  result->set_node_manager(node_manager);
-  result->set_schema_registry(schema_registry);
-
-  auto roots = get_roots(query_state.connections);
-  log_debug("roots: {}", fmt::join(roots, ", "));
+  auto output_schema_res = build_denormalized_schema(query_state);
+  if (!output_schema_res.ok()) {
+    return output_schema_res.status();
+  }
+  const auto output_schema = output_schema_res.ValueOrDie();
+  auto row_res = populate_rows(query_state, traverses, output_schema);
+  if (!row_res.ok()) {
+    return row_res.status();
+  }
+  auto rows = row_res.ValueOrDie();
+  auto output_table_res = create_table_from_rows(rows);
+  if (!output_table_res.ok()) {
+    return output_table_res.status();
+  }
+  result->set_table(output_table_res.ValueOrDie());
 
   return result;
-}
-
-arrow::Result<std::shared_ptr<arrow::Schema>>
-QueryResult::build_denormalized_schema() const {
-  log_info("Building schema for denormalized table");
-
-  std::set<std::string> processed_fields;
-  std::vector<std::shared_ptr<arrow::Field>> fields;
-
-  auto roots = get_roots(connections_);
-  std::set<std::string> processed;
-
-  std::vector<int64_t> stack;
-  for (auto id : roots) {
-    stack.push_back(id);
-
-    auto schema_name = node_manager_->get_node(id).ValueOrDie()->schema_name;
-    if (processed.insert(schema_name).second) {
-      for (auto field :
-           schema_registry_->get(schema_name).ValueOrDie()->fields()) {
-        processed_fields.insert(field->name());
-        fields.push_back(field);
-      }
-    }
-  }
-
-  while (stack.size() > 0) {
-    auto id = stack.back();
-    stack.pop_back();
-
-    if (connections_.contains(id)) {
-      for (auto const& conn : connections_.at(id)) {
-        std::string schema_name = conn.target.value();
-        if (processed.insert(schema_name).second) {
-          auto schema =
-              schema_registry_->get(conn.target.schema()).ValueOrDie();
-          for (auto field_name : schema->field_names()) {
-            auto full_field_name = schema_name + "." + field_name;
-            if (processed_fields.contains(full_field_name)) {
-              return arrow::Status::KeyError("Field '{}' already exists",
-                                             full_field_name);
-            }
-            processed_fields.insert(full_field_name);
-            fields.push_back(arrow::field(
-                full_field_name, schema->GetFieldByName(field_name)->type()));
-          }
-        }
-        stack.push_back(conn.target_id);
-      }
-    }
-  }
-
-  return std::make_shared<arrow::Schema>(fields);
-}
-
-struct Row {
-  // int64_t id;
-  std::unordered_map<std::string, std::shared_ptr<arrow::Array>> cells;
-
-  void set_cell(const std::string& name, std::shared_ptr<arrow::Array> array) {
-    cells[name] = std::move(array);
-  }
-};
-
-static Row create_empty_from_schema(
-    const std::shared_ptr<arrow::Schema>& final_output_schema) {
-  Row new_row;
-  for (const auto& field : final_output_schema->fields()) {
-    // Initialize with a null scalar of the correct type.
-    // arrow::MakeNullScalar(field->type()) can create this.
-    // If that's complex, a placeholder like `nullptr` could be used,
-    // and the final append-to-builders step would handle it.
-    // For true "no padding needed later", explicit typed nulls are best.
-    new_row.cells[field->name()] = arrow::MakeNullScalar(
-        field->type());  // Or your preferred null representation
-    // fix compile error
-  }
-  return new_row;
-}
-
-arrow::Result<bool> populate_rows(Row& row, int64_t node_id,
-                                  const SchemaRef& schema_ref,
-                                  std::vector<Row>& rows,
-                                  QueryState& query_state,
-                                  std::set<int64_t>& visited) {
-  visited.insert(node_id);
-  auto node_result = query_state.node_manager->get_node(node_id);
-  if (!node_result.ok()) {
-    return node_result.status();
-  }
-  auto node = node_result.ValueOrDie();
-  for (const auto& [name, value] : node->data()) {
-    auto full_name = schema_ref.value() + "." + name;
-    row.set_cell(full_name, value);
-  }
-  if (query_state.connections.contains(node_id)) {
-    for (const auto& conn : query_state.connections[node_id]) {
-      Row next_row = row;
-      auto res = populate_rows(next_row, conn.target_id, conn.target, rows,
-                               query_state, visited);
-      if (!res.ok()) {
-        return res.status();
-      }
-    }
-
-  } else {
-    rows.emplace_back(std::move(row));
-  }
-  return true;
-}
-
-arrow::Result<std::shared_ptr<arrow::Table>>
-QueryResult::populate_denormalized_table(
-    const std::shared_ptr<arrow::Schema>& schema) const {
-  log_info("Populating denormalized table with data");
-
-  // Create builders for each field in the schema
-  std::vector<std::unique_ptr<arrow::ArrayBuilder>> builders;
-  for (const auto& field : schema->fields()) {
-    ARROW_ASSIGN_OR_RAISE(auto builder, arrow::MakeBuilder(field->type()));
-    builders.push_back(std::move(builder));
-  }
-
-  // Map field names to their positions in the schema
-  std::unordered_map<std::string, int> field_indices;
-  for (int i = 0; i < schema->num_fields(); i++) {
-    field_indices[schema->field(i)->name()] = i;
-  }
-
-  // Get roots of the connection graph
-  std::set<int64_t> roots = get_roots(connections_);
-  log_debug("Creating table with {} root nodes", roots.size());
-
-  // For each root node, create a row in the denormalized table
-  for (int64_t root_id : roots) {
-    // Find the root node's schema
-    auto node_result = node_manager_->get_node(root_id);
-    if (!node_result.ok()) {
-      log_warn("Could not find node with ID {}, skipping", root_id);
-      continue;
-    }
-
-    auto root_node = node_result.ValueOrDie();
-    std::string root_schema = root_node->schema_name;
-
-    for (auto i = 0; i < connections_.at(root_id).size(); i++) {
-      // Add each field from the root schema
-      for (const auto& field_name :
-           schema_registry_->get(root_schema).ValueOrDie()->field_names()) {
-        if (field_indices.find(field_name) != field_indices.end()) {
-          int idx = field_indices[field_name];
-          auto field_result = root_node->get_field(field_name);
-          if (field_result.ok()) {
-            auto array = field_result.ValueOrDie();
-            if (array->length() > 0) {
-              auto scalar_result = array->GetScalar(0);
-              if (scalar_result.ok()) {
-                auto scalar = scalar_result.ValueOrDie();
-                auto status = builders[idx]->AppendScalar(*scalar);
-                if (!status.ok()) {
-                  return status;
-                }
-              } else {
-                ARROW_RETURN_NOT_OK(builders[idx]->AppendNull());
-              }
-            } else {
-              ARROW_RETURN_NOT_OK(builders[idx]->AppendNull());
-            }
-          } else {
-            ARROW_RETURN_NOT_OK(builders[idx]->AppendNull());
-          }
-        }
-      }
-    }
-
-    // Track nodes we've already processed to avoid cycles
-    std::set<int64_t> visited;
-    visited.insert(root_id);
-
-    // Process connected nodes
-    std::stack<std::pair<int64_t, std::string>> node_stack;
-    node_stack.push({root_id, ""});
-
-    while (!node_stack.empty()) {
-      auto [node_id, parent_prefix] = node_stack.top();
-      node_stack.pop();
-
-      // Add connected nodes' data
-      if (connections_.find(node_id) != connections_.end()) {
-        for (const auto& conn : connections_.at(node_id)) {
-          if (visited.find(conn.target_id) != visited.end()) continue;
-          visited.insert(conn.target_id);
-
-          std::string target_schema = conn.target.schema();
-          std::string prefix = conn.target.value();
-
-          // Get target node
-          auto target_node_result = node_manager_->get_node(conn.target_id);
-          if (!target_node_result.ok()) {
-            log_warn("Could not find target node with ID {}, skipping",
-                     conn.target_id);
-            continue;
-          }
-
-          auto target_node = target_node_result.ValueOrDie();
-          auto target_arrow_schema =
-              schema_registry_->get(target_schema).ValueOrDie();
-
-          // Add each field from the target node with the appropriate prefix
-          for (const auto& field : target_arrow_schema->fields()) {
-            std::string field_name = field->name();
-            std::string prefixed_field = prefix + "." + field_name;
-
-            if (field_indices.find(prefixed_field) != field_indices.end()) {
-              int idx = field_indices[prefixed_field];
-              auto field_result = target_node->get_field(field_name);
-              if (field_result.ok()) {
-                auto array = field_result.ValueOrDie();
-                if (array->length() > 0) {
-                  auto scalar_result = array->GetScalar(0);
-                  if (scalar_result.ok()) {
-                    auto scalar = scalar_result.ValueOrDie();
-                    auto status = builders[idx]->AppendScalar(*scalar);
-                    if (!status.ok()) {
-                      return status;
-                    }
-                  } else {
-                    ARROW_RETURN_NOT_OK(builders[idx]->AppendNull());
-                  }
-                } else {
-                  ARROW_RETURN_NOT_OK(builders[idx]->AppendNull());
-                }
-              } else {
-                ARROW_RETURN_NOT_OK(builders[idx]->AppendNull());
-              }
-            }
-          }
-
-          // Add this node to the stack to traverse its connections
-          node_stack.push({conn.target_id, prefix});
-        }
-      }
-    }
-
-    // Fill in nulls for any missing fields in this row
-    for (size_t i = 0; i < builders.size(); i++) {
-      // Check current lengths to see if we need to append null
-      int64_t expected_length = builders[0]->length();
-      if (builders[i]->length() < expected_length) {
-        ARROW_RETURN_NOT_OK(builders[i]->AppendNull());
-      }
-    }
-  }
-
-  // Finish builders and create arrays
-  std::vector<std::shared_ptr<arrow::Array>> arrays;
-  arrays.reserve(builders.size());
-
-  for (auto& builder : builders) {
-    std::shared_ptr<arrow::Array> array;
-    ARROW_RETURN_NOT_OK(builder->Finish(&array));
-    arrays.push_back(array);
-  }
-
-  // Create and return the table
-  return arrow::Table::Make(schema, arrays);
 }
 
 }  // namespace tundradb
