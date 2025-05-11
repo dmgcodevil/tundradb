@@ -316,6 +316,7 @@ struct QueryState {
   std::unordered_map<std::string, std::set<int64_t>> ids;
   std::unordered_map<std::string, std::string> aliases;
   std::map<int64_t, std::vector<GraphConnection>> connections;
+  std::shared_ptr<NodeManager> node_manager;
 
   arrow::Result<bool> init_table(const std::shared_ptr<arrow::Table> table,
                                  const SchemaRef& schema_ref) {
@@ -369,6 +370,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
   QueryState query_state;
   log_info("Executing query starting from schema '{}'",
            query.from().toString());
+  query_state.node_manager = this->node_manager;
 
   // node id -> [node id]
   // All nodes that are part of the query result, by schema
@@ -473,6 +475,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
                     table_result.status().ToString());
           return table_result.status();
         }
+        // if it's right / full => add all target ids
         auto target_table_init_result = query_state.init_table(
             table_result.ValueOrDie(), traverse->target());
         if (!target_table_init_result.ok()) {
@@ -564,6 +567,62 @@ QueryResult::build_denormalized_schema() const {
   }
 
   return std::make_shared<arrow::Schema>(fields);
+}
+
+struct Row {
+  // int64_t id;
+  std::unordered_map<std::string, std::shared_ptr<arrow::Array>> cells;
+
+  void set_cell(const std::string& name, std::shared_ptr<arrow::Array> array) {
+    cells[name] = std::move(array);
+  }
+};
+
+static Row create_empty_from_schema(
+    const std::shared_ptr<arrow::Schema>& final_output_schema) {
+  Row new_row;
+  for (const auto& field : final_output_schema->fields()) {
+    // Initialize with a null scalar of the correct type.
+    // arrow::MakeNullScalar(field->type()) can create this.
+    // If that's complex, a placeholder like `nullptr` could be used,
+    // and the final append-to-builders step would handle it.
+    // For true "no padding needed later", explicit typed nulls are best.
+    new_row.cells[field->name()] = arrow::MakeNullScalar(
+        field->type());  // Or your preferred null representation
+    // fix compile error
+  }
+  return new_row;
+}
+
+arrow::Result<bool> populate_rows(Row& row, int64_t node_id,
+                                  const SchemaRef& schema_ref,
+                                  std::vector<Row>& rows,
+                                  QueryState& query_state,
+                                  std::set<int64_t>& visited) {
+  visited.insert(node_id);
+  auto node_result = query_state.node_manager->get_node(node_id);
+  if (!node_result.ok()) {
+    return node_result.status();
+  }
+  auto node = node_result.ValueOrDie();
+  for (const auto& [name, value] : node->data()) {
+    auto full_name = schema_ref.value() + "." + name;
+    row.set_cell(full_name, value);
+  }
+  if (query_state.connections.contains(node_id)) {
+    for (const auto& conn : query_state.connections[node_id]) {
+      Row next_row = row;
+      auto res = populate_rows(next_row, conn.target_id, conn.target, rows,
+                               query_state, visited);
+      if (!res.ok()) {
+        return res.status();
+      }
+    }
+
+  } else {
+    rows.emplace_back(std::move(row));
+  }
+  return true;
 }
 
 arrow::Result<std::shared_ptr<arrow::Table>>

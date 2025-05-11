@@ -120,7 +120,7 @@ class Where : public Clause {
   [[nodiscard]] const Value& value() const { return value_; }
 };
 
-enum class TraverseType { Inner };
+enum class TraverseType { Inner, Left, Right, Full };
 
 class Traverse : public Clause {
  private:

@@ -121,7 +121,7 @@ struct SetOperation : public BaseOperation {
 // Node class represents a single data entity
 class Node {
  private:
-  std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data;
+  std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data_;
 
  public:
   int64_t id;
@@ -132,25 +132,31 @@ class Node {
                     initial_data)
       : id(id),
         schema_name(std::move(schema_name)),
-        data(std::move(initial_data)) {}
+        data_(std::move(initial_data)) {}
 
   ~Node() {
     // Clear the data map to ensure proper cleanup of Arrow arrays
-    data.clear();
+    data_.clear();
   }
 
   void add_field(const std::string &field_name,
                  const std::shared_ptr<arrow::Array> &value) {
-    data.insert(std::make_pair(field_name, value));
+    data_.insert(std::make_pair(field_name, value));
   }
 
   arrow::Result<std::shared_ptr<arrow::Array>> get_field(
       const std::string &field_name) const {
-    auto it = data.find(field_name);
-    if (it == data.end()) {
+    auto it = data_.find(field_name);
+    if (it == data_.end()) {
       return arrow::Status::KeyError("Field not found: ", field_name);
     }
     return it->second;
+  }
+
+  [[nodiscard]] const std::unordered_map<std::string,
+                                         std::shared_ptr<arrow::Array>> &
+  data() const {
+    return data_;
   }
 
   arrow::Result<bool> update(const std::shared_ptr<BaseOperation> &update) {
@@ -158,8 +164,8 @@ class Node {
       return arrow::Status::Invalid("Field name vector is empty");
     }
 
-    auto it = data.find(update->field_name[0]);
-    if (it == data.end()) {
+    auto it = data_.find(update->field_name[0]);
+    if (it == data_.end()) {
       return arrow::Status::KeyError("Field not found: ",
                                      update->field_name[0]);
     }
