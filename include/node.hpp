@@ -170,7 +170,7 @@ class Node {
                                      update->field_name[0]);
     }
     if (update->should_replace_array()) {
-      data[update->field_name[0]] = update->get_replacement_array();
+      data_[update->field_name[0]] = update->get_replacement_array();
       return true;
     }
     return update->apply(it->second, 0);

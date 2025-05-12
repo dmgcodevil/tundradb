@@ -777,6 +777,9 @@ class Database {
     auto edge =
         edge_store->create_edge(source_id, type, target_id).ValueOrDie();
     ARROW_RETURN_NOT_OK(edge_store->add(edge));
+    // auto edge1 =
+    //   edge_store->create_edge(target_id, type, source_id).ValueOrDie();
+    // ARROW_RETURN_NOT_OK(edge_store->add(edge1));
     return true;
   }
 

@@ -99,18 +99,14 @@ int main() {
   db.get_schema_registry()->add("users", users_schema).ValueOrDie();
   db.get_schema_registry()->add("companies", companies_schema).ValueOrDie();
   const auto users =
-      std::vector({
-        User{"alex", 25},
-        User{"bob", 31},
-        User{"jeff", 33},
-        User{"sam", 21},
-        User{"matt", 40}});
+      std::vector({User{"alex", 25}, User{"bob", 31}, User{"jeff", 33},
+                   User{"sam", 21}, User{"matt", 40}});
   create_users(db, users);
   const auto companies =
       std::vector{{Company{"ibm", 1000}, Company{"google", 3000}}};
   create_companies(db, companies);
-  db.connect(1, "friend", 0).ValueOrDie();
-  db.connect(1, "friend", 3).ValueOrDie();
+  db.connect(1, "friend", 0).ValueOrDie();  // bob -> alex
+  db.connect(1, "friend", 3).ValueOrDie();  // bob -> sam
   db.connect(4, "works-at", 6).ValueOrDie();
 
   auto users_table = db.get_table("users").ValueOrDie();
@@ -125,23 +121,25 @@ int main() {
 
   auto query = Query::from("u:users")
                    // .where("u.age", CompareOp::Gt, Value(30))
-                   .traverse("u", "friend", "f:users")
+                   .traverse("u", "friend", "f:users", TraverseType::Left)
                    // .traverse("users", "works-at", "employed")
                    .build();
   auto result = db.query(query).ValueOrDie();
-  auto tables = result->tables();
-
-  std::cout << "result:" << std::endl;
-  for (auto& [schema_name, table] : tables) {
-    std::cout << "schema_name = " << schema_name << std::endl;
-    print_table(table);
-    std::cout << "=============================" << std::endl;
-    std::cout << std::endl;
-  }
-  auto schema = result->build_denormalized_schema().ValueOrDie();
-  std::cout << "output table schema:" << std::endl;
-  std::cout << schema->ToString() << std::endl;
-  auto output = result->populate_denormalized_table(schema).ValueOrDie();
+  // auto tables = result->tables();
+  //
+  // std::cout << "result:" << std::endl;
+  // for (auto& [schema_name, table] : tables) {
+  //   std::cout << "schema_name = " << schema_name << std::endl;
+  //   print_table(table);
+  //   std::cout << "=============================" << std::endl;
+  //   std::cout << std::endl;
+  // }
+  // auto schema = result->build_denormalized_schema().ValueOrDie();
+  // std::cout << "output table schema:" << std::endl;
+  // std::cout << schema->ToString() << std::endl;
+  // auto output = result->populate_denormalized_table(schema).ValueOrDie();
+  // print_table(output);
+  auto output = result->table();
   print_table(output);
   return 0;
 }

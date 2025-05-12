@@ -127,13 +127,15 @@ class Traverse : public Clause {
   SchemaRef source_;
   std::string edge_type_;
   SchemaRef target_;
-  TraverseType traverse_type_ = TraverseType::Inner;
+  TraverseType traverse_type_;
 
  public:
-  Traverse(SchemaRef source, std::string edge_type, SchemaRef target)
+  Traverse(SchemaRef source, std::string edge_type, SchemaRef target,
+           TraverseType traverse_type)
       : source_(std::move(source)),
         edge_type_(std::move(edge_type)),
-        target_(std::move(target)) {}
+        target_(std::move(target)),
+        traverse_type_(traverse_type) {}
 
   Type type() const override { return Type::TRAVERSE; }
 
@@ -178,10 +180,11 @@ class Query {
     }
 
     Builder& traverse(std::string source, std::string edge_type,
-                      std::string target) {
+                      std::string target,
+                      TraverseType traverse_type = TraverseType::Inner) {
       clauses_.push_back(std::make_shared<Traverse>(
           std::move(SchemaRef::parse(source)), std::move(edge_type),
-          std::move(SchemaRef::parse(target))));
+          std::move(SchemaRef::parse(target)), traverse_type));
       return *this;
     }
 
