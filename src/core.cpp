@@ -931,11 +931,18 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
             }
             auto node = node_result.ValueOrDie();
 
-            if (source_schema == node->schema_name) {
+            // Fixed schema comparison - check against target schema, not source schema
+            log_debug("Node schema: '{}', target schema: '{}'", 
+                     node->schema_name, traverse->target().schema());
+                     
+            if (traverse->target().schema() == node->schema_name) {
               neighbors.push_back(node);
               query_state.connections[source_id].push_back(GraphConnection{
                   traverse->source(), source_id, traverse->edge_type(), "",
                   traverse->target(), target_id});
+            } else {
+              log_warn("Node {} schema '{}' doesn't match target schema '{}' in traversal",
+                      target_id, node->schema_name, traverse->target().schema());
             }
           }
         }

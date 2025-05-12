@@ -121,8 +121,8 @@ int main() {
 
   auto query = Query::from("u:users")
                    // .where("u.age", CompareOp::Gt, Value(30))
-                   .traverse("u", "friend", "f:users", TraverseType::Left)
-                   // .traverse("users", "works-at", "employed")
+                   .traverse("u", "friend", "f:users", TraverseType::Inner)
+                   .traverse("u", "works-at", "c:companies")
                    .build();
   auto result = db.query(query).ValueOrDie();
   // auto tables = result->tables();
