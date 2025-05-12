@@ -734,62 +734,67 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows(
 }
 
 arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_rows(
-    const std::shared_ptr<std::vector<Row>>& rows) {
+    const std::shared_ptr<std::vector<Row>>& rows,
+    const std::shared_ptr<arrow::Schema>& schema = nullptr) {
   if (!rows || rows->empty()) {
     return arrow::Status::Invalid("No rows provided to create table");
   }
 
-  // Get all field names from all rows to create a complete schema
-  std::set<std::string> all_field_names;
-  for (const auto& row : *rows) {
-    for (const auto& [field_name, _] : row.cells) {
-      all_field_names.insert(field_name);
-    }
-  }
-
-  // Create schema from field names
-  std::vector<std::shared_ptr<arrow::Field>> fields;
-  std::unordered_map<std::string, int> field_name_to_index;
-  int field_idx = 0;
-
-  for (const auto& field_name : all_field_names) {
-    // Find first non-null value to determine field type
-    std::shared_ptr<arrow::DataType> field_type = nullptr;
+  std::shared_ptr<arrow::Schema> output_schema;
+  
+  if (schema) {
+    // Use the provided schema
+    output_schema = schema;
+  } else {
+    // Get all field names from all rows to create a complete schema
+    std::set<std::string> all_field_names;
     for (const auto& row : *rows) {
-      auto it = row.cells.find(field_name);
-      if (it != row.cells.end() && it->second) {
-        auto array_result = arrow::MakeArrayFromScalar(*(it->second), 1);
-        if (array_result.ok()) {
-          field_type = array_result.ValueOrDie()->type();
-          break;
-        }
+      for (const auto& [field_name, _] : row.cells) {
+        all_field_names.insert(field_name);
       }
     }
 
-    // If we couldn't determine type, default to string
-    if (!field_type) {
-      field_type = arrow::utf8();
+    // Create schema from field names
+    std::vector<std::shared_ptr<arrow::Field>> fields;
+    
+    for (const auto& field_name : all_field_names) {
+      // Find first non-null value to determine field type
+      std::shared_ptr<arrow::DataType> field_type = nullptr;
+      for (const auto& row : *rows) {
+        auto it = row.cells.find(field_name);
+        if (it != row.cells.end() && it->second) {
+          auto array_result = arrow::MakeArrayFromScalar(*(it->second), 1);
+          if (array_result.ok()) {
+            field_type = array_result.ValueOrDie()->type();
+            break;
+          }
+        }
+      }
+      
+      // If we couldn't determine type, default to string
+      if (!field_type) {
+        field_type = arrow::utf8();
+      }
+      
+      fields.push_back(arrow::field(field_name, field_type));
     }
-
-    fields.push_back(arrow::field(field_name, field_type));
-    field_name_to_index[field_name] = field_idx++;
+    
+    output_schema = std::make_shared<arrow::Schema>(fields);
   }
-
-  auto schema = std::make_shared<arrow::Schema>(fields);
 
   // Create array builders for each field
   std::vector<std::unique_ptr<arrow::ArrayBuilder>> builders;
-  for (const auto& field : schema->fields()) {
+  for (const auto& field : output_schema->fields()) {
     ARROW_ASSIGN_OR_RAISE(auto builder, arrow::MakeBuilder(field->type()));
     builders.push_back(std::move(builder));
   }
-
+  
   // Populate the builders from each row
   for (const auto& row : *rows) {
-    for (size_t i = 0; i < schema->num_fields(); i++) {
-      const auto& field_name = schema->field(i)->name();
+    for (size_t i = 0; i < output_schema->num_fields(); i++) {
+      const auto& field_name = output_schema->field(i)->name();
       auto it = row.cells.find(field_name);
-
+      
       if (it != row.cells.end() && it->second) {
         // We have a value for this field
         auto array_result = arrow::MakeArrayFromScalar(*(it->second), 1);
@@ -797,30 +802,29 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_rows(
           auto array = array_result.ValueOrDie();
           auto scalar_result = array->GetScalar(0);
           if (scalar_result.ok()) {
-            ARROW_RETURN_NOT_OK(
-                builders[i]->AppendScalar(*scalar_result.ValueOrDie()));
+            ARROW_RETURN_NOT_OK(builders[i]->AppendScalar(*scalar_result.ValueOrDie()));
             continue;
           }
         }
       }
-
+      
       // Fall back to NULL if we couldn't get or append the scalar
       ARROW_RETURN_NOT_OK(builders[i]->AppendNull());
     }
   }
-
+  
   // Finish building the arrays
   std::vector<std::shared_ptr<arrow::Array>> arrays;
   arrays.reserve(builders.size());
-
+  
   for (auto& builder : builders) {
     std::shared_ptr<arrow::Array> array;
     ARROW_RETURN_NOT_OK(builder->Finish(&array));
     arrays.push_back(array);
   }
-
+  
   // Create and return the table
-  return arrow::Table::Make(schema, arrays);
+  return arrow::Table::Make(output_schema, arrays);
 }
 
 arrow::Result<std::shared_ptr<QueryResult>> Database::query(
@@ -991,7 +995,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
     return row_res.status();
   }
   auto rows = row_res.ValueOrDie();
-  auto output_table_res = create_table_from_rows(rows);
+  auto output_table_res = create_table_from_rows(rows, output_schema);
   if (!output_table_res.ok()) {
     return output_table_res.status();
   }
