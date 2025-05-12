@@ -106,8 +106,8 @@ int main() {
       std::vector{{Company{"ibm", 1000}, Company{"google", 3000}}};
   create_companies(db, companies);
   db.connect(1, "friend", 0).ValueOrDie();  // bob -> alex
-  db.connect(1, "friend", 3).ValueOrDie();  // bob -> sam
-  db.connect(4, "works-at", 6).ValueOrDie();
+  db.connect(0, "friend", 3).ValueOrDie();  // bob -> sam
+  db.connect(1, "works-at", 6).ValueOrDie();
 
   auto users_table = db.get_table("users").ValueOrDie();
 
@@ -119,11 +119,12 @@ int main() {
   print_table(users_table);
   print_table(companies_table);
 
-  auto query = Query::from("u:users")
-                   // .where("u.age", CompareOp::Gt, Value(30))
-                   .traverse("u", "friend", "f:users", TraverseType::Inner)
-                   .traverse("u", "works-at", "c:companies")
-                   .build();
+  auto query =
+      Query::from("u:users")
+          // .where("u.age", CompareOp::Gt, Value(30))
+          .traverse("u", "friend", "f:users", TraverseType::Inner)
+          // .traverse("u", "works-at", "c:companies", TraverseType::Inner)
+          .build();
   auto result = db.query(query).ValueOrDie();
   // auto tables = result->tables();
   //

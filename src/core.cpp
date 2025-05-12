@@ -559,16 +559,43 @@ arrow::Result<bool> populate_rows_dfs(Row& row, int64_t node_id,
   }
   bool path_found = false;
   if (query_state.connections.contains(node_id)) {
+    std::unordered_map<std::string, std::vector<GraphConnection>>
+        grouped_by_schema;
+
     for (const auto& conn : query_state.connections.at(node_id)) {
-      if (!visited.contains(conn.target_id)) {
-        path_found = true;
-        log_debug("populate_rows_dfs:: visit connection node: {} -> {}",
-                  node_id, conn.target_id);
-        Row next_row = row;
-        auto res = populate_rows_dfs(next_row, conn.target_id, conn.target,
-                                     rows, query_state, visited);
-        if (!res.ok()) {
-          return res.status();
+      grouped_by_schema[conn.target.value()].push_back(conn);
+    }
+
+    for (const auto& [_, conn_list] : grouped_by_schema) {
+      if (conn_list.size() == 1) {
+        const auto& conn = conn_list[0];
+        if (!visited.contains(conn.target_id)) {
+          path_found = true;
+          log_debug("populate_rows_dfs:: contimue path: {}.{} -[{}]-> {}.{}",
+                    schema_ref.toString(), node_id, conn.edge_type,
+                    conn.target.toString(), conn.target_id);
+          auto res = populate_rows_dfs(row, conn.target_id, conn.target, rows,
+                                       query_state, visited);
+          if (!res.ok()) {
+            return res.status();
+          }
+        }
+        // continue row
+      } else {
+        for (const auto& conn : conn_list) {
+          if (!visited.contains(conn.target_id)) {
+            path_found = true;
+            log_debug(
+                "populate_rows_dfs:: create new path: {}.{} -[{}]-> {}.{}",
+                schema_ref.toString(), node_id, conn.edge_type,
+                conn.target.toString(), conn.target_id);
+            Row next_row = row;
+            auto res = populate_rows_dfs(next_row, conn.target_id, conn.target,
+                                         rows, query_state, visited);
+            if (!res.ok()) {
+              return res.status();
+            }
+          }
         }
       }
     }
@@ -741,7 +768,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_rows(
   }
 
   std::shared_ptr<arrow::Schema> output_schema;
-  
+
   if (schema) {
     // Use the provided schema
     output_schema = schema;
@@ -756,7 +783,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_rows(
 
     // Create schema from field names
     std::vector<std::shared_ptr<arrow::Field>> fields;
-    
+
     for (const auto& field_name : all_field_names) {
       // Find first non-null value to determine field type
       std::shared_ptr<arrow::DataType> field_type = nullptr;
@@ -770,15 +797,15 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_rows(
           }
         }
       }
-      
+
       // If we couldn't determine type, default to string
       if (!field_type) {
         field_type = arrow::utf8();
       }
-      
+
       fields.push_back(arrow::field(field_name, field_type));
     }
-    
+
     output_schema = std::make_shared<arrow::Schema>(fields);
   }
 
@@ -788,13 +815,13 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_rows(
     ARROW_ASSIGN_OR_RAISE(auto builder, arrow::MakeBuilder(field->type()));
     builders.push_back(std::move(builder));
   }
-  
+
   // Populate the builders from each row
   for (const auto& row : *rows) {
     for (size_t i = 0; i < output_schema->num_fields(); i++) {
       const auto& field_name = output_schema->field(i)->name();
       auto it = row.cells.find(field_name);
-      
+
       if (it != row.cells.end() && it->second) {
         // We have a value for this field
         auto array_result = arrow::MakeArrayFromScalar(*(it->second), 1);
@@ -802,27 +829,28 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_rows(
           auto array = array_result.ValueOrDie();
           auto scalar_result = array->GetScalar(0);
           if (scalar_result.ok()) {
-            ARROW_RETURN_NOT_OK(builders[i]->AppendScalar(*scalar_result.ValueOrDie()));
+            ARROW_RETURN_NOT_OK(
+                builders[i]->AppendScalar(*scalar_result.ValueOrDie()));
             continue;
           }
         }
       }
-      
+
       // Fall back to NULL if we couldn't get or append the scalar
       ARROW_RETURN_NOT_OK(builders[i]->AppendNull());
     }
   }
-  
+
   // Finish building the arrays
   std::vector<std::shared_ptr<arrow::Array>> arrays;
   arrays.reserve(builders.size());
-  
+
   for (auto& builder : builders) {
     std::shared_ptr<arrow::Array> array;
     ARROW_RETURN_NOT_OK(builder->Finish(&array));
     arrays.push_back(array);
   }
-  
+
   // Create and return the table
   return arrow::Table::Make(output_schema, arrays);
 }
@@ -931,18 +959,21 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
             }
             auto node = node_result.ValueOrDie();
 
-            // Fixed schema comparison - check against target schema, not source schema
-            log_debug("Node schema: '{}', target schema: '{}'", 
-                     node->schema_name, traverse->target().schema());
-                     
+            // Fixed schema comparison - check against target schema, not source
+            // schema
+            log_debug("Node schema: '{}', target schema: '{}'",
+                      node->schema_name, traverse->target().schema());
+
             if (traverse->target().schema() == node->schema_name) {
               neighbors.push_back(node);
               query_state.connections[source_id].push_back(GraphConnection{
                   traverse->source(), source_id, traverse->edge_type(), "",
                   traverse->target(), target_id});
             } else {
-              log_warn("Node {} schema '{}' doesn't match target schema '{}' in traversal",
-                      target_id, node->schema_name, traverse->target().schema());
+              log_warn(
+                  "Node {} schema '{}' doesn't match target schema '{}' in "
+                  "traversal",
+                  target_id, node->schema_name, traverse->target().schema());
             }
           }
         }
