@@ -8,9 +8,11 @@
 #include <chrono>
 #include <future>
 #include <iostream>
+#include <list>
 #include <memory>
 #include <stack>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "logger.hpp"
@@ -342,6 +344,7 @@ struct QueryState {
   std::map<int64_t, std::vector<GraphConnection>> connections;
   std::shared_ptr<NodeManager> node_manager;
   std::shared_ptr<SchemaRegistry> schema_registry;
+  std::vector<Traverse> traversals;
 
   arrow::Result<bool> init_table(const std::shared_ptr<arrow::Table> table,
                                  const SchemaRef& schema_ref) {
@@ -450,13 +453,40 @@ arrow::Result<std::shared_ptr<arrow::Schema>> build_denormalized_schema(
   return std::make_shared<arrow::Schema>(fields);
 }
 
+struct PathSegment {
+  std::string schema;
+  int64_t node_id;
+
+  std::string toString() const {
+    return schema + ":" + std::to_string(node_id);
+  }
+};
+
+std::string join_schema_path(const std::vector<PathSegment>& schema_path) {
+  std::ostringstream oss;
+  for (size_t i = 0; i < schema_path.size(); ++i) {
+    if (i != 0) oss << "->";
+    oss << schema_path[i].toString();
+  }
+  return oss.str();
+}
+
 struct Row {
   // int64_t id;
   std::unordered_map<std::string, std::shared_ptr<arrow::Scalar>> cells;
+  std::vector<PathSegment> path;
 
   void set_cell(const std::string& name,
                 std::shared_ptr<arrow::Scalar> scalar) {
     cells[name] = std::move(scalar);
+  }
+
+  void set_cell_from_node(const SchemaRef& schema_ref,
+                          const std::shared_ptr<Node>& node) {
+    for (const auto& [name, value] : node->data()) {
+      auto full_name = schema_ref.value() + "." + name;
+      this->set_cell(full_name, value);
+    }
   }
 
   void set_cell(const std::string& name, std::shared_ptr<arrow::Array> array) {
@@ -474,6 +504,7 @@ struct Row {
   std::string ToString() const {
     std::stringstream ss;
     ss << "Row{";
+    ss << "path='" << join_schema_path(path) << "', ";
 
     bool first = true;
     for (const auto& [field_name, scalar] : cells) {
@@ -538,16 +569,146 @@ static Row create_empty_row_from_schema(
   return new_row;
 }
 
+struct QueueItem {
+  int64_t node_id;
+  SchemaRef schema_ref;
+  int level;
+  std::shared_ptr<Row> row;
+  // std::vector<std::string> path;
+  std::set<int64_t> path_visited_nodes;  // Nodes visited in this specific path
+  std::vector<PathSegment> path;
+
+  QueueItem(int64_t id, const SchemaRef& schema, int l, std::shared_ptr<Row> r)
+      : node_id(id), schema_ref(schema), level(l), row(r) {
+    // path.push_back(schema_ref.value());
+    path_visited_nodes.insert(id);
+    path.push_back(PathSegment{schema.value(), id});
+  }
+};
+
+// Log grouped connections for a node
+void log_grouped_connections(
+    int64_t node_id,
+    const std::unordered_map<std::string, std::vector<GraphConnection>>&
+        grouped_connections) {
+  if (grouped_connections.empty()) {
+    log_debug("Node {} has no grouped connections", node_id);
+    return;
+  }
+
+  log_debug("Node {} has connections to {} target schemas:", node_id,
+            grouped_connections.size());
+
+  for (const auto& [target_schema, connections] : grouped_connections) {
+    log_debug("  To schema '{}': {} connections", target_schema,
+              connections.size());
+
+    for (size_t i = 0; i < connections.size(); ++i) {
+      const auto& conn = connections[i];
+      log_debug("    [{}] {} -[{}]-> {}.{} (target_id: {})", i,
+                conn.source.value(), conn.edge_type, conn.target.value(),
+                conn.target.schema(), conn.target_id);
+    }
+  }
+}
+
+arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows_bfs(
+    int64_t node_id, const SchemaRef& start_schema,
+    const std::shared_ptr<arrow::Schema>& output_schema,
+    const QueryState& query_state) {
+  log_debug("populate_rows_bfs::node={}", node_id);
+  auto result = std::make_shared<std::vector<Row>>();
+  std::set<std::string> visited_schemas;
+
+  auto initial_row =
+      std::make_shared<Row>(create_empty_row_from_schema(output_schema));
+
+  std::queue<QueueItem> queue;
+  queue.push(QueueItem(node_id, start_schema, 0, initial_row));
+
+  while (!queue.empty()) {
+    auto size = queue.size();
+    while (size-- > 0) {
+      auto item = queue.front();
+      queue.pop();
+      auto node = query_state.node_manager->get_node(item.node_id).ValueOrDie();
+      item.row->set_cell_from_node(item.schema_ref, node);
+      visited_schemas.insert(item.schema_ref.value());
+
+      // group connections by target schema
+      std::unordered_map<std::string, std::vector<GraphConnection>>
+          grouped_connections;
+
+      if (query_state.connections.contains(item.node_id)) {
+        for (const auto& conn : query_state.connections.at(item.node_id)) {
+          if (!visited_schemas.contains(conn.target.value())) {
+            grouped_connections[conn.target.value()].push_back(conn);
+          }
+        }
+      }
+      log_grouped_connections(item.node_id, grouped_connections);
+
+      if (grouped_connections.empty()) {
+        // we've done
+        auto r = *item.row;
+        r.path = item.path;
+        std::cout << "add row: " << r.ToString() << std::endl;
+        result->push_back(r);
+      } else {
+        for (const auto& connections :
+             grouped_connections | std::views::values) {
+          if (connections.size() == 1) {
+            // continue the path
+            auto conn = connections[0];
+            auto next =
+                QueueItem(connections[0].target_id, connections[0].target,
+                          item.level + 1, item.row);
+
+            next.path = item.path;
+            next.path.push_back(PathSegment{connections[0].target.value(),
+                                            connections[0].target_id});
+            log_debug("continue the path: {}", join_schema_path(next.path));
+            queue.push(next);
+          } else {
+            for (const auto& conn : connections) {
+              auto next_row = std::make_shared<Row>(*item.row);
+              auto next = QueueItem(conn.target_id, conn.target, item.level + 1,
+                                    next_row);
+              next.path = item.path;
+              next.path.push_back(
+                  PathSegment{conn.target.value(), conn.target_id});
+              log_debug("create a new path {}, node={}",
+                        join_schema_path(next.path), conn.target_id);
+              queue.push(next);
+            }
+          }
+        }
+      }
+    }
+  }
+  for (const auto& r : *result) {
+    std::cout << "bfs result: " << r.ToString() << std::endl;
+  }
+
+  return result;
+}
+
 arrow::Result<bool> populate_rows_dfs(Row& row, int64_t node_id,
                                       const SchemaRef& schema_ref,
                                       std::vector<Row>& rows,
                                       const QueryState& query_state,
-                                      std::set<int64_t>& visited) {
+                                      std::set<int64_t>& visited,
+                                      std::set<std::string>& visited_schemas,
+                                      int64_t total) {
   log_debug("populate_rows_dfs:: visit node: {}", node_id);
   // Check if node has already been visited to avoid cycles
   if (!visited.insert(node_id).second) {
     return true;  // Already processed this node, nothing to do
   }
+  // if (!visited_schemas.insert(schema_ref.value()).second) {
+  //   return true;
+  // };
+
   auto node_result = query_state.node_manager->get_node(node_id);
   if (!node_result.ok()) {
     return node_result.status();
@@ -569,13 +730,18 @@ arrow::Result<bool> populate_rows_dfs(Row& row, int64_t node_id,
     for (const auto& [_, conn_list] : grouped_by_schema) {
       if (conn_list.size() == 1) {
         const auto& conn = conn_list[0];
-        if (!visited.contains(conn.target_id)) {
+        if (!visited.contains(conn.target_id) &&
+            !visited_schemas.contains(conn.target.value())) {
           path_found = true;
-          log_debug("populate_rows_dfs:: contimue path: {}.{} -[{}]-> {}.{}",
+          log_debug("populate_rows_dfs:: continue path: {}.{} -[{}]-> {}.{}",
                     schema_ref.toString(), node_id, conn.edge_type,
                     conn.target.toString(), conn.target_id);
-          auto res = populate_rows_dfs(row, conn.target_id, conn.target, rows,
-                                       query_state, visited);
+          // visited_schemas.insert(schema_ref.value());
+          auto res =
+              populate_rows_dfs(row, conn.target_id, conn.target, rows,
+                                query_state, visited, visited_schemas, total);
+          // visited_schemas.erase(schema_ref.value());
+
           if (!res.ok()) {
             return res.status();
           }
@@ -583,15 +749,19 @@ arrow::Result<bool> populate_rows_dfs(Row& row, int64_t node_id,
         // continue row
       } else {
         for (const auto& conn : conn_list) {
-          if (!visited.contains(conn.target_id)) {
+          if (!visited.contains(conn.target_id) &&
+              !visited_schemas.contains(conn.target.value())) {
             path_found = true;
             log_debug(
                 "populate_rows_dfs:: create new path: {}.{} -[{}]-> {}.{}",
                 schema_ref.toString(), node_id, conn.edge_type,
                 conn.target.toString(), conn.target_id);
             Row next_row = row;
-            auto res = populate_rows_dfs(next_row, conn.target_id, conn.target,
-                                         rows, query_state, visited);
+            // visited_schemas.insert(schema_ref.value());
+            auto res =
+                populate_rows_dfs(next_row, conn.target_id, conn.target, rows,
+                                  query_state, visited, visited_schemas, total);
+            // visited_schemas.erase(schema_ref.value());
             if (!res.ok()) {
               return res.status();
             }
@@ -600,10 +770,11 @@ arrow::Result<bool> populate_rows_dfs(Row& row, int64_t node_id,
       }
     }
   }
-  if (!path_found) {
+  if (!path_found && total == visited_schemas.size()) {
     log_debug("populate_rows_dfs:: add row: {}", row.ToString());
     rows.emplace_back(std::move(row));
   }
+  // visited_schemas.erase(schema_ref.value());
   return true;
 }
 
@@ -613,7 +784,7 @@ arrow::Result<bool> populate_rows_dfs(Row& row, int64_t node_id,
 arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows(
     const QueryState& query_state, const std::vector<Traverse>& traverses,
     const std::shared_ptr<arrow::Schema>& output_schema) {
-  std::vector<Row> rows;
+  auto rows = std::make_shared<std::vector<Row>>();
   std::set<int64_t> visited;  // Tracks processed nodes across all schemas
   std::set<std::string> unique_schemas;
   std::vector<SchemaRef> schemas;
@@ -626,14 +797,14 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows(
   unique_schemas.insert(query_state.from.value());
   schemas.push_back(query_state.from);
 
-  for (const auto& traverse : traverses) {
-    if (unique_schemas.insert(traverse.source().value()).second) {
-      schemas.push_back(traverse.source());
-    }
-    if (unique_schemas.insert(traverse.target().value()).second) {
-      schemas.push_back(traverse.target());
-    }
-  }
+  // for (const auto& traverse : traverses) {
+  //   if (unique_schemas.insert(traverse.source().value()).second) {
+  //     schemas.push_back(traverse.source());
+  //   }
+  //   if (unique_schemas.insert(traverse.target().value()).second) {
+  //     schemas.push_back(traverse.target());
+  //   }
+  // }
 
   log_debug("Phase 1: Processing connected paths from {} unique schemas",
             schemas.size());
@@ -648,7 +819,7 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows(
     log_debug("Processing {} nodes from schema '{}'",
               query_state.ids.at(schema_ref.value()).size(),
               schema_ref.value());
-
+    std::set<int64_t> schema_visited_nodes;
     for (auto id : query_state.ids.at(schema_ref.value())) {
       // Skip already visited nodes (they were already added as part of another
       // path)
@@ -657,19 +828,31 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows(
         continue;
       }
 
-      Row row = create_empty_row_from_schema(output_schema);
-      auto res =
-          populate_rows_dfs(row, id, schema_ref, rows, query_state, visited);
+      // Row row = create_empty_row_from_schema(output_schema);
+      // std::set<int64_t> local_visited;
+      // std::set<std::string> local_visited_schemas;
+      // auto res =
+      //     populate_rows_dfs(row, id, schema_ref, rows, query_state,
+      //     local_visited, local_visited_schemas, unique_schemas.size());
+      // schema_visited_nodes.insert(local_visited.begin(),
+      // local_visited.end());
+      auto res = populate_rows_bfs(id, schema_ref, output_schema, query_state);
       if (!res.ok()) {
         log_error("Failed to populate row for node {} in schema '{}': {}", id,
                   schema_ref.value(), res.status().ToString());
         return res.status();
       }
+      auto res_value = res.ValueOrDie();
+      // rows.splice(rows.end(), res.ValueOrDie());
+      rows->insert(rows->end(), std::make_move_iterator(res_value->begin()),
+                   std::make_move_iterator(res_value->end()));
     }
+
+    visited.insert(schema_visited_nodes.begin(), schema_visited_nodes.end());
   }
 
   log_debug("Phase 1 complete. Found {} connected paths, visited {} nodes",
-            rows.size(), visited.size());
+            rows->size(), visited.size());
 
   // Phase 2: Process unmatched nodes for outer joins
   // -----------------------------------------------
@@ -692,72 +875,68 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows(
   }
 
   // Handle LEFT and FULL joins - process unvisited source nodes
-
-  for (const auto& [alias, traverses_list] : source_traverses) {
-    for (const auto* traverse : traverses_list) {
-      if (traverse->traverse_type() != TraverseType::Left &&
-          traverse->traverse_type() != TraverseType::Full) {
-        continue;
-      }
-
-      log_debug(
-          "Processing LEFT/FULL join for source '{}' in traverse '{} -> {}'",
-          traverse->source().value(), traverse->source().value(),
-          traverse->target().value());
-
-      for (auto id : query_state.ids.at(traverse->source().value())) {
-        if (visited.find(id) != visited.end()) {
-          continue;  // Skip nodes already processed in phase 1
-        }
-
-        log_debug("Creating row for unmatched source node {} in LEFT/FULL join",
-                  id);
-        Row row = create_empty_row_from_schema(output_schema);
-        auto res = populate_rows_dfs(row, id, traverse->source(), rows,
-                                     query_state, visited);
-        if (!res.ok()) {
-          log_error("Failed to populate row for unmatched source node {}: {}",
-                    id, res.status().ToString());
-          return res.status();
-        }
-      }
-    }
-  }
-
-  // Handle RIGHT and FULL joins - process unvisited target nodes
-  for (const auto& [alias, traverses_list] : target_traverses) {
-    for (const auto* traverse : traverses_list) {
-      if (traverse->traverse_type() != TraverseType::Right &&
-          traverse->traverse_type() != TraverseType::Full) {
-        continue;
-      }
-
-      log_debug(
-          "Processing RIGHT/FULL join for target '{}' in traverse '{} -> {}'",
-          traverse->target().value(), traverse->source().value(),
-          traverse->target().value());
-
-      for (auto id : query_state.ids.at(traverse->target().value())) {
-        if (visited.find(id) != visited.end()) {
-          continue;  // Skip nodes already processed in phase 1
+  /*
+    for (const auto& [alias, traverses_list] : source_traverses) {
+      for (const auto* traverse : traverses_list) {
+        if (traverse->traverse_type() != TraverseType::Left &&
+            traverse->traverse_type() != TraverseType::Full) {
+          continue;
         }
 
         log_debug(
-            "Creating row for unmatched target node {} in RIGHT/FULL join", id);
-        Row row = create_empty_row_from_schema(output_schema);
-        auto res = populate_rows_dfs(row, id, traverse->target(), rows,
-                                     query_state, visited);
-        if (!res.ok()) {
-          log_error("Failed to populate row for unmatched target node {}: {}",
-                    id, res.status().ToString());
-          return res.status();
+            "Processing LEFT/FULL join for source '{}' in traverse '{} -> {}'",
+            traverse->source().value(), traverse->source().value(),
+            traverse->target().value());
+
+        for (auto id : query_state.ids.at(traverse->source().value())) {
+          if (visited.find(id) != visited.end()) {
+            continue;  // Skip nodes already processed in phase 1
+          }
+
+          log_debug("Creating row for unmatched source node {} in LEFT/FULL
+    join", id); Row row = create_empty_row_from_schema(output_schema); auto res
+    = populate_rows_dfs(row, id, traverse->source(), rows, query_state,
+    visited); if (!res.ok()) { log_error("Failed to populate row for unmatched
+    source node {}: {}", id, res.status().ToString()); return res.status();
+          }
         }
       }
     }
-  }
 
-  log_debug("Phase 2 complete. Total of {} rows created", rows.size());
-  return std::make_shared<std::vector<Row>>(std::move(rows));
+    // Handle RIGHT and FULL joins - process unvisited target nodes
+    for (const auto& [alias, traverses_list] : target_traverses) {
+      for (const auto* traverse : traverses_list) {
+        if (traverse->traverse_type() != TraverseType::Right &&
+            traverse->traverse_type() != TraverseType::Full) {
+          continue;
+        }
+
+        log_debug(
+            "Processing RIGHT/FULL join for target '{}' in traverse '{} -> {}'",
+            traverse->target().value(), traverse->source().value(),
+            traverse->target().value());
+
+        for (auto id : query_state.ids.at(traverse->target().value())) {
+          if (visited.find(id) != visited.end()) {
+            continue;  // Skip nodes already processed in phase 1
+          }
+
+          log_debug(
+              "Creating row for unmatched target node {} in RIGHT/FULL join",
+    id); Row row = create_empty_row_from_schema(output_schema); auto res =
+    populate_rows_dfs(row, id, traverse->target(), rows, query_state, visited);
+          if (!res.ok()) {
+            log_error("Failed to populate row for unmatched target node {}: {}",
+                      id, res.status().ToString());
+            return res.status();
+          }
+        }
+      }
+    }
+    */
+
+  log_debug("Phase 2 complete. Total of {} rows created", rows->size());
+  return rows;  //  std::make_shared<std::vector<Row>>(std::mov);
 }
 
 arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_rows(
@@ -874,7 +1053,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
               query.from().toString());
     return init_from_table_result.status();
   }
-  std::vector<Traverse> traverses;
+  // std::vector<Traverse> traverses;
   log_info("Processing {} query clauses", query.clauses().size());
   for (const auto& clause : query.clauses()) {
     switch (clause->type()) {
@@ -917,7 +1096,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
       }
       case Clause::Type::TRAVERSE: {
         auto traverse = std::static_pointer_cast<Traverse>(clause);
-        traverses.push_back(*traverse);
+        query_state.traversals.push_back(*traverse);
         log_info("Processing TRAVERSE on edge type '{}' from source '{}'",
                  traverse->edge_type(), traverse->source().toString());
         auto source = traverse->source();
@@ -1028,7 +1207,9 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
   }
   const auto output_schema = output_schema_res.ValueOrDie();
   log_info("output_schema={}", output_schema->ToString());
-  auto row_res = populate_rows(query_state, traverses, output_schema);
+  query_state.ids["u"] = {1};
+  auto row_res =
+      populate_rows(query_state, query_state.traversals, output_schema);
   if (!row_res.ok()) {
     return row_res.status();
   }

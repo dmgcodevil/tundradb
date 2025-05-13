@@ -102,12 +102,31 @@ int main() {
       std::vector({User{"alex", 25}, User{"bob", 31}, User{"jeff", 33},
                    User{"sam", 21}, User{"matt", 40}});
   create_users(db, users);
-  const auto companies =
-      std::vector{{Company{"ibm", 1000}, Company{"google", 3000}}};
+  const auto companies = std::vector{
+      {Company{"ibm", 1000}, Company{"google", 3000}, Company{"aws", 5000}}};
   create_companies(db, companies);
-  db.connect(1, "friend", 0).ValueOrDie();  // bob -> alex
-  db.connect(0, "friend", 3).ValueOrDie();  // bob -> sam
-  db.connect(1, "works-at", 6).ValueOrDie();
+  // db.connect(1, "friend", 0).ValueOrDie();  // bob -> alex
+  // db.connect(0, "friend", 3).ValueOrDie();  // alex -> sam
+  // db.connect(1, "works-at", 6).ValueOrDie();
+  // db.connect(3, "works-at", 5).ValueOrDie();
+  // db.connect(0, "works-at", 7).ValueOrDie();
+  db.connect(1, "friend", 0).ValueOrDie();    // bob-[friend]->alex
+  db.connect(1, "friend", 3).ValueOrDie();    // bob-[friend]->sam
+  db.connect(3, "works-at", 5).ValueOrDie();  // sam -[works_at]-> ibm
+  // db.connect(0, "works-at", 7).ValueOrDie(); // sam -[works_at]-> ibm
+  db.connect(1, "works-at", 6).ValueOrDie();  // bob -[works_at]-> google
+
+  /*
+  bob-[friend]->alex
+  bob-[friend]->sam
+  bob -[works_at]-> google
+
+  Query::from("u:users")
+          .traverse("u", "friend", "f:users", TraverseType::Inner)
+          .traverse("u", "works-at", "c:companies", TraverseType::Inner)
+          .build();
+
+   */
 
   auto users_table = db.get_table("users").ValueOrDie();
 
@@ -121,9 +140,8 @@ int main() {
 
   auto query =
       Query::from("u:users")
-          // .where("u.age", CompareOp::Gt, Value(30))
           .traverse("u", "friend", "f:users", TraverseType::Inner)
-          // .traverse("u", "works-at", "c:companies", TraverseType::Inner)
+          .traverse("u", "works-at", "c:companies", TraverseType::Inner)
           .build();
   auto result = db.query(query).ValueOrDie();
   // auto tables = result->tables();
