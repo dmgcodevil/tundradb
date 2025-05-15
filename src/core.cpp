@@ -498,6 +498,11 @@ struct Row {
     cells[name] = std::move(scalar);
   }
 
+  bool has_value(const std::string& name) const {
+    return cells.contains(name) && cells.at(name) != nullptr &&
+           cells.at(name)->is_valid;
+  }
+
   void set_cell_from_node(const SchemaRef& schema_ref,
                           const std::shared_ptr<Node>& node) {
     for (const auto& [name, value] : node->data()) {
@@ -521,6 +526,18 @@ struct Row {
 
   bool start_with(const std::vector<PathSegment>& prefix) const {
     return is_prefix(prefix, this->path);
+  }
+
+  // returns new Row which is result of merging this row and other
+  Row merge(const Row& other) const {
+    Row merged;
+    merged = *this;
+    for (const auto& [name, value] : other.cells) {
+      if (!merged.has_value(name)) {
+        merged.cells[name] = value;
+      }
+    }
+    return merged;
   }
 
   std::string ToString() const {
@@ -609,20 +626,18 @@ struct RowNode {
   int depth;
   PathSegment path_segment;
   std::vector<std::unique_ptr<RowNode>> children;
-  std::vector<Row> combined;
 
   // Default constructor
   RowNode() : depth(0) {}
 
   RowNode(std::optional<Row> r, int d,
-          std::vector<std::unique_ptr<RowNode>> c = {},
-          std::vector<Row> comb = {})
+          std::vector<std::unique_ptr<RowNode>> c = {})
       : row(move(r)),
         depth(d),
-        children(std::move(c)),
-        combined(std::move(comb)) {}
+        children(std::move(c)) {}
 
   bool leaf() const { return row.has_value(); }
+
 
   // find nodes where their path is prefix of path
   // void find_prefix_nodes(const std::vector<PathSegment>& path,
@@ -657,6 +672,71 @@ struct RowNode {
   }
 
   void insert_row(const Row& new_row) { insert_row_dfs(0, new_row); }
+
+
+  std::vector<Row> merge_rows() {
+    if (this->leaf()) {
+      return {this->row.value()};
+    }
+
+    std::unordered_map<std::string, std::vector<Row>> grouped;
+    for (const auto & c : children) {
+      auto child_rows = c->merge_rows();
+      grouped[c->path_segment.schema].insert(
+          grouped[c->path_segment.schema].end(),
+          child_rows.begin(),
+          child_rows.end());
+    }
+    
+    std::vector<std::vector<Row>> groups_for_product;
+    // Add this->row as its own group if it exists and has data, 
+    // to represent the node itself if it should be part of the product independently.
+    if (this->row.has_value()) {
+        Row node_self_row = this->row.value();
+        // Normalize path for the node's own row to ensure it combines correctly
+        // and doesn't carry a longer BFS path if it was a leaf of BFS.
+        node_self_row.path = {this->path_segment}; 
+        groups_for_product.push_back({node_self_row});
+    }
+
+    for (const auto& pair : grouped) {
+      if (!pair.second.empty()) { 
+        groups_for_product.push_back(pair.second);
+      }
+    }
+
+    if (groups_for_product.empty()) {
+        return {}; 
+    }
+    // If only one group (e.g. only this->row.value() or only one child branch with data), 
+    // no Cartesian product is needed. Just return its rows, but ensure paths are correct.
+    if (groups_for_product.size() == 1) {
+        std::vector<Row> single_group_rows = groups_for_product[0];
+        // Ensure path is normalized for these rows if they came from children
+        // For rows that are just this->row.value(), path is already set.
+        // This might be too aggressive if child rows are already fully merged products.
+        // For now, let's assume rows from c->merge_rows() are final products of that child branch.
+        return single_group_rows; 
+    }
+
+    std::vector<Row> final_merged_rows = groups_for_product.back();
+    for (int i = static_cast<int>(groups_for_product.size()) - 2; i >= 0; --i) {
+      std::vector<Row> temp_product_accumulator;
+      for (const auto& r1_from_current_group : groups_for_product[i]) {
+        for (const auto& r2_from_previous_product : final_merged_rows) {
+          Row merged_r = r1_from_current_group.merge(r2_from_previous_product);
+          // Set the path of the newly merged row to the path of the current RowNode
+          merged_r.path = {this->path_segment};
+          temp_product_accumulator.push_back(merged_r);
+        }
+      }
+      final_merged_rows = std::move(temp_product_accumulator);
+      if (final_merged_rows.empty()){ 
+          break;
+      }
+    }
+    return final_merged_rows;
+  }
 
   std::string toString(bool recursive = true, int indent_level = 0) const {
     // Helper to build indentation string based on level
@@ -711,9 +791,9 @@ struct RowNode {
     ss << "\n";
 
     // Print combined rows count if any
-    if (!combined.empty()) {
-      ss << indent << "  Combined: " << combined.size() << " rows\n";
-    }
+    // if (!combined.empty()) {
+    //   ss << indent << "  Combined: " << combined.size() << " rows\n";
+    // }
 
     // Print children count
     ss << indent << "  Children: " << children.size() << "\n";
@@ -831,8 +911,8 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows_bfs(
         std::cout << "add row: " << r.ToString() << std::endl;
         result->push_back(r);
       } else {
-        for (const auto& connections :
-             grouped_connections | std::views::values) {
+        for (const auto& pair : grouped_connections) {
+          const auto& connections = pair.second;
           if (connections.size() == 1) {
             // continue the path
             auto conn = connections[0];
@@ -869,93 +949,13 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows_bfs(
     tree.insert_row(r);
   }
   tree.print();
-
-  return result;
-}
-
-arrow::Result<bool> populate_rows_dfs(Row& row, int64_t node_id,
-                                      const SchemaRef& schema_ref,
-                                      std::vector<Row>& rows,
-                                      const QueryState& query_state,
-                                      std::set<int64_t>& visited,
-                                      std::set<std::string>& visited_schemas,
-                                      int64_t total) {
-  log_debug("populate_rows_dfs:: visit node: {}", node_id);
-  // Check if node has already been visited to avoid cycles
-  if (!visited.insert(node_id).second) {
-    return true;  // Already processed this node, nothing to do
+  auto merged = tree.merge_rows();
+  for (const auto & row : merged) {
+    std::cout << "merge result: " << row.ToString() << std::endl;
   }
-  // if (!visited_schemas.insert(schema_ref.value()).second) {
-  //   return true;
-  // };
+  return std::make_shared<std::vector<Row>>(merged);
 
-  auto node_result = query_state.node_manager->get_node(node_id);
-  if (!node_result.ok()) {
-    return node_result.status();
-  }
-  auto node = node_result.ValueOrDie();
-  for (const auto& [name, value] : node->data()) {
-    auto full_name = schema_ref.value() + "." + name;
-    row.set_cell(full_name, value);
-  }
-  bool path_found = false;
-  if (query_state.connections.contains(node_id)) {
-    std::unordered_map<std::string, std::vector<GraphConnection>>
-        grouped_by_schema;
-
-    for (const auto& conn : query_state.connections.at(node_id)) {
-      grouped_by_schema[conn.target.value()].push_back(conn);
-    }
-
-    for (const auto& [_, conn_list] : grouped_by_schema) {
-      if (conn_list.size() == 1) {
-        const auto& conn = conn_list[0];
-        if (!visited.contains(conn.target_id) &&
-            !visited_schemas.contains(conn.target.value())) {
-          path_found = true;
-          log_debug("populate_rows_dfs:: continue path: {}.{} -[{}]-> {}.{}",
-                    schema_ref.toString(), node_id, conn.edge_type,
-                    conn.target.toString(), conn.target_id);
-          // visited_schemas.insert(schema_ref.value());
-          auto res =
-              populate_rows_dfs(row, conn.target_id, conn.target, rows,
-                                query_state, visited, visited_schemas, total);
-          // visited_schemas.erase(schema_ref.value());
-
-          if (!res.ok()) {
-            return res.status();
-          }
-        }
-        // continue row
-      } else {
-        for (const auto& conn : conn_list) {
-          if (!visited.contains(conn.target_id) &&
-              !visited_schemas.contains(conn.target.value())) {
-            path_found = true;
-            log_debug(
-                "populate_rows_dfs:: create new path: {}.{} -[{}]-> {}.{}",
-                schema_ref.toString(), node_id, conn.edge_type,
-                conn.target.toString(), conn.target_id);
-            Row next_row = row;
-            // visited_schemas.insert(schema_ref.value());
-            auto res =
-                populate_rows_dfs(next_row, conn.target_id, conn.target, rows,
-                                  query_state, visited, visited_schemas, total);
-            // visited_schemas.erase(schema_ref.value());
-            if (!res.ok()) {
-              return res.status();
-            }
-          }
-        }
-      }
-    }
-  }
-  if (!path_found && total == visited_schemas.size()) {
-    log_debug("populate_rows_dfs:: add row: {}", row.ToString());
-    rows.emplace_back(std::move(row));
-  }
-  // visited_schemas.erase(schema_ref.value());
-  return true;
+  // return result;
 }
 
 // process all schemas used in traverse
@@ -1404,3 +1404,4 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
 }
 
 }  // namespace tundradb
+
