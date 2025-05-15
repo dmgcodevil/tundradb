@@ -460,7 +460,24 @@ struct PathSegment {
   std::string toString() const {
     return schema + ":" + std::to_string(node_id);
   }
+
+  bool operator==(const PathSegment& other) const {
+    return schema == other.schema && node_id == other.node_id;
+  }
 };
+
+bool is_prefix(const std::vector<PathSegment>& prefix,
+               const std::vector<PathSegment>& path) {
+  if (prefix.size() > path.size()) {
+    return false;
+  }
+  int i = 0;
+  while (i < prefix.size()) {
+    if (prefix[i] != path[i]) return false;
+    i++;
+  }
+  return true;
+}
 
 std::string join_schema_path(const std::vector<PathSegment>& schema_path) {
   std::ostringstream oss;
@@ -472,7 +489,7 @@ std::string join_schema_path(const std::vector<PathSegment>& schema_path) {
 }
 
 struct Row {
-  // int64_t id;
+  int64_t id;
   std::unordered_map<std::string, std::shared_ptr<arrow::Scalar>> cells;
   std::vector<PathSegment> path;
 
@@ -501,6 +518,11 @@ struct Row {
     // Default to null if array is empty or conversion fails
     cells[name] = nullptr;
   }
+
+  bool start_with(const std::vector<PathSegment>& prefix) const {
+    return is_prefix(prefix, this->path);
+  }
+
   std::string ToString() const {
     std::stringstream ss;
     ss << "Row{";
@@ -569,6 +591,159 @@ static Row create_empty_row_from_schema(
   return new_row;
 }
 
+struct RowNode;
+
+std::vector<Row> get_child_rows(const Row& parent,
+                                const std::vector<Row>& rows) {
+  std::vector<Row> child;
+  for (const auto& row : rows) {
+    if (parent.id != row.id && row.start_with(parent.path)) {
+      child.push_back(row);
+    }
+  }
+  return child;
+}
+
+struct RowNode {
+  std::optional<Row> row;
+  int depth;
+  PathSegment path_segment;
+  std::vector<std::unique_ptr<RowNode>> children;
+  std::vector<Row> combined;
+
+  // Default constructor
+  RowNode() : depth(0) {}
+
+  RowNode(std::optional<Row> r, int d,
+          std::vector<std::unique_ptr<RowNode>> c = {},
+          std::vector<Row> comb = {})
+      : row(move(r)),
+        depth(d),
+        children(std::move(c)),
+        combined(std::move(comb)) {}
+
+  bool leaf() const { return row.has_value(); }
+
+  // find nodes where their path is prefix of path
+  // void find_prefix_nodes(const std::vector<PathSegment>& path,
+  //                        std::vector<RowNode*>& result) {
+  //   if (is_prefix(row.path, path)) {
+  //     result.emplace_back(this);
+  //     for (const auto& child : children) {
+  //       child->find_prefix_nodes(path, result);
+  //     }
+  //   }
+  // }
+
+  void insert_row_dfs(size_t path_idx, const Row& new_row) {
+    if (path_idx == new_row.path.size()) {
+      this->row = new_row;
+      this->depth = depth;
+      return;
+    }
+
+    for (const auto& n : children) {
+      if (n->path_segment == new_row.path[path_idx]) {
+        n->insert_row_dfs(path_idx + 1, new_row);
+        return;
+      }
+    }
+
+    auto new_node = std::make_unique<RowNode>();
+    new_node->depth = depth + 1;
+    new_node->path_segment = new_row.path[path_idx];
+    new_node->insert_row_dfs(path_idx + 1, new_row);
+    children.emplace_back(std::move(new_node));
+  }
+
+  void insert_row(const Row& new_row) { insert_row_dfs(0, new_row); }
+
+  std::string toString(bool recursive = true, int indent_level = 0) const {
+    // Helper to build indentation string based on level
+    auto get_indent = [](int level) { return std::string(level * 2, ' '); };
+
+    std::stringstream ss;
+    std::string indent = get_indent(indent_level);
+
+    // Print basic node info
+    ss << indent << "RowNode [path=" << path_segment.toString()
+       << ", depth=" << depth << "] {\n";
+
+    // Print Row
+    if (row.has_value()) {
+      ss << indent << "  Path: ";
+      if (row.value().path.empty()) {
+        ss << "(empty)";
+      } else {
+        for (size_t i = 0; i < row.value().path.size(); ++i) {
+          if (i > 0) ss << " → ";
+          ss << row.value().path[i].schema << ":"
+             << row.value().path[i].node_id;
+        }
+      }
+      ss << "\n";
+
+      // Print key cell values (limited to avoid overwhelming output)
+      ss << indent << "  Cells: ";
+      if (row.value().cells.empty()) {
+        ss << "(empty)";
+      } else {
+        size_t count = 0;
+        ss << "{ ";
+        for (const auto& [key, value] : row.value().cells) {
+          if (count++ > 0) ss << ", ";
+          if (count > 5) {  // Limit display
+            ss << "... +" << (row.value().cells.size() - 5) << " more";
+            break;
+          }
+
+          ss << key << ": ";
+          if (!value) {
+            ss << "NULL";
+          } else {
+            ss << value->ToString();  // Assuming arrow::Scalar has ToString()
+          }
+        }
+        ss << " }";
+      }
+    }
+
+    ss << "\n";
+
+    // Print combined rows count if any
+    if (!combined.empty()) {
+      ss << indent << "  Combined: " << combined.size() << " rows\n";
+    }
+
+    // Print children count
+    ss << indent << "  Children: " << children.size() << "\n";
+
+    // Recursively print children if requested
+    if (recursive && !children.empty()) {
+      ss << indent << "  [\n";
+      for (const auto& child : children) {
+        if (child) {
+          ss << child->toString(true, indent_level + 2);
+        } else {
+          ss << get_indent(indent_level + 2) << "(null child)\n";
+        }
+      }
+      ss << indent << "  ]\n";
+    }
+
+    ss << indent << "}\n";
+    return ss.str();
+  }
+
+  // Overload stream operator for convenience
+  friend std::ostream& operator<<(std::ostream& os, const RowNode& node) {
+    return os << node.toString();
+  }
+
+  // Print to stdout helper method
+  void print(bool recursive = true) const { std::cout << toString(recursive); }
+};
+
 struct QueueItem {
   int64_t node_id;
   SchemaRef schema_ref;
@@ -619,7 +794,7 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows_bfs(
   log_debug("populate_rows_bfs::node={}", node_id);
   auto result = std::make_shared<std::vector<Row>>();
   std::set<std::string> visited_schemas;
-
+  int64_t row_id_counter = 0;
   auto initial_row =
       std::make_shared<Row>(create_empty_row_from_schema(output_schema));
 
@@ -652,6 +827,7 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows_bfs(
         // we've done
         auto r = *item.row;
         r.path = item.path;
+        r.id = row_id_counter++;
         std::cout << "add row: " << r.ToString() << std::endl;
         result->push_back(r);
       } else {
@@ -686,9 +862,13 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows_bfs(
       }
     }
   }
+  RowNode tree;
+  tree.path_segment = PathSegment{"root", -1};
   for (const auto& r : *result) {
     std::cout << "bfs result: " << r.ToString() << std::endl;
+    tree.insert_row(r);
   }
+  tree.print();
 
   return result;
 }
