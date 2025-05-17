@@ -195,6 +195,56 @@ TEST(JoinTest, JoinFromSameNode) {
   std::cout << "JoinTest Result Table:" << std::endl;
   print_table(result_table);
   arrow::PrettyPrint(*result_table, {}, &std::cout);
+
+  ASSERT_EQ(result_table->num_rows(), 2);
+
+  // Verify the first row
+  {
+    std::unordered_map<std::string, std::shared_ptr<arrow::Scalar>>
+        expected_row1;
+    expected_row1["u.id"] = arrow::MakeScalar((int64_t)0);
+    expected_row1["u.name"] = arrow::MakeScalar("alex");
+    expected_row1["u.age"] = arrow::MakeScalar((int64_t)25);
+    expected_row1["f.id"] = arrow::MakeScalar((int64_t)1);
+    expected_row1["f.name"] = arrow::MakeScalar("bob");
+    expected_row1["f.age"] = arrow::MakeScalar((int64_t)31);
+
+    for (const auto& [field_name, expected_scalar] : expected_row1) {
+      auto column = result_table->GetColumnByName(field_name);
+      ASSERT_NE(column, nullptr);
+      auto scalar_result = column->GetScalar(0);  // First row
+      ASSERT_TRUE(scalar_result.ok()) << scalar_result.status().ToString();
+      auto actual_scalar = scalar_result.ValueOrDie();
+      ASSERT_TRUE(actual_scalar->Equals(*expected_scalar))
+          << "Mismatch in row 1, column '" << field_name << "': Expected "
+          << expected_scalar->ToString() << " but got "
+          << actual_scalar->ToString();
+    }
+  }
+
+  // Verify the second row
+  {
+    std::unordered_map<std::string, std::shared_ptr<arrow::Scalar>>
+        expected_row2;
+    expected_row2["u.id"] = arrow::MakeScalar((int64_t)0);
+    expected_row2["u.name"] = arrow::MakeScalar("alex");
+    expected_row2["u.age"] = arrow::MakeScalar((int64_t)25);
+    expected_row2["f.id"] = arrow::MakeScalar((int64_t)2);
+    expected_row2["f.name"] = arrow::MakeScalar("jeff");
+    expected_row2["f.age"] = arrow::MakeScalar((int64_t)33);
+
+    for (const auto& [field_name, expected_scalar] : expected_row2) {
+      auto column = result_table->GetColumnByName(field_name);
+      ASSERT_NE(column, nullptr);
+      auto scalar_result = column->GetScalar(1);  // Second row
+      ASSERT_TRUE(scalar_result.ok()) << scalar_result.status().ToString();
+      auto actual_scalar = scalar_result.ValueOrDie();
+      ASSERT_TRUE(actual_scalar->Equals(*expected_scalar))
+          << "Mismatch in row 2, column '" << field_name << "': Expected "
+          << expected_scalar->ToString() << " but got "
+          << actual_scalar->ToString();
+    }
+  }
 }
 }  // namespace tundradb
 
