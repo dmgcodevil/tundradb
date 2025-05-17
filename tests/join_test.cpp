@@ -422,6 +422,204 @@ TEST(JoinTest, InnerJoinFromSameNodeAndEndConnections) {
   }
 }
 
+TEST(JoinTest, BidirectionalRelationships) {
+  auto db = setup_test_db();
+  // Create bidirectional "knows" relationships
+  db->connect(0, "knows", 1).ValueOrDie();    // alex knows bob
+  db->connect(1, "knows", 0).ValueOrDie();    // bob knows alex
+  db->connect(0, "knows", 2).ValueOrDie();    // alex knows jeff
+  db->connect(1, "knows", 3).ValueOrDie();    // bob knows sam
+
+  // Find mutual connections (people who know each other)
+  Query query = Query::from("u1:users")
+                    .traverse("u1", "knows", "u2:users", TraverseType::Inner)
+                    .traverse("u2", "knows", "u3:users", TraverseType::Inner)
+                    .where("u3.id", CompareOp::Eq, Value((int64_t)0))  // u3 must be alex (ID 0)
+                    .build();
+
+  auto query_result = db->query(query);
+  ASSERT_TRUE(query_result.ok());
+  auto result_table = query_result.ValueOrDie()->table();
+  ASSERT_NE(result_table, nullptr);
+
+  // Pretty print for debugging
+  std::cout << "BidirectionalRelationships Result Table:" << std::endl;
+  print_table(result_table);
+  arrow::PrettyPrint(*result_table, {}, &std::cout);
+
+  // There should be only one result: bob knows alex and alex knows bob
+  ASSERT_EQ(result_table->num_rows(), 1);
+
+  // Verify the mutual relationship: bob -> alex -> bob
+  std::unordered_map<std::string, std::shared_ptr<arrow::Scalar>> expected_row;
+  // u1 is bob
+  expected_row["u1.id"] = arrow::MakeScalar((int64_t)1);
+  expected_row["u1.name"] = arrow::MakeScalar("bob");
+  expected_row["u1.age"] = arrow::MakeScalar((int64_t)31);
+  // u2 is alex
+  expected_row["u2.id"] = arrow::MakeScalar((int64_t)0);
+  expected_row["u2.name"] = arrow::MakeScalar("alex");
+  expected_row["u2.age"] = arrow::MakeScalar((int64_t)25);
+  // u3 is alex (again, filtered by the where clause)
+  expected_row["u3.id"] = arrow::MakeScalar((int64_t)0);
+  expected_row["u3.name"] = arrow::MakeScalar("alex");
+  expected_row["u3.age"] = arrow::MakeScalar((int64_t)25);
+
+  for (const auto& [field_name, expected_scalar] : expected_row) {
+    auto column = result_table->GetColumnByName(field_name);
+    ASSERT_NE(column, nullptr) << "Column " << field_name << " not found";
+    auto scalar_result = column->GetScalar(0);
+    ASSERT_TRUE(scalar_result.ok()) << scalar_result.status().ToString();
+    auto actual_scalar = scalar_result.ValueOrDie();
+    ASSERT_TRUE(actual_scalar->Equals(*expected_scalar))
+        << "Mismatch in column '" << field_name << "': Expected "
+        << expected_scalar->ToString() << " but got "
+        << actual_scalar->ToString();
+  }
+}
+
+TEST(JoinTest, MultiLevelJoinChain) {
+  auto db = setup_test_db();
+  // Create multi-level relationships
+  db->connect(0, "friend", 1).ValueOrDie();     // alex -> bob (friend)
+  db->connect(1, "works-at", 6).ValueOrDie();   // bob -> google
+  db->connect(6, "partner", 5).ValueOrDie();    // google -> ibm (partner)
+  db->connect(6, "partner", 7).ValueOrDie();    // google -> aws (partner)
+
+  // Find partners of companies where friends work
+  Query query = Query::from("u:users")
+                    .traverse("u", "friend", "f:users", TraverseType::Inner)
+                    .traverse("f", "works-at", "c1:companies", TraverseType::Inner)
+                    .traverse("c1", "partner", "c2:companies", TraverseType::Inner)
+                    .build();
+
+  auto query_result = db->query(query);
+  ASSERT_TRUE(query_result.ok());
+  auto result_table = query_result.ValueOrDie()->table();
+  ASSERT_NE(result_table, nullptr);
+
+  // Pretty print for debugging
+  std::cout << "MultiLevelJoinChain Result Table:" << std::endl;
+  print_table(result_table);
+  arrow::PrettyPrint(*result_table, {}, &std::cout);
+
+  // Should have 2 rows: alex -> bob -> google -> [ibm, aws]
+  ASSERT_EQ(result_table->num_rows(), 2);
+
+  // First row: alex -> bob -> google -> ibm
+  {
+    std::unordered_map<std::string, std::shared_ptr<arrow::Scalar>> expected_row1;
+    expected_row1["u.id"] = arrow::MakeScalar((int64_t)0);
+    expected_row1["u.name"] = arrow::MakeScalar("alex");
+    expected_row1["u.age"] = arrow::MakeScalar((int64_t)25);
+    expected_row1["f.id"] = arrow::MakeScalar((int64_t)1);
+    expected_row1["f.name"] = arrow::MakeScalar("bob");
+    expected_row1["f.age"] = arrow::MakeScalar((int64_t)31);
+    expected_row1["c1.id"] = arrow::MakeScalar((int64_t)6);
+    expected_row1["c1.name"] = arrow::MakeScalar("google");
+    expected_row1["c1.size"] = arrow::MakeScalar((int64_t)3000);
+    expected_row1["c2.id"] = arrow::MakeScalar((int64_t)5);
+    expected_row1["c2.name"] = arrow::MakeScalar("ibm");
+    expected_row1["c2.size"] = arrow::MakeScalar((int64_t)1000);
+
+    for (const auto& [field_name, expected_scalar] : expected_row1) {
+      auto column = result_table->GetColumnByName(field_name);
+      ASSERT_NE(column, nullptr) << "Column " << field_name << " not found";
+      auto scalar_result = column->GetScalar(0);  // First row
+      ASSERT_TRUE(scalar_result.ok()) << scalar_result.status().ToString();
+      auto actual_scalar = scalar_result.ValueOrDie();
+      ASSERT_TRUE(actual_scalar->Equals(*expected_scalar))
+          << "Mismatch in row 1, column '" << field_name << "': Expected "
+          << expected_scalar->ToString() << " but got "
+          << actual_scalar->ToString();
+    }
+  }
+
+  // Second row: alex -> bob -> google -> aws
+  {
+    std::unordered_map<std::string, std::shared_ptr<arrow::Scalar>> expected_row2;
+    expected_row2["u.id"] = arrow::MakeScalar((int64_t)0);
+    expected_row2["u.name"] = arrow::MakeScalar("alex");
+    expected_row2["u.age"] = arrow::MakeScalar((int64_t)25);
+    expected_row2["f.id"] = arrow::MakeScalar((int64_t)1);
+    expected_row2["f.name"] = arrow::MakeScalar("bob");
+    expected_row2["f.age"] = arrow::MakeScalar((int64_t)31);
+    expected_row2["c1.id"] = arrow::MakeScalar((int64_t)6);
+    expected_row2["c1.name"] = arrow::MakeScalar("google");
+    expected_row2["c1.size"] = arrow::MakeScalar((int64_t)3000);
+    expected_row2["c2.id"] = arrow::MakeScalar((int64_t)7);
+    expected_row2["c2.name"] = arrow::MakeScalar("aws");
+    expected_row2["c2.size"] = arrow::MakeScalar((int64_t)5000);
+
+    for (const auto& [field_name, expected_scalar] : expected_row2) {
+      auto column = result_table->GetColumnByName(field_name);
+      ASSERT_NE(column, nullptr) << "Column " << field_name << " not found";
+      auto scalar_result = column->GetScalar(1);  // Second row
+      ASSERT_TRUE(scalar_result.ok()) << scalar_result.status().ToString();
+      auto actual_scalar = scalar_result.ValueOrDie();
+      ASSERT_TRUE(actual_scalar->Equals(*expected_scalar))
+          << "Mismatch in row 2, column '" << field_name << "': Expected "
+          << expected_scalar->ToString() << " but got "
+          << actual_scalar->ToString();
+    }
+  }
+}
+
+TEST(JoinTest, MultipleRelationshipTypes) {
+  auto db = setup_test_db();
+  // Create different types of relationships between the same entities
+  db->connect(0, "friend", 1).ValueOrDie();    // alex -> bob (friend)
+  db->connect(0, "colleague", 1).ValueOrDie(); // alex -> bob (colleague)
+  db->connect(0, "friend", 2).ValueOrDie();    // alex -> jeff (friend)
+  db->connect(0, "colleague", 3).ValueOrDie(); // alex -> sam (colleague)
+
+  // Find users who are both friends and colleagues
+  Query query = Query::from("u1:users")
+                    .traverse("u1", "friend", "u2:users", TraverseType::Inner)
+                    .traverse("u1", "colleague", "u3:users", TraverseType::Inner)
+                    .where("u2.id", CompareOp::Eq, "u3.id")  // Same person
+                    .build();
+
+  auto query_result = db->query(query);
+  ASSERT_TRUE(query_result.ok());
+  auto result_table = query_result.ValueOrDie()->table();
+  ASSERT_NE(result_table, nullptr);
+
+  // Pretty print for debugging
+  std::cout << "MultipleRelationshipTypes Result Table:" << std::endl;
+  print_table(result_table);
+  arrow::PrettyPrint(*result_table, {}, &std::cout);
+
+  // Verify that the result has a row for bob who is both friend and colleague
+  ASSERT_EQ(result_table->num_rows(), 1);
+
+  std::unordered_map<std::string, std::shared_ptr<arrow::Scalar>> expected_row;
+  // u1 is alex
+  expected_row["u1.id"] = arrow::MakeScalar((int64_t)0);
+  expected_row["u1.name"] = arrow::MakeScalar("alex");
+  expected_row["u1.age"] = arrow::MakeScalar((int64_t)25);
+  // u2 is bob (friend)
+  expected_row["u2.id"] = arrow::MakeScalar((int64_t)1);
+  expected_row["u2.name"] = arrow::MakeScalar("bob");
+  expected_row["u2.age"] = arrow::MakeScalar((int64_t)31);
+  // u3 is bob (colleague)
+  expected_row["u3.id"] = arrow::MakeScalar((int64_t)1);
+  expected_row["u3.name"] = arrow::MakeScalar("bob");
+  expected_row["u3.age"] = arrow::MakeScalar((int64_t)31);
+
+  for (const auto& [field_name, expected_scalar] : expected_row) {
+    auto column = result_table->GetColumnByName(field_name);
+    ASSERT_NE(column, nullptr) << "Column " << field_name << " not found";
+    auto scalar_result = column->GetScalar(0);
+    ASSERT_TRUE(scalar_result.ok()) << scalar_result.status().ToString();
+    auto actual_scalar = scalar_result.ValueOrDie();
+    ASSERT_TRUE(actual_scalar->Equals(*expected_scalar))
+        << "Mismatch in column '" << field_name << "': Expected "
+        << expected_scalar->ToString() << " but got "
+        << actual_scalar->ToString();
+  }
+}
+
 }  // namespace tundradb
 
 int main(int argc, char** argv) {
