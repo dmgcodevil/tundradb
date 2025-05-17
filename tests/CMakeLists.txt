@@ -99,6 +99,12 @@ add_executable(database_test
     database_test.cpp
 )
 
+
+add_executable(join_test
+        join_test.cpp
+)
+
+
 # Link against Arrow and GTest
 target_link_libraries(sharding_test
     PRIVATE
@@ -188,6 +194,19 @@ target_link_libraries(database_test
         TBB::tbb
 )
 
+target_link_libraries(join_test
+        PRIVATE
+        core
+        Arrow::arrow_shared
+        Parquet::parquet_shared
+        nlohmann_json::nlohmann_json
+        GTest::GTest
+        GTest::Main
+        pthread
+        TBB::tbb
+)
+
+
 # Apply sanitizer flags to all test targets if enabled
 if(ENABLE_SANITIZERS)
     target_compile_options(sharding_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
@@ -210,6 +229,9 @@ if(ENABLE_SANITIZERS)
     
     target_compile_options(database_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
     target_link_options(database_test PRIVATE ${SANITIZER_LINK_FLAGS})
+
+    target_compile_options(join_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
+    target_link_options(join_test PRIVATE ${SANITIZER_LINK_FLAGS})
 endif()
 
 # Simple test registration
@@ -221,6 +243,7 @@ add_test(NAME EdgeStoreTest COMMAND edge_store_test)
 add_test(NAME TableInfoTest COMMAND table_info_test)
 add_test(NAME SchemaUtilsTest COMMAND schema_utils_test)
 add_test(NAME DatabaseTest COMMAND database_test)
+add_test(NAME JoinTest COMMAND join_test)
 
 # Set TSan options for tests after they've been registered
 if(ENABLE_SANITIZERS AND SANITIZER_TYPE STREQUAL "thread" AND EXISTS ${TSAN_SUPPRESSIONS_FILE})
@@ -241,6 +264,7 @@ set_tests_properties(
         TableInfoTest
         SchemaUtilsTest
         DatabaseTest
+        JoinTest
         PROPERTIES
         ISOLATED TRUE  # This ensures tests run in isolation
 )

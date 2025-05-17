@@ -21,12 +21,12 @@ struct SchemaRef {
  private:
   std::string schema_;
   std::string value_;
-  bool has_alias_;
+  bool declaration;
 
  public:
   [[nodiscard]] std::string schema() const { return schema_; }
   [[nodiscard]] std::string value() const { return value_; }
-  [[nodiscard]] bool has_alias() const { return has_alias_; }
+  [[nodiscard]] bool is_declaration() const { return declaration; }
 
   static SchemaRef parse(const std::string& s) {
     SchemaRef r;
@@ -34,18 +34,18 @@ struct SchemaRef {
     if (pos == std::string::npos) {
       r.schema_ = s;
       r.value_ = s;
-      r.has_alias_ = false;
+      r.declaration = false;
     } else {
       r.value_ = s.substr(0, pos);
       r.schema_ = s.substr(pos + 1);
-      r.has_alias_ = true;
+      r.declaration = true;
     }
     return r;
   }
 
   [[nodiscard]] std::string toString() const {
     std::stringstream ss;
-    if (has_alias_) {
+    if (declaration) {
       ss << value_;
       ss << ":";
     }
