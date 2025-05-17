@@ -397,6 +397,103 @@ struct QueryState {
     ids[schema_ref.value()] = ids_result.ValueOrDie();
     return true;
   }
+
+  std::string ToString() const {
+    std::stringstream ss;
+    ss << "QueryState {\n";
+    ss << "  From: " << from.toString() << "\n";
+
+    ss << "  Tables (" << tables.size() << "):\n";
+    for (const auto& [alias, table_ptr] : tables) {
+      if (table_ptr) {
+        ss << "    - " << alias << ": " << table_ptr->num_rows() << " rows, "
+           << table_ptr->num_columns() << " columns\n";
+      } else {
+        ss << "    - " << alias << ": (nullptr)\n";
+      }
+    }
+
+    ss << "  IDs (" << ids.size() << "):\n";
+    for (const auto& [alias, id_set] : ids) {
+      ss << "    - " << alias << ": " << id_set.size() << " IDs\n";
+    }
+
+    ss << "  Aliases (" << aliases.size() << "):\n";
+    for (const auto& [alias, schema_name] : aliases) {
+      ss << "    - " << alias << " -> " << schema_name << "\n";
+    }
+
+    // ss << "  Connections (Outgoing): " << connections.size() << " source
+    // nodes with connections\n";
+    ss << "  Connections (Outgoing) (" << connections.size()
+       << " source nodes):";
+    int source_nodes_printed = 0;
+    for (const auto& [source_id, conns_vec] : connections) {
+      if (source_nodes_printed >= 3 &&
+          connections.size() > 5) {  // Limit nodes printed for brevity
+        ss << "      ... and " << (connections.size() - source_nodes_printed)
+           << " more source nodes ...\n";
+        break;
+      }
+      ss << "    - Source ID " << source_id << " (" << conns_vec.size()
+         << " outgoing):";
+      int conns_printed_for_source = 0;
+      for (const auto& conn : conns_vec) {
+        if (conns_printed_for_source >= 3 &&
+            conns_vec.size() > 5) {  // Limit connections per node
+          ss << "        ... and "
+             << (conns_vec.size() - conns_printed_for_source)
+             << " more connections ...\n";
+          break;
+        }
+        ss << "        -> " << conn.target.value() << ":" << conn.target_id
+           << " (via '" << conn.edge_type << "')\n";
+        conns_printed_for_source++;
+      }
+      source_nodes_printed++;
+    }
+
+    // ss << "  Connections (Incoming): " << incoming.size() << " target nodes
+    // with connections\n";
+    ss << "  Connections (Incoming) (" << incoming.size() << " target nodes):";
+    int target_nodes_printed = 0;
+    for (const auto& [target_id, conns_vec] : incoming) {
+      if (target_nodes_printed >= 3 &&
+          incoming.size() > 5) {  // Limit nodes printed
+        ss << "      ... and " << (incoming.size() - target_nodes_printed)
+           << " more target nodes ...\n";
+        break;
+      }
+      ss << "    - Target ID " << target_id << " (" << conns_vec.size()
+         << " incoming):";
+      int conns_printed_for_target = 0;
+      for (const auto& conn : conns_vec) {
+        if (conns_printed_for_target >= 3 &&
+            conns_vec.size() > 5) {  // Limit connections per node
+          ss << "        ... and "
+             << (conns_vec.size() - conns_printed_for_target)
+             << " more connections ...\n";
+          break;
+        }
+        ss << "        <- " << conn.source.value() << ":" << conn.source_id
+           << " (via '" << conn.edge_type << "')\n";
+        conns_printed_for_target++;
+      }
+      target_nodes_printed++;
+    }
+
+    ss << "  Traversals (" << traversals.size() << "):\n";
+    for (size_t i = 0; i < traversals.size(); ++i) {
+      const auto& trav = traversals[i];
+      ss << "    - [" << i << "]: " << trav.source().value() << " -["
+         << trav.edge_type() << "]-> " << trav.target().value() << " (Type: "
+         << (trav.traverse_type() == TraverseType::Inner ? "Inner" : "Other")
+         << ")\n";
+    }
+
+    ss << "}";
+    return ss.str();
+  }
 };
 
 arrow::Result<std::shared_ptr<arrow::Schema>> build_denormalized_schema(
@@ -1308,15 +1405,17 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           log_debug("Node {} has {} outgoing edges of type '{}'", source_id,
                     outgoing_edges.size(), traverse->edge_type());
 
-          std::shared_ptr<Node> target_node;
+          std::vector<std::shared_ptr<Node>> target_nodes;
           for (auto edge : outgoing_edges) {
             auto target_id = edge->get_target_id();
             auto node_result = node_manager->get_node(target_id);
             if (node_result.ok()) {
-              auto n = node_result.ValueOrDie();
-              if (n->schema_name == target_schema) {
-                target_node = n;
-                break;
+              auto target_node = node_result.ValueOrDie();
+              if (target_node->schema_name == target_schema) {
+                log_info("found edge {}:{} -[{}]-> {}:{}", source.value(),
+                         source_id, traverse->edge_type(),
+                         traverse->target().value(), target_node->id);
+                target_nodes.push_back(target_node);
               }
             } else {
               log_warn("Failed to get node {}:{}, error: {}",
@@ -1324,16 +1423,15 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
                        node_result.status().ToString());
             }
           }
-          if (target_node != nullptr) {
-            log_info("found edge {}:{} -[{}]-> {}:{}", source.value(),
-                     source_id, traverse->edge_type(),
-                     traverse->target().value(), target_node->id);
-            matched_target_ids.insert(target_node->id);
-            auto conn = GraphConnection{traverse->source(),    source_id,
-                                        traverse->edge_type(), "",
-                                        traverse->target(),    target_node->id};
-            query_state.connections[source_id].push_back(conn);
-            query_state.incoming[target_node->id].push_back(conn);
+          if (!target_nodes.empty()) {
+            for (const auto& target_node : target_nodes) {
+              matched_target_ids.insert(target_node->id);
+              auto conn = GraphConnection{
+                  traverse->source(), source_id,      traverse->edge_type(), "",
+                  traverse->target(), target_node->id};
+              query_state.connections[source_id].push_back(conn);
+              query_state.incoming[target_node->id].push_back(conn);
+            }
           } else {
             log_info("no edge found from {}:{}", source.value(), source_id);
             unmatched_source_ids.insert(source_id);
@@ -1407,6 +1505,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
   }
 
   log_info("Query processing complete, building result");
+  log_info("Query state: {}", query_state.ToString());
   auto result = std::make_shared<QueryResult>();
 
   auto output_schema_res = build_denormalized_schema(query_state);

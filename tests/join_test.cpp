@@ -2,11 +2,15 @@
 #include <gtest/gtest.h>
 
 #include <memory>
+#include <string>
 
 #include "../include/core.hpp"
 #include "../include/logger.hpp"
 #include "../include/metadata.hpp"
 #include "../include/query.hpp"
+
+using namespace std::string_literals;
+using namespace tundradb;
 
 namespace tundradb {
 
@@ -172,9 +176,30 @@ TEST(JoinTest, UserFriendCompanyInnerJoin) {
   }
 }
 
+TEST(JoinTest, JoinFromSameNode) {
+  auto db = setup_test_db();
+  db->connect(0, "friend", 1).ValueOrDie();  // alex -> bob
+  db->connect(0, "friend", 2).ValueOrDie();  // alex -> jeff
+
+  Query query = Query::from("u:users")
+                    .traverse("u", "friend", "f:users", TraverseType::Inner)
+                    .build();
+
+  auto query_result = db->query(query);
+  ASSERT_TRUE(query_result.ok());
+
+  auto result_table = query_result.ValueOrDie()->table();
+  ASSERT_NE(result_table, nullptr);
+
+  // Pretty print for debugging if needed
+  std::cout << "JoinTest Result Table:" << std::endl;
+  print_table(result_table);
+  arrow::PrettyPrint(*result_table, {}, &std::cout);
+}
 }  // namespace tundradb
 
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
+  Logger::getInstance().setLevel(LogLevel::DEBUG);
   return RUN_ALL_TESTS();
 }
