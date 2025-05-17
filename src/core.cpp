@@ -16,6 +16,8 @@
 #include <vector>
 
 #include "logger.hpp"
+#include "utils.hpp"
+
 namespace fs = std::filesystem;
 
 namespace tundradb {
@@ -341,7 +343,9 @@ struct QueryState {
   std::unordered_map<std::string, std::shared_ptr<arrow::Table>> tables;
   std::unordered_map<std::string, std::set<int64_t>> ids;
   std::unordered_map<std::string, std::string> aliases;
-  std::map<int64_t, std::vector<GraphConnection>> connections;
+  std::map<int64_t, std::vector<GraphConnection>> connections;  // outgoing
+  std::unordered_map<int64_t, std::vector<GraphConnection>> incoming;
+
   std::shared_ptr<NodeManager> node_manager;
   std::shared_ptr<SchemaRegistry> schema_registry;
   std::vector<Traverse> traversals;
@@ -376,6 +380,24 @@ struct QueryState {
       return initial_table_result.status();
     }
     return init_table(initial_table_result.ValueOrDie(), schema_ref);
+  }
+
+  // removes node_id and updates all connections and ids
+  void remove_node(int64_t node_id, SchemaRef schema_ref,
+                   std::unordered_set<std::string>& updated_schemas) {
+    if (!ids[schema_ref.value()].contains(node_id)) {
+      return;
+    }
+    updated_schemas.insert(schema_ref.value());
+    ids[schema_ref.value()].erase(node_id);
+    for (const auto& conn : incoming[node_id]) {
+      remove_node(conn.source_id, conn.source, updated_schemas);
+    }
+    for (const auto& conn : connections[node_id]) {
+      remove_node(conn.target_id, conn.target, updated_schemas);
+    }
+    connections.erase(node_id);
+    incoming.erase(node_id);
   }
 
   arrow::Result<bool> update_table(std::shared_ptr<arrow::Table> table,
@@ -1300,48 +1322,56 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
                   .ValueOrDie();  // todo check result
           log_debug("Node {} has {} outgoing edges of type '{}'", source_id,
                     outgoing_edges.size(), traverse->edge_type());
-          if (outgoing_edges.empty()) {
-            unmatched_source_ids.insert(source_id);
-            // query_state.ids[source.value()].erase(source_id);
-          }
+
+          std::shared_ptr<Node> target_node;
           for (auto edge : outgoing_edges) {
             auto target_id = edge->get_target_id();
-            log_info(">> edge {} -[{}]-> {}", source_id, traverse->edge_type(),
-                     target_id);
             auto node_result = node_manager->get_node(target_id);
-            if (!node_result.ok()) {
-              log_error("Failed to get node {}: {}", target_id,
-                        node_result.status().ToString());
-              // should probably skip in case of concurrent remove
-              return node_result.status();
-            }
-            auto node = node_result.ValueOrDie();
-
-            // Fixed schema comparison - check against target schema, not source
-            // schema
-            log_debug("Node schema: '{}', target schema: '{}'",
-                      node->schema_name, traverse->target().schema());
-
-            if (traverse->target().schema() == node->schema_name) {
-              neighbors.push_back(node);
-              query_state.connections[source_id].push_back(GraphConnection{
-                  traverse->source(), source_id, traverse->edge_type(), "",
-                  traverse->target(), target_id});
+            if (node_result.ok()) {
+              auto n = node_result.ValueOrDie();
+              if (n->schema_name ==
+                  query_state.aliases[traverse->target().value()]) {
+                target_node = n;
+                break;
+              }
             } else {
-              log_warn(
-                  "Node {} schema '{}' doesn't match target schema '{}' in "
-                  "traversal",
-                  target_id, node->schema_name, traverse->target().schema());
+              log_warn("failed to get node {}: {}", target_id,
+                       node_result.status().ToString());
             }
+          }
+          if (target_node != nullptr) {
+            log_info("found edge {}:{} -[{}]-> {}:{}", source.value(),
+                     source_id, traverse->edge_type(),
+                     traverse->target().value(), target_node->id);
+            neighbors.push_back(target_node);
+            auto conn = GraphConnection{traverse->source(),    source_id,
+                                        traverse->edge_type(), "",
+                                        traverse->target(),    target_node->id};
+            query_state.connections[source_id].push_back(conn);
+            query_state.incoming[target_node->id].push_back(conn);
+          } else {
+            log_info("no edge found from {}:{}", source.value(), source_id);
+            unmatched_source_ids.insert(source_id);
           }
         }
-        if (traverse->traverse_type() == TraverseType::Inner) {
+        if (traverse->traverse_type() == TraverseType::Inner &&
+            !unmatched_source_ids.empty()) {
+          std::unordered_set<std::string> updated_schemas;
           for (auto id : unmatched_source_ids) {
-            log_debug("remove unmatched node={}", id);
-            query_state.ids[source.value()].erase(id);
+            log_debug("remove unmatched node={}:{}", source.value(), id);
+            query_state.remove_node(id, source, updated_schemas);
           }
-          // query_state.ids[source.value()].erase(unmatched_source_ids.begin(),
-          // unmatched_source_ids.end());
+          for (const auto& updated_schema : updated_schemas) {
+            log_info("rebuild table for schema {}:{}", updated_schema,
+                     query_state.aliases[updated_schema]);
+            auto table_result =
+                FilterTableById(query_state.tables[updated_schema],
+                                query_state.ids[updated_schema]);
+            if (!table_result.ok()) {
+              return table_result.status();
+            }
+            query_state.tables[updated_schema] = table_result.ValueOrDie();
+          }
         }
         log_debug("found {} neighbors", neighbors.size());
         if (traverse->traverse_type() == TraverseType::Inner) {
@@ -1360,13 +1390,13 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
             return target_table_init_result.status();
           }
         } else {
+          // for right/full we grab all nodes from target table
           auto target_table_init_result =
               query_state.init_table(*this, traverse->target());
           if (!target_table_init_result.ok()) {
             return target_table_init_result.status();
           }
         }
-
         break;
       }
       default:

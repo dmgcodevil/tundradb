@@ -1,12 +1,17 @@
 #ifndef UTILS_HPP
 #define UTILS_HPP
 
+#include <arrow/api.h>
+#include <arrow/compute/api.h>
+#include <arrow/datum.h>
 #include <arrow/result.h>
 #include <arrow/table.h>
 #include <uuid/uuid.h>
 
+#include <set>
 #include <source_location>
 #include <string>
+#include <unordered_set>
 
 #include "logger.hpp"
 #include "node.hpp"
@@ -26,6 +31,40 @@ static int64_t now_millis() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
              now.time_since_epoch())
       .count();
+}
+
+template <typename SetType>
+static arrow::Result<std::shared_ptr<arrow::Table>> FilterTableById(
+    const std::shared_ptr<arrow::Table>& table, const SetType& filter_ids) {
+  std::shared_ptr<arrow::ChunkedArray> id_chunked_array =
+      table->GetColumnByName("id");
+  if (!id_chunked_array) {
+    return arrow::Status::Invalid("Column 'id' not found");
+  }
+
+  arrow::BooleanBuilder filter_builder;
+
+  for (const auto& chunk : id_chunked_array->chunks()) {
+    auto id_array = std::static_pointer_cast<arrow::Int64Array>(chunk);
+
+    for (int64_t i = 0; i < id_array->length(); ++i) {
+      filter_builder.Append(filter_ids.count(id_array->Value(i)) > 0);
+    }
+  }
+
+  std::shared_ptr<arrow::Array> filter_array;
+  ARROW_RETURN_NOT_OK(filter_builder.Finish(&filter_array));
+
+  // Flatten table into a single chunk to match the filter
+  ARROW_ASSIGN_OR_RAISE(auto combined_table,
+                        table->CombineChunks(arrow::default_memory_pool()));
+
+  // Apply filter
+  ARROW_ASSIGN_OR_RAISE(
+      auto filtered_table,
+      arrow::compute::Filter(combined_table, arrow::Datum(filter_array)));
+
+  return filtered_table.table();
 }
 
 // Create a table from a schema and a list of nodes
