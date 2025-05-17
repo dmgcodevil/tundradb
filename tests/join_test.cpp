@@ -333,6 +333,95 @@ TEST(JoinTest, InnerJoinFromSameNodeMultiTarget) {
   }
 }
 
+TEST(JoinTest, InnerJoinFromSameNodeAndEndConnections) {
+  auto db = setup_test_db();
+  db->connect(0, "friend", 1).ValueOrDie();    // alex -> bob
+  db->connect(0, "friend", 2).ValueOrDie();    // alex -> jeff
+  db->connect(0, "works-at", 5).ValueOrDie();  // alex -> ibm
+  db->connect(1, "works-at", 6).ValueOrDie();  // bob -> google
+  db->connect(2, "works-at", 7).ValueOrDie();  // jeff -> aws
+
+  Query query =
+      Query::from("u:users")
+          .traverse("u", "friend", "f:users", TraverseType::Inner)
+          .traverse("u", "works-at", "c:companies", TraverseType::Inner)
+          .build();
+  auto query_result = db->query(query);
+  ASSERT_TRUE(query_result.ok());
+  auto result_table = query_result.ValueOrDie()->table();
+  ASSERT_NE(result_table, nullptr);
+
+  // Pretty print for debugging
+  std::cout << "InnerJoinFromSameNodeAndEndConnections Result Table:"
+            << std::endl;
+  print_table(result_table);
+  arrow::PrettyPrint(*result_table, {}, &std::cout);
+
+  // Verify result has exactly 2 rows (cartesian product of 2 friends × 1
+  // company)
+  ASSERT_EQ(result_table->num_rows(), 2);
+
+  // Verify the first row: alex -> bob + alex -> ibm
+  {
+    std::unordered_map<std::string, std::shared_ptr<arrow::Scalar>>
+        expected_row1;
+    // Alex (source user)
+    expected_row1["u.id"] = arrow::MakeScalar((int64_t)0);
+    expected_row1["u.name"] = arrow::MakeScalar("alex");
+    expected_row1["u.age"] = arrow::MakeScalar((int64_t)25);
+    // Bob (friend)
+    expected_row1["f.id"] = arrow::MakeScalar((int64_t)1);
+    expected_row1["f.name"] = arrow::MakeScalar("bob");
+    expected_row1["f.age"] = arrow::MakeScalar((int64_t)31);
+    // IBM (company)
+    expected_row1["c.id"] = arrow::MakeScalar((int64_t)5);
+    expected_row1["c.name"] = arrow::MakeScalar("ibm");
+    expected_row1["c.size"] = arrow::MakeScalar((int64_t)1000);
+
+    for (const auto& [field_name, expected_scalar] : expected_row1) {
+      auto column = result_table->GetColumnByName(field_name);
+      ASSERT_NE(column, nullptr) << "Column " << field_name << " not found";
+      auto scalar_result = column->GetScalar(0);  // First row
+      ASSERT_TRUE(scalar_result.ok()) << scalar_result.status().ToString();
+      auto actual_scalar = scalar_result.ValueOrDie();
+      ASSERT_TRUE(actual_scalar->Equals(*expected_scalar))
+          << "Mismatch in row 1, column '" << field_name << "': Expected "
+          << expected_scalar->ToString() << " but got "
+          << actual_scalar->ToString();
+    }
+  }
+
+  // Verify the second row: alex -> jeff + alex -> ibm
+  {
+    std::unordered_map<std::string, std::shared_ptr<arrow::Scalar>>
+        expected_row2;
+    // Alex (source user)
+    expected_row2["u.id"] = arrow::MakeScalar((int64_t)0);
+    expected_row2["u.name"] = arrow::MakeScalar("alex");
+    expected_row2["u.age"] = arrow::MakeScalar((int64_t)25);
+    // Jeff (friend)
+    expected_row2["f.id"] = arrow::MakeScalar((int64_t)2);
+    expected_row2["f.name"] = arrow::MakeScalar("jeff");
+    expected_row2["f.age"] = arrow::MakeScalar((int64_t)33);
+    // IBM (company)
+    expected_row2["c.id"] = arrow::MakeScalar((int64_t)5);
+    expected_row2["c.name"] = arrow::MakeScalar("ibm");
+    expected_row2["c.size"] = arrow::MakeScalar((int64_t)1000);
+
+    for (const auto& [field_name, expected_scalar] : expected_row2) {
+      auto column = result_table->GetColumnByName(field_name);
+      ASSERT_NE(column, nullptr) << "Column " << field_name << " not found";
+      auto scalar_result = column->GetScalar(1);  // Second row
+      ASSERT_TRUE(scalar_result.ok()) << scalar_result.status().ToString();
+      auto actual_scalar = scalar_result.ValueOrDie();
+      ASSERT_TRUE(actual_scalar->Equals(*expected_scalar))
+          << "Mismatch in row 2, column '" << field_name << "': Expected "
+          << expected_scalar->ToString() << " but got "
+          << actual_scalar->ToString();
+    }
+  }
+}
+
 }  // namespace tundradb
 
 int main(int argc, char** argv) {
