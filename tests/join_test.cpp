@@ -579,6 +579,667 @@ TEST(JoinTest, CartesianProductExplosion) {
       << "AWS missing from results";
 }
 
+TEST(JoinTest, LeftJoin) {
+  auto db = setup_test_db();
+  // Create relationships where some nodes don't have target matches
+  db->connect(0, "friend", 1).ValueOrDie();    // alex -> bob
+  db->connect(0, "friend", 2).ValueOrDie();    // alex -> jeff
+  db->connect(1, "works-at", 6).ValueOrDie();  // bob -> google
+  // jeff has no company (will produce NULL in the results with LEFT JOIN)
+
+  // LEFT JOIN: Keep all users even if they don't work at any company
+  Query query =
+      Query::from("u:users")
+          .traverse("u", "friend", "f:users", TraverseType::Inner)
+          .traverse("f", "works-at", "c:companies", TraverseType::Left)
+          .build();
+
+  auto query_result = db->query(query);
+  ASSERT_TRUE(query_result.ok());
+  auto result_table = query_result.ValueOrDie()->table();
+  ASSERT_NE(result_table, nullptr);
+
+  // Pretty print for debugging
+  std::cout << "LeftJoin Result Table:" << std::endl;
+  print_table(result_table);
+  arrow::PrettyPrint(*result_table, {}, &std::cout);
+
+  // Should have 2 rows - one for bob (with company) and one for jeff (without
+  // company)
+  ASSERT_EQ(result_table->num_rows(), 2);
+
+  // Define the two expected rows
+  std::unordered_map<std::string, std::shared_ptr<arrow::Scalar>> bob_row;
+  bob_row["u.id"] = arrow::MakeScalar((int64_t)0);
+  bob_row["u.name"] = arrow::MakeScalar("alex");
+  bob_row["u.age"] = arrow::MakeScalar((int64_t)25);
+  bob_row["f.id"] = arrow::MakeScalar((int64_t)1);
+  bob_row["f.name"] = arrow::MakeScalar("bob");
+  bob_row["f.age"] = arrow::MakeScalar((int64_t)31);
+  bob_row["c.id"] = arrow::MakeScalar((int64_t)6);
+  bob_row["c.name"] = arrow::MakeScalar("google");
+  bob_row["c.size"] = arrow::MakeScalar((int64_t)3000);
+
+  std::unordered_map<std::string, std::shared_ptr<arrow::Scalar>> jeff_row;
+  jeff_row["u.id"] = arrow::MakeScalar((int64_t)0);
+  jeff_row["u.name"] = arrow::MakeScalar("alex");
+  jeff_row["u.age"] = arrow::MakeScalar((int64_t)25);
+  jeff_row["f.id"] = arrow::MakeScalar((int64_t)2);
+  jeff_row["f.name"] = arrow::MakeScalar("jeff");
+  jeff_row["f.age"] = arrow::MakeScalar((int64_t)33);
+  // Jeff's company fields are NULL
+
+  // Find which row is which by checking for the friend name
+  int bob_index = -1;
+  int jeff_index = -1;
+
+  auto friend_name_col = result_table->GetColumnByName("f.name");
+  for (int i = 0; i < result_table->num_rows(); i++) {
+    auto scalar_result = friend_name_col->GetScalar(i);
+    ASSERT_TRUE(scalar_result.ok());
+    auto name_scalar = std::static_pointer_cast<arrow::StringScalar>(
+        scalar_result.ValueOrDie());
+
+    if (name_scalar->view() == "bob") {
+      bob_index = i;
+    } else if (name_scalar->view() == "jeff") {
+      jeff_index = i;
+    }
+  }
+
+  ASSERT_NE(bob_index, -1) << "Could not find row with bob as friend";
+  ASSERT_NE(jeff_index, -1) << "Could not find row with jeff as friend";
+
+  // Verify bob's row (with company)
+  for (const auto& [field_name, expected_scalar] : bob_row) {
+    auto column = result_table->GetColumnByName(field_name);
+    ASSERT_NE(column, nullptr) << "Column " << field_name << " not found";
+    auto scalar_result = column->GetScalar(bob_index);
+    ASSERT_TRUE(scalar_result.ok()) << scalar_result.status().ToString();
+    auto actual_scalar = scalar_result.ValueOrDie();
+    ASSERT_TRUE(actual_scalar->Equals(*expected_scalar))
+        << "Mismatch in bob's row, column '" << field_name << "': Expected "
+        << expected_scalar->ToString() << " but got "
+        << actual_scalar->ToString();
+  }
+
+  // Verify jeff's row (without company)
+  for (const auto& [field_name, expected_scalar] : jeff_row) {
+    auto column = result_table->GetColumnByName(field_name);
+    ASSERT_NE(column, nullptr) << "Column " << field_name << " not found";
+    auto scalar_result = column->GetScalar(jeff_index);
+    ASSERT_TRUE(scalar_result.ok()) << scalar_result.status().ToString();
+    auto actual_scalar = scalar_result.ValueOrDie();
+    ASSERT_TRUE(actual_scalar->Equals(*expected_scalar))
+        << "Mismatch in jeff's row, column '" << field_name << "': Expected "
+        << expected_scalar->ToString() << " but got "
+        << actual_scalar->ToString();
+  }
+
+  // Verify company fields are NULL for jeff
+  auto c_id_col = result_table->GetColumnByName("c.id");
+  auto c_name_col = result_table->GetColumnByName("c.name");
+  auto c_size_col = result_table->GetColumnByName("c.size");
+
+  ASSERT_TRUE(c_id_col->chunk(0)->IsNull(jeff_index))
+      << "Expected NULL for c.id in jeff's row";
+  ASSERT_TRUE(c_name_col->chunk(0)->IsNull(jeff_index))
+      << "Expected NULL for c.name in jeff's row";
+  ASSERT_TRUE(c_size_col->chunk(0)->IsNull(jeff_index))
+      << "Expected NULL for c.size in jeff's row";
+}
+
+TEST(JoinTest, RightJoin) {
+  auto db = setup_test_db();
+  // Create relationships where some targets don't have matching sources
+  db->connect(0, "friend", 1).ValueOrDie();    // alex -> bob
+  db->connect(0, "friend", 2).ValueOrDie();    // alex -> jeff
+  db->connect(1, "works-at", 6).ValueOrDie();  // bob -> google
+  db->connect(2, "works-at", 7).ValueOrDie();  // jeff -> aws
+  // Sam (id=3) has no friends but works at ibm
+  db->connect(3, "works-at", 5).ValueOrDie();  // sam -> ibm
+
+  // RIGHT JOIN: Keep all companies even if no users work there
+  Query query =
+      Query::from("u:users")
+          .traverse("u", "friend", "f:users", TraverseType::Inner)
+          .traverse("f", "works-at", "c:companies", TraverseType::Right)
+          .build();
+
+  auto query_result = db->query(query);
+  ASSERT_TRUE(query_result.ok());
+  auto result_table = query_result.ValueOrDie()->table();
+  ASSERT_NE(result_table, nullptr);
+
+  // Pretty print for debugging
+  std::cout << "RightJoin Result Table:" << std::endl;
+  print_table(result_table);
+  arrow::PrettyPrint(*result_table, {}, &std::cout);
+
+  // Should show IBM in the results even though no friend of alex works there
+  // But sam (who isn't alex's friend) works at IBM
+
+  // Find expected companies in the results
+  std::set<std::string> found_companies;
+  for (int i = 0; i < result_table->num_rows(); i++) {
+    auto company_col = result_table->GetColumnByName("c.name");
+    auto scalar_result = company_col->GetScalar(i);
+    if (scalar_result.ok()) {
+      auto company_scalar = std::static_pointer_cast<arrow::StringScalar>(
+          scalar_result.ValueOrDie());
+      found_companies.insert(company_scalar->ToString());
+    }
+  }
+
+  // Should have all companies in results, including IBM (where no friend works)
+  ASSERT_TRUE(found_companies.find("google") != found_companies.end())
+      << "Google missing from results";
+  ASSERT_TRUE(found_companies.find("aws") != found_companies.end())
+      << "AWS missing from results";
+  ASSERT_TRUE(found_companies.find("ibm") != found_companies.end())
+      << "IBM missing from results (RIGHT JOIN should include it)";
+}
+
+TEST(JoinTest, CombinedJoinTypes) {
+  auto db = setup_test_db();
+  db->connect(0, "friend", 1).ValueOrDie();    // alex -> bob
+  db->connect(0, "friend", 2).ValueOrDie();    // alex -> jeff
+  db->connect(1, "works-at", 6).ValueOrDie();  // bob -> google
+  // jeff has no company
+
+  // Create a row for matt who has no friends
+  db->connect(4, "works-at", 5).ValueOrDie();  // matt -> ibm
+
+  // Query that combines INNER, LEFT and RIGHT joins
+  Query query =
+      Query::from("u:users")
+          .traverse("u", "friend", "f:users", TraverseType::Left)
+          .traverse("f", "works-at", "c:companies", TraverseType::Right)
+          .build();
+
+  auto query_result = db->query(query);
+  ASSERT_TRUE(query_result.ok());
+  auto result_table = query_result.ValueOrDie()->table();
+  ASSERT_NE(result_table, nullptr);
+
+  // Pretty print for debugging
+  std::cout << "CombinedJoinTypes Result Table:" << std::endl;
+  print_table(result_table);
+  arrow::PrettyPrint(*result_table, {}, &std::cout);
+
+  // Expected result should include:
+  // 1. alex->bob->google (regular match)
+  // 2. alex->jeff->NULL (LEFT JOIN: jeff has no company)
+  // 3. NULL->NULL->ibm (RIGHT JOIN: ibm included but no user works there)
+
+  // Check for the presence of specific scenarios
+  bool has_alex_bob_google = false;  // Normal match
+  bool has_alex_jeff_null = false;   // LEFT JOIN effect (jeff has no company)
+  bool has_null_null_aws = false;    // RIGHT JOIN effect (aws has no employee)
+
+  // Print each row for debugging
+  std::cout << "Checking rows for specific patterns:" << std::endl;
+  for (int i = 0; i < result_table->num_rows(); i++) {
+    auto u_id_col = result_table->GetColumnByName("u.id");
+    auto f_id_col = result_table->GetColumnByName("f.id");
+    auto c_id_col = result_table->GetColumnByName("c.id");
+
+    std::cout << "Row " << i << ": ";
+
+    // Print user ID
+    if (u_id_col->chunk(0)->IsNull(i)) {
+      std::cout << "u.id=NULL ";
+    } else {
+      auto u_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                      u_id_col->GetScalar(i).ValueOrDie())
+                      ->value;
+      std::cout << "u.id=" << u_id << " ";
+    }
+
+    // Print friend ID
+    if (f_id_col->chunk(0)->IsNull(i)) {
+      std::cout << "f.id=NULL ";
+    } else {
+      auto f_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                      f_id_col->GetScalar(i).ValueOrDie())
+                      ->value;
+      std::cout << "f.id=" << f_id << " ";
+    }
+
+    // Print company ID
+    if (c_id_col->chunk(0)->IsNull(i)) {
+      std::cout << "c.id=NULL";
+    } else {
+      auto c_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                      c_id_col->GetScalar(i).ValueOrDie())
+                      ->value;
+      std::cout << "c.id=" << c_id;
+    }
+    std::cout << std::endl;
+
+    // Check for alex(0)->bob(1)->google(6) using IDs instead of names for more
+    // reliability
+    if (!u_id_col->chunk(0)->IsNull(i) && !f_id_col->chunk(0)->IsNull(i) &&
+        !c_id_col->chunk(0)->IsNull(i)) {
+      auto u_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                      u_id_col->GetScalar(i).ValueOrDie())
+                      ->value;
+      auto f_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                      f_id_col->GetScalar(i).ValueOrDie())
+                      ->value;
+      auto c_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                      c_id_col->GetScalar(i).ValueOrDie())
+                      ->value;
+
+      if (u_id == 0 && f_id == 1 && c_id == 6) {
+        has_alex_bob_google = true;
+        std::cout << "  ✓ Found alex->bob->google pattern" << std::endl;
+      }
+    }
+
+    // Check for alex(0)->jeff(2)->NULL company using IDs
+    if (!u_id_col->chunk(0)->IsNull(i) && !f_id_col->chunk(0)->IsNull(i) &&
+        c_id_col->chunk(0)->IsNull(i)) {
+      auto u_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                      u_id_col->GetScalar(i).ValueOrDie())
+                      ->value;
+      auto f_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                      f_id_col->GetScalar(i).ValueOrDie())
+                      ->value;
+
+      if (u_id == 0 && f_id == 2) {
+        has_alex_jeff_null = true;
+        std::cout << "  ✓ Found alex->jeff->NULL pattern" << std::endl;
+      }
+    }
+
+    // Check for NULL->NULL->aws(7) using ID
+    if ((u_id_col->chunk(0)->IsNull(i) || f_id_col->chunk(0)->IsNull(i)) &&
+        !c_id_col->chunk(0)->IsNull(i)) {
+      auto c_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                      c_id_col->GetScalar(i).ValueOrDie())
+                      ->value;
+
+      if (c_id == 7) {
+        has_null_null_aws = true;
+        std::cout << "  ✓ Found NULL->NULL->aws pattern" << std::endl;
+      }
+    }
+  }
+
+  ASSERT_TRUE(has_alex_bob_google) << "Should include regular matches";
+  ASSERT_TRUE(has_alex_jeff_null)
+      << "Should include left-join effect (jeff with NULL company)";
+  ASSERT_TRUE(has_null_null_aws)
+      << "Should include right-join effect (AWS with no connected users)";
+}
+
+TEST(JoinTest, MultiLevelLeftJoin) {
+  auto db = setup_test_db();
+  // Create a multi-level relationship
+  db->connect(0, "friend", 1).ValueOrDie();    // alex -> bob
+  db->connect(0, "friend", 2).ValueOrDie();    // alex -> jeff
+  db->connect(0, "friend", 3).ValueOrDie();    // alex -> sam
+  db->connect(1, "works-at", 6).ValueOrDie();  // bob -> google
+  db->connect(2, "likes", 5).ValueOrDie();     // jeff -> ibm
+  // sam has no company and no likes
+
+  // Multi-level LEFT JOINs: Keep all users at each level
+  Query query =
+      Query::from("u:users")
+          .traverse("u", "friend", "f:users", TraverseType::Left)
+          .traverse("f", "works-at", "c:companies", TraverseType::Left)
+          .traverse("f", "likes", "l:companies", TraverseType::Left)
+          .build();
+
+  auto query_result = db->query(query);
+  ASSERT_TRUE(query_result.ok());
+  auto result_table = query_result.ValueOrDie()->table();
+  ASSERT_NE(result_table, nullptr);
+
+  // Pretty print for debugging
+  std::cout << "MultiLevelLeftJoin Result Table:" << std::endl;
+  print_table(result_table);
+  arrow::PrettyPrint(*result_table, {}, &std::cout);
+
+  // Should have 3 rows - one for each friend of alex
+  ASSERT_EQ(result_table->num_rows(), 3);
+
+  // Verify that we have all of alex's friends in the results
+  std::set<std::string> friend_names;
+  auto friend_name_col = result_table->GetColumnByName("f.name");
+
+  for (int i = 0; i < result_table->num_rows(); i++) {
+    auto scalar_result = friend_name_col->GetScalar(i);
+    ASSERT_TRUE(scalar_result.ok());
+    auto name_scalar = std::static_pointer_cast<arrow::StringScalar>(
+        scalar_result.ValueOrDie());
+    friend_names.insert(name_scalar->ToString());
+  }
+
+  // All of alex's friends should be included
+  ASSERT_TRUE(friend_names.find("bob") != friend_names.end());
+  ASSERT_TRUE(friend_names.find("jeff") != friend_names.end());
+  ASSERT_TRUE(friend_names.find("sam") != friend_names.end());
+
+  // Find bob's row and verify he has a company
+  int bob_index = -1;
+  for (int i = 0; i < result_table->num_rows(); i++) {
+    auto scalar_result = friend_name_col->GetScalar(i);
+    auto name_scalar = std::static_pointer_cast<arrow::StringScalar>(
+        scalar_result.ValueOrDie());
+    if (name_scalar->view() == "bob") {
+      bob_index = i;
+      break;
+    }
+  }
+
+  ASSERT_NE(bob_index, -1);
+
+  // Bob's company should be Google
+  auto company_col = result_table->GetColumnByName("c.name");
+  auto scalar_result = company_col->GetScalar(bob_index);
+  ASSERT_TRUE(scalar_result.ok());
+  auto company_scalar =
+      std::static_pointer_cast<arrow::StringScalar>(scalar_result.ValueOrDie());
+  ASSERT_EQ(company_scalar->view(), "google");
+
+  // Find jeff's row and verify he has a liked company
+  int jeff_index = -1;
+  for (int i = 0; i < result_table->num_rows(); i++) {
+    auto scalar_result = friend_name_col->GetScalar(i);
+    auto name_scalar = std::static_pointer_cast<arrow::StringScalar>(
+        scalar_result.ValueOrDie());
+    if (name_scalar->view() == "jeff") {
+      jeff_index = i;
+      break;
+    }
+  }
+
+  ASSERT_NE(jeff_index, -1);
+
+  // Jeff's liked company should be IBM
+  auto liked_company_col = result_table->GetColumnByName("l.name");
+  scalar_result = liked_company_col->GetScalar(jeff_index);
+  ASSERT_TRUE(scalar_result.ok());
+  auto liked_company_scalar =
+      std::static_pointer_cast<arrow::StringScalar>(scalar_result.ValueOrDie());
+  ASSERT_EQ(liked_company_scalar->view(), "ibm");
+}
+
+TEST(JoinTest, SelfJoinWithLeftJoin) {
+  auto db = setup_test_db();
+  // Create relationships for a self-join scenario with missing relationships
+  db->connect(0, "manages", 1).ValueOrDie();  // alex manages bob
+  db->connect(1, "manages", 2).ValueOrDie();  // bob manages jeff
+  db->connect(1, "manages", 3).ValueOrDie();  // bob manages sam
+  // matt (id=4) is not managed by anyone and doesn't manage anyone
+
+  // LEFT JOIN with self: Find all management chains, including users with no
+  // manager or subordinates
+  Query query =
+      Query::from("manager:users")
+          .traverse("manager", "manages", "employee:users", TraverseType::Left)
+          .build();
+
+  auto query_result = db->query(query);
+  ASSERT_TRUE(query_result.ok());
+  auto result_table = query_result.ValueOrDie()->table();
+  ASSERT_NE(result_table, nullptr);
+
+  // Pretty print for debugging
+  std::cout << "SelfJoinWithLeftJoin Result Table:" << std::endl;
+  print_table(result_table);
+  arrow::PrettyPrint(*result_table, {}, &std::cout);
+
+  // For detailed debugging, print each row with IDs
+  std::cout << "Managers and employees by ID:" << std::endl;
+  for (int i = 0; i < result_table->num_rows(); i++) {
+    auto manager_id_col = result_table->GetColumnByName("manager.id");
+    auto employee_id_col = result_table->GetColumnByName("employee.id");
+
+    auto manager_id =
+        manager_id_col->chunk(0)->IsNull(i)
+            ? "NULL"
+            : std::to_string(std::static_pointer_cast<arrow::Int64Scalar>(
+                                 manager_id_col->GetScalar(i).ValueOrDie())
+                                 ->value);
+
+    auto employee_id =
+        employee_id_col->chunk(0)->IsNull(i)
+            ? "NULL"
+            : std::to_string(std::static_pointer_cast<arrow::Int64Scalar>(
+                                 employee_id_col->GetScalar(i).ValueOrDie())
+                                 ->value);
+
+    std::cout << "Row " << i << ": manager.id=" << manager_id
+              << ", employee.id=" << employee_id << std::endl;
+  }
+
+  // Get all unique manager IDs from the result table
+  std::set<int64_t> manager_ids;
+  auto manager_id_col = result_table->GetColumnByName("manager.id");
+
+  for (int i = 0; i < result_table->num_rows(); i++) {
+    if (!manager_id_col->chunk(0)->IsNull(i)) {
+      auto scalar_result = manager_id_col->GetScalar(i);
+      ASSERT_TRUE(scalar_result.ok());
+      auto id_scalar = std::static_pointer_cast<arrow::Int64Scalar>(
+          scalar_result.ValueOrDie());
+      manager_ids.insert(id_scalar->value);
+    }
+  }
+
+  // Check that all 5 users are included as managers (all users in the database)
+  std::cout << "Found " << manager_ids.size() << " unique managers: ";
+  for (auto id : manager_ids) {
+    std::cout << id << " ";
+  }
+  std::cout << std::endl;
+
+  // We expect manager IDs 0, 1, 2, 3, 4 (all users)
+  ASSERT_EQ(manager_ids.size(), 5) << "Expected 5 unique managers (all users)";
+  ASSERT_TRUE(manager_ids.find(0) != manager_ids.end())
+      << "Manager ID 0 (alex) missing";
+  ASSERT_TRUE(manager_ids.find(1) != manager_ids.end())
+      << "Manager ID 1 (bob) missing";
+  ASSERT_TRUE(manager_ids.find(2) != manager_ids.end())
+      << "Manager ID 2 (jeff) missing";
+  ASSERT_TRUE(manager_ids.find(3) != manager_ids.end())
+      << "Manager ID 3 (sam) missing";
+  ASSERT_TRUE(manager_ids.find(4) != manager_ids.end())
+      << "Manager ID 4 (matt) missing";
+
+  // Check management relationships
+  bool alex_manages_bob = false;
+  bool bob_manages_jeff = false;
+  bool bob_manages_sam = false;
+
+  for (int i = 0; i < result_table->num_rows(); i++) {
+    auto manager_id_col = result_table->GetColumnByName("manager.id");
+    auto employee_id_col = result_table->GetColumnByName("employee.id");
+
+    if (employee_id_col->chunk(0)->IsNull(i)) {
+      continue;  // Skip NULL employee rows
+    }
+
+    auto manager_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                          manager_id_col->GetScalar(i).ValueOrDie())
+                          ->value;
+    auto employee_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                           employee_id_col->GetScalar(i).ValueOrDie())
+                           ->value;
+
+    if (manager_id == 0 && employee_id == 1) {
+      alex_manages_bob = true;
+    } else if (manager_id == 1 && employee_id == 2) {
+      bob_manages_jeff = true;
+    } else if (manager_id == 1 && employee_id == 3) {
+      bob_manages_sam = true;
+    }
+  }
+
+  ASSERT_TRUE(alex_manages_bob) << "Alex should manage Bob";
+  ASSERT_TRUE(bob_manages_jeff) << "Bob should manage Jeff";
+  ASSERT_TRUE(bob_manages_sam) << "Bob should manage Sam";
+}
+
+TEST(JoinTest, FullOuterJoin) {
+  auto db = setup_test_db();
+
+  // Create relationships for a FULL OUTER JOIN scenario
+  db->connect(0, "friend", 1).ValueOrDie();    // alex -> bob
+  db->connect(0, "friend", 2).ValueOrDie();    // alex -> jeff
+  db->connect(1, "works-at", 6).ValueOrDie();  // bob -> google
+  // jeff has no company
+
+  // matt (id=4) has no friends but works at ibm
+  db->connect(4, "works-at", 5).ValueOrDie();  // matt -> ibm
+
+  // AWS (id=7) has no employee connected directly
+
+  // FULL OUTER JOIN: Keep all records from both sides
+  Query query =
+      Query::from("u:users")
+          .traverse("u", "friend", "f:users", TraverseType::Full)
+          .traverse("f", "works-at", "c:companies", TraverseType::Full)
+          .build();
+
+  auto query_result = db->query(query);
+  ASSERT_TRUE(query_result.ok());
+  auto result_table = query_result.ValueOrDie()->table();
+  ASSERT_NE(result_table, nullptr);
+
+  // Pretty print for debugging
+  std::cout << "FullOuterJoin Result Table:" << std::endl;
+  print_table(result_table);
+  arrow::PrettyPrint(*result_table, {}, &std::cout);
+
+  // Collect all company names present in the result
+  std::set<std::string> company_names;
+  auto company_col = result_table->GetColumnByName("c.name");
+
+  for (int i = 0; i < result_table->num_rows(); i++) {
+    auto scalar_result = company_col->GetScalar(i);
+    if (!scalar_result.ok() || company_col->chunk(0)->IsNull(i)) {
+      continue;  // Skip NULL company rows
+    }
+    auto company_scalar = std::static_pointer_cast<arrow::StringScalar>(
+        scalar_result.ValueOrDie());
+    company_names.insert(company_scalar->ToString());
+  }
+
+  // FULL OUTER JOIN should include all companies, even those not connected to
+  // friends
+  ASSERT_TRUE(company_names.find("google") != company_names.end())
+      << "Google missing from results";
+  ASSERT_TRUE(company_names.find("ibm") != company_names.end())
+      << "IBM missing from results (FULL JOIN should include it)";
+  ASSERT_TRUE(company_names.find("aws") != company_names.end())
+      << "AWS missing from results (FULL JOIN should include it)";
+
+  // Check for the presence of specific scenarios
+  bool has_alex_bob_google = false;  // Normal match
+  bool has_alex_jeff_null = false;   // LEFT JOIN effect (jeff has no company)
+  bool has_null_null_aws = false;    // RIGHT JOIN effect (aws has no employee)
+
+  // Print each row for debugging
+  std::cout << "Checking rows for specific patterns:" << std::endl;
+  for (int i = 0; i < result_table->num_rows(); i++) {
+    auto u_id_col = result_table->GetColumnByName("u.id");
+    auto f_id_col = result_table->GetColumnByName("f.id");
+    auto c_id_col = result_table->GetColumnByName("c.id");
+
+    std::cout << "Row " << i << ": ";
+
+    // Print user ID
+    if (u_id_col->chunk(0)->IsNull(i)) {
+      std::cout << "u.id=NULL ";
+    } else {
+      auto u_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                      u_id_col->GetScalar(i).ValueOrDie())
+                      ->value;
+      std::cout << "u.id=" << u_id << " ";
+    }
+
+    // Print friend ID
+    if (f_id_col->chunk(0)->IsNull(i)) {
+      std::cout << "f.id=NULL ";
+    } else {
+      auto f_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                      f_id_col->GetScalar(i).ValueOrDie())
+                      ->value;
+      std::cout << "f.id=" << f_id << " ";
+    }
+
+    // Print company ID
+    if (c_id_col->chunk(0)->IsNull(i)) {
+      std::cout << "c.id=NULL";
+    } else {
+      auto c_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                      c_id_col->GetScalar(i).ValueOrDie())
+                      ->value;
+      std::cout << "c.id=" << c_id;
+    }
+    std::cout << std::endl;
+
+    // Check for alex(0)->bob(1)->google(6) using IDs instead of names for more
+    // reliability
+    if (!u_id_col->chunk(0)->IsNull(i) && !f_id_col->chunk(0)->IsNull(i) &&
+        !c_id_col->chunk(0)->IsNull(i)) {
+      auto u_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                      u_id_col->GetScalar(i).ValueOrDie())
+                      ->value;
+      auto f_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                      f_id_col->GetScalar(i).ValueOrDie())
+                      ->value;
+      auto c_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                      c_id_col->GetScalar(i).ValueOrDie())
+                      ->value;
+
+      if (u_id == 0 && f_id == 1 && c_id == 6) {
+        has_alex_bob_google = true;
+        std::cout << "  ✓ Found alex->bob->google pattern" << std::endl;
+      }
+    }
+
+    // Check for alex(0)->jeff(2)->NULL company using IDs
+    if (!u_id_col->chunk(0)->IsNull(i) && !f_id_col->chunk(0)->IsNull(i) &&
+        c_id_col->chunk(0)->IsNull(i)) {
+      auto u_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                      u_id_col->GetScalar(i).ValueOrDie())
+                      ->value;
+      auto f_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                      f_id_col->GetScalar(i).ValueOrDie())
+                      ->value;
+
+      if (u_id == 0 && f_id == 2) {
+        has_alex_jeff_null = true;
+        std::cout << "  ✓ Found alex->jeff->NULL pattern" << std::endl;
+      }
+    }
+
+    // Check for NULL->NULL->aws(7) using ID
+    if ((u_id_col->chunk(0)->IsNull(i) || f_id_col->chunk(0)->IsNull(i)) &&
+        !c_id_col->chunk(0)->IsNull(i)) {
+      auto c_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                      c_id_col->GetScalar(i).ValueOrDie())
+                      ->value;
+
+      if (c_id == 7) {
+        has_null_null_aws = true;
+        std::cout << "  ✓ Found NULL->NULL->aws pattern" << std::endl;
+      }
+    }
+  }
+
+  ASSERT_TRUE(has_alex_bob_google) << "Should include regular matches";
+  ASSERT_TRUE(has_alex_jeff_null)
+      << "Should include left-join effect (jeff with NULL company)";
+  ASSERT_TRUE(has_null_null_aws)
+      << "Should include right-join effect (AWS with no connected users)";
+}
+
 }  // namespace tundradb
 
 int main(int argc, char** argv) {

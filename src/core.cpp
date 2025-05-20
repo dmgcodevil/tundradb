@@ -944,7 +944,7 @@ void log_grouped_connections(
 arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows_bfs(
     int64_t node_id, const SchemaRef& start_schema,
     const std::shared_ptr<arrow::Schema>& output_schema,
-    const QueryState& query_state) {
+    const QueryState& query_state, std::set<int64_t>& global_visited) {
   log_debug("populate_rows_bfs::node={}", node_id);
   auto result = std::make_shared<std::vector<Row>>();
   std::set<std::string> visited_schemas;
@@ -961,6 +961,7 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows_bfs(
       auto item = queue.front();
       queue.pop();
       auto node = query_state.node_manager->get_node(item.node_id).ValueOrDie();
+      global_visited.insert(item.node_id);
       item.row->set_cell_from_node(item.schema_ref, node);
       visited_schemas.insert(item.schema_ref.value());
 
@@ -1048,158 +1049,144 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows(
     const QueryState& query_state, const std::vector<Traverse>& traverses,
     const std::shared_ptr<arrow::Schema>& output_schema) {
   auto rows = std::make_shared<std::vector<Row>>();
-  std::set<int64_t> visited;  // Tracks processed nodes across all schemas
-  std::set<std::string> unique_schemas;
-  std::vector<SchemaRef> schemas;
+  std::set<int64_t> global_visited;  // Track processed nodes across all schemas
 
-  print_paths(query_state.connections);
+  // Map schemas to their join types
+  std::unordered_map<std::string, TraverseType> schema_join_types;
+  schema_join_types[query_state.from.value()] =
+      TraverseType::Inner;  // FROM is always inner
 
-  // Phase 1: Process connected paths
-  // --------------------------------
-  // Identify all schemas in the query chain
-  unique_schemas.insert(query_state.from.value());
-  schemas.push_back(query_state.from);
+  // Build ordered list of schema references to process
+  std::vector<SchemaRef> ordered_schemas;
+  ordered_schemas.push_back(query_state.from);
 
-  // for (const auto& traverse : traverses) {
-  //   if (unique_schemas.insert(traverse.source().value()).second) {
-  //     schemas.push_back(traverse.source());
-  //   }
-  //   if (unique_schemas.insert(traverse.target().value()).second) {
-  //     schemas.push_back(traverse.target());
-  //   }
-  // }
+  // Add schemas from traversals in order
+  for (const auto& traverse : traverses) {
+    // Update join type for the target schema
+    schema_join_types[traverse.target().value()] = traverse.traverse_type();
 
-  log_debug("Phase 1: Processing connected paths from {} unique schemas",
-            schemas.size());
+    // Add target schema to ordered list if not already present
+    if (std::find_if(ordered_schemas.begin(), ordered_schemas.end(),
+                     [&](const SchemaRef& sr) {
+                       return sr.value() == traverse.target().value();
+                     }) == ordered_schemas.end()) {
+      ordered_schemas.push_back(traverse.target());
+    }
+  }
 
-  // Process each schema and build rows for connected paths
-  for (const auto& schema_ref : schemas) {
+  log_debug("Processing {} schemas with their respective join types",
+            ordered_schemas.size());
+
+  // Process each schema in order
+  for (const auto& schema_ref : ordered_schemas) {
+    TraverseType join_type = schema_join_types[schema_ref.value()];
+    log_debug("Processing schema '{}' with join type {}", schema_ref.value(),
+              static_cast<int>(join_type));
+
     if (!query_state.ids.contains(schema_ref.value())) {
       log_warn("Schema '{}' not found in query state IDs", schema_ref.value());
       continue;
     }
 
-    log_debug("Processing {} nodes from schema '{}'",
-              query_state.ids.at(schema_ref.value()).size(),
-              schema_ref.value());
-    std::set<int64_t> schema_visited_nodes;
-    for (auto id : query_state.ids.at(schema_ref.value())) {
-      // Skip already visited nodes (they were already added as part of another
-      // path)
-      if (visited.find(id) != visited.end() ||
-          !query_state.connections.contains(id)) {
+    // Get all nodes for this schema
+    const auto& schema_nodes = query_state.ids.at(schema_ref.value());
+
+    log_debug(">>Processing schema '{}' nodes '{}'", schema_ref.value(),
+              schema_nodes);
+
+    // For INNER join: only process nodes that have connections
+    // For LEFT join: process all nodes from the "left" side
+    for (auto node_id : schema_nodes) {
+      // Skip if already processed in an earlier traversal
+      if (global_visited.contains(node_id)) {
         continue;
       }
 
-      // Row row = create_empty_row_from_schema(output_schema);
-      // std::set<int64_t> local_visited;
-      // std::set<std::string> local_visited_schemas;
-      // auto res =
-      //     populate_rows_dfs(row, id, schema_ref, rows, query_state,
-      //     local_visited, local_visited_schemas, unique_schemas.size());
-      // schema_visited_nodes.insert(local_visited.begin(),
-      // local_visited.end());
-      auto res = populate_rows_bfs(id, schema_ref, output_schema, query_state);
+      // For INNER JOIN: Skip nodes without connections
+      if (join_type == TraverseType::Inner &&
+          (!query_state.connections.contains(node_id) ||
+           query_state.connections.at(node_id).empty())) {
+        continue;
+      }
+
+      // Process this node with BFS
+      auto res = populate_rows_bfs(node_id, schema_ref, output_schema,
+                                   query_state, global_visited);
       if (!res.ok()) {
-        log_error("Failed to populate row for node {} in schema '{}': {}", id,
-                  schema_ref.value(), res.status().ToString());
+        log_error("Failed to populate rows for node {} in schema '{}': {}",
+                  node_id, schema_ref.value(), res.status().ToString());
         return res.status();
       }
+
+      // Add the rows from BFS to our result
       auto res_value = res.ValueOrDie();
-      // rows.splice(rows.end(), res.ValueOrDie());
       rows->insert(rows->end(), std::make_move_iterator(res_value->begin()),
                    std::make_move_iterator(res_value->end()));
+
+      // Mark this node as visited
+      global_visited.insert(node_id);
     }
 
-    visited.insert(schema_visited_nodes.begin(), schema_visited_nodes.end());
+    // For LEFT JOIN: ensure we've processed all required nodes
+    // if (join_type == TraverseType::Left || join_type == TraverseType::Full) {
+    //   // Find the source schema for this left join
+    //   SchemaRef source_schema;
+    //   for (const auto& traverse : traverses) {
+    //     if (traverse.target().value() == schema_ref.value() &&
+    //         traverse.traverse_type() == join_type) {
+    //       source_schema = traverse.source();
+    //       break;
+    //     }
+    //   }
+    //
+    //   // Skip if no source found
+    //   if (source_schema.value().empty()) {
+    //     continue;
+    //   }
+    //
+    //   // For all source nodes that should have targets but don't
+    //   for (auto source_id : query_state.ids.at(source_schema.value())) {
+    //     bool has_connections = false;
+    //
+    //     // Check if this source has any connections to the target schema
+    //     if (query_state.connections.contains(source_id)) {
+    //       for (const auto& conn : query_state.connections.at(source_id)) {
+    //         if (conn.target.value() == schema_ref.value()) {
+    //           has_connections = true;
+    //           break;
+    //         }
+    //       }
+    //     }
+    //
+    //     // If no connections and not already processed, create a row with
+    //     NULLs
+    //     // for target
+    //     if (!has_connections && !global_visited.contains(source_id)) {
+    //       auto source_node_result =
+    //           query_state.node_manager->get_node(source_id);
+    //       if (!source_node_result.ok()) {
+    //         log_error("Failed to get source node {}: {}", source_id,
+    //                   source_node_result.status().ToString());
+    //         continue;
+    //       }
+    //
+    //       // Create row with source data and NULL for targets
+    //       Row left_join_row = create_empty_row_from_schema(output_schema);
+    //       left_join_row.set_cell_from_node(source_schema,
+    //                                        source_node_result.ValueOrDie());
+    //       left_join_row.path = {PathSegment{source_schema.value(),
+    //       source_id}}; left_join_row.id = source_id;
+    //
+    //       rows->push_back(left_join_row);
+    //       global_visited.insert(source_id);
+    //     }
+    //   }
+    // }
   }
 
-  log_debug("Phase 1 complete. Found {} connected paths, visited {} nodes",
-            rows->size(), visited.size());
-
-  // Phase 2: Process unmatched nodes for outer joins
-  // -----------------------------------------------
-  log_debug("Phase 2: Processing outer joins");
-
-  // Create a map to track which traverses apply to each schema
-  std::unordered_map<std::string, std::vector<const Traverse*>>
-      source_traverses;
-  std::unordered_map<std::string, std::vector<const Traverse*>>
-      target_traverses;
-
-  for (const auto& traverse : traverses) {
-    // Skip inner joins - they're fully handled in phase 1
-    if (traverse.traverse_type() == TraverseType::Inner) {
-      continue;
-    }
-
-    source_traverses[traverse.source().value()].push_back(&traverse);
-    target_traverses[traverse.target().value()].push_back(&traverse);
-  }
-
-  // Handle LEFT and FULL joins - process unvisited source nodes
-  /*
-    for (const auto& [alias, traverses_list] : source_traverses) {
-      for (const auto* traverse : traverses_list) {
-        if (traverse->traverse_type() != TraverseType::Left &&
-            traverse->traverse_type() != TraverseType::Full) {
-          continue;
-        }
-
-        log_debug(
-            "Processing LEFT/FULL join for source '{}' in traverse '{} -> {}'",
-            traverse->source().value(), traverse->source().value(),
-            traverse->target().value());
-
-        for (auto id : query_state.ids.at(traverse->source().value())) {
-          if (visited.find(id) != visited.end()) {
-            continue;  // Skip nodes already processed in phase 1
-          }
-
-          log_debug("Creating row for unmatched source node {} in LEFT/FULL
-    join", id); Row row = create_empty_row_from_schema(output_schema); auto res
-    = populate_rows_dfs(row, id, traverse->source(), rows, query_state,
-    visited); if (!res.ok()) { log_error("Failed to populate row for unmatched
-    source node {}: {}", id, res.status().ToString()); return res.status();
-          }
-        }
-      }
-    }
-
-    // Handle RIGHT and FULL joins - process unvisited target nodes
-    for (const auto& [alias, traverses_list] : target_traverses) {
-      for (const auto* traverse : traverses_list) {
-        if (traverse->traverse_type() != TraverseType::Right &&
-            traverse->traverse_type() != TraverseType::Full) {
-          continue;
-        }
-
-        log_debug(
-            "Processing RIGHT/FULL join for target '{}' in traverse '{} -> {}'",
-            traverse->target().value(), traverse->source().value(),
-            traverse->target().value());
-
-        for (auto id : query_state.ids.at(traverse->target().value())) {
-          if (visited.find(id) != visited.end()) {
-            continue;  // Skip nodes already processed in phase 1
-          }
-
-          log_debug(
-              "Creating row for unmatched target node {} in RIGHT/FULL join",
-    id); Row row = create_empty_row_from_schema(output_schema); auto res =
-    populate_rows_dfs(row, id, traverse->target(), rows, query_state, visited);
-          if (!res.ok()) {
-            log_error("Failed to populate row for unmatched target node {}: {}",
-                      id, res.status().ToString());
-            return res.status();
-          }
-        }
-      }
-    }
-    */
-
-  log_debug("Phase 2 complete. Total of {} rows created", rows->size());
-  return rows;  //  std::make_shared<std::vector<Row>>(std::mov);
+  log_debug("Generated {} total rows after processing all schemas",
+            rows->size());
+  return rows;
 }
 
 arrow::Result<std::shared_ptr<arrow::Table>> create_empty_table(
@@ -1501,9 +1488,13 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
 
           query_state.ids[traverse->target().value()] = intersect_ids;
           log_info("intersect_ids count: {}", intersect_ids.size());
-        } else {
+        } else if (traverse->traverse_type() == TraverseType::Left) {
           query_state.ids[traverse->target().value()].insert(
               matched_target_ids.begin(), matched_target_ids.end());
+        } else {
+          query_state.ids[traverse->target().value()] =
+              get_ids_from_table(get_table(target_schema).ValueOrDie())
+                  .ValueOrDie();
         }
 
         std::vector<std::shared_ptr<Node>> neighbors;
