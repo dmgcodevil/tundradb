@@ -902,69 +902,136 @@ TEST(JoinTest, MultiLevelLeftJoin) {
   print_table(result_table);
   arrow::PrettyPrint(*result_table, {}, &std::cout);
 
-  // Should have 3 rows - one for each friend of alex
-  ASSERT_EQ(result_table->num_rows(), 3);
+  // Should have 7 rows - 3 for alex's friends and 4 for each user as a starting
+  // point
+  ASSERT_EQ(result_table->num_rows(), 7);
 
-  // Verify that we have all of alex's friends in the results
-  std::set<std::string> friend_names;
-  auto friend_name_col = result_table->GetColumnByName("f.name");
+  // Get all user IDs in the result
+  std::set<int64_t> user_ids;
+  auto user_id_col = result_table->GetColumnByName("u.id");
 
   for (int i = 0; i < result_table->num_rows(); i++) {
-    auto scalar_result = friend_name_col->GetScalar(i);
-    ASSERT_TRUE(scalar_result.ok());
-    auto name_scalar = std::static_pointer_cast<arrow::StringScalar>(
-        scalar_result.ValueOrDie());
-    friend_names.insert(name_scalar->ToString());
-  }
-
-  // All of alex's friends should be included
-  ASSERT_TRUE(friend_names.find("bob") != friend_names.end());
-  ASSERT_TRUE(friend_names.find("jeff") != friend_names.end());
-  ASSERT_TRUE(friend_names.find("sam") != friend_names.end());
-
-  // Find bob's row and verify he has a company
-  int bob_index = -1;
-  for (int i = 0; i < result_table->num_rows(); i++) {
-    auto scalar_result = friend_name_col->GetScalar(i);
-    auto name_scalar = std::static_pointer_cast<arrow::StringScalar>(
-        scalar_result.ValueOrDie());
-    if (name_scalar->view() == "bob") {
-      bob_index = i;
-      break;
+    if (!user_id_col->chunk(0)->IsNull(i)) {
+      auto user_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                         user_id_col->GetScalar(i).ValueOrDie())
+                         ->value;
+      user_ids.insert(user_id);
     }
   }
 
-  ASSERT_NE(bob_index, -1);
+  // All 5 users should be in the result
+  ASSERT_EQ(user_ids.size(), 5) << "All 5 users should be included";
+  for (int64_t i = 0; i < 5; i++) {
+    ASSERT_TRUE(user_ids.find(i) != user_ids.end())
+        << "User ID " << i << " missing";
+  }
 
-  // Bob's company should be Google
-  auto company_col = result_table->GetColumnByName("c.name");
-  auto scalar_result = company_col->GetScalar(bob_index);
-  ASSERT_TRUE(scalar_result.ok());
-  auto company_scalar =
-      std::static_pointer_cast<arrow::StringScalar>(scalar_result.ValueOrDie());
-  ASSERT_EQ(company_scalar->view(), "google");
-
-  // Find jeff's row and verify he has a liked company
-  int jeff_index = -1;
+  // Find the Alex-Bob-Google row
+  bool found_alex_bob_google = false;
   for (int i = 0; i < result_table->num_rows(); i++) {
-    auto scalar_result = friend_name_col->GetScalar(i);
-    auto name_scalar = std::static_pointer_cast<arrow::StringScalar>(
-        scalar_result.ValueOrDie());
-    if (name_scalar->view() == "jeff") {
-      jeff_index = i;
-      break;
+    auto u_id_col = result_table->GetColumnByName("u.id");
+    auto f_id_col = result_table->GetColumnByName("f.id");
+    auto c_id_col = result_table->GetColumnByName("c.id");
+
+    if (!u_id_col->chunk(0)->IsNull(i) && !f_id_col->chunk(0)->IsNull(i) &&
+        !c_id_col->chunk(0)->IsNull(i)) {
+      auto u_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                      u_id_col->GetScalar(i).ValueOrDie())
+                      ->value;
+      auto f_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                      f_id_col->GetScalar(i).ValueOrDie())
+                      ->value;
+      auto c_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                      c_id_col->GetScalar(i).ValueOrDie())
+                      ->value;
+
+      if (u_id == 0 && f_id == 1 && c_id == 6) {
+        found_alex_bob_google = true;
+        break;
+      }
     }
   }
 
-  ASSERT_NE(jeff_index, -1);
+  ASSERT_TRUE(found_alex_bob_google) << "Alex->Bob->Google path not found";
 
-  // Jeff's liked company should be IBM
-  auto liked_company_col = result_table->GetColumnByName("l.name");
-  scalar_result = liked_company_col->GetScalar(jeff_index);
-  ASSERT_TRUE(scalar_result.ok());
-  auto liked_company_scalar =
-      std::static_pointer_cast<arrow::StringScalar>(scalar_result.ValueOrDie());
-  ASSERT_EQ(liked_company_scalar->view(), "ibm");
+  // Find the Alex-Jeff-IBM row
+  bool found_alex_jeff_ibm = false;
+  for (int i = 0; i < result_table->num_rows(); i++) {
+    auto u_id_col = result_table->GetColumnByName("u.id");
+    auto f_id_col = result_table->GetColumnByName("f.id");
+    auto l_id_col = result_table->GetColumnByName("l.id");
+
+    if (!u_id_col->chunk(0)->IsNull(i) && !f_id_col->chunk(0)->IsNull(i) &&
+        !l_id_col->chunk(0)->IsNull(i)) {
+      auto u_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                      u_id_col->GetScalar(i).ValueOrDie())
+                      ->value;
+      auto f_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                      f_id_col->GetScalar(i).ValueOrDie())
+                      ->value;
+      auto l_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                      l_id_col->GetScalar(i).ValueOrDie())
+                      ->value;
+
+      if (u_id == 0 && f_id == 2 && l_id == 5) {
+        found_alex_jeff_ibm = true;
+        break;
+      }
+    }
+  }
+
+  ASSERT_TRUE(found_alex_jeff_ibm) << "Alex->Jeff->IBM path not found";
+
+  // Test for Bob's direct connection to Google when Bob is the starting point
+  bool found_bob_google = false;
+  for (int i = 0; i < result_table->num_rows(); i++) {
+    auto u_id_col = result_table->GetColumnByName("u.id");
+    auto f_id_col = result_table->GetColumnByName("f.id");
+    auto c_id_col = result_table->GetColumnByName("c.id");
+
+    if (!u_id_col->chunk(0)->IsNull(i) && f_id_col->chunk(0)->IsNull(i) &&
+        !c_id_col->chunk(0)->IsNull(i)) {
+      auto u_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                      u_id_col->GetScalar(i).ValueOrDie())
+                      ->value;
+      auto c_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                      c_id_col->GetScalar(i).ValueOrDie())
+                      ->value;
+
+      if (u_id == 1 && c_id == 6) {  // Bob -> Google
+        found_bob_google = true;
+        break;
+      }
+    }
+  }
+
+  ASSERT_TRUE(found_bob_google)
+      << "Bob's direct connection to Google not found";
+
+  // Test for Jeff's direct connection to IBM when Jeff is the starting point
+  bool found_jeff_ibm = false;
+  for (int i = 0; i < result_table->num_rows(); i++) {
+    auto u_id_col = result_table->GetColumnByName("u.id");
+    auto f_id_col = result_table->GetColumnByName("f.id");
+    auto l_id_col = result_table->GetColumnByName("l.id");
+
+    if (!u_id_col->chunk(0)->IsNull(i) && f_id_col->chunk(0)->IsNull(i) &&
+        !l_id_col->chunk(0)->IsNull(i)) {
+      auto u_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                      u_id_col->GetScalar(i).ValueOrDie())
+                      ->value;
+      auto l_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                      l_id_col->GetScalar(i).ValueOrDie())
+                      ->value;
+
+      if (u_id == 2 && l_id == 5) {  // Jeff -> IBM
+        found_jeff_ibm = true;
+        break;
+      }
+    }
+  }
+
+  ASSERT_TRUE(found_jeff_ibm) << "Jeff's direct connection to IBM not found";
 }
 
 TEST(JoinTest, SelfJoinWithLeftJoin) {

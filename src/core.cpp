@@ -1055,6 +1055,16 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows(
   std::unordered_map<std::string, TraverseType> schema_join_types;
   schema_join_types[query_state.from.value()] =
       TraverseType::Inner;  // FROM is always inner
+  // Only apply LEFT JOIN to FROM schema if the FROM schema is directly involved
+  // in a LEFT JOIN traversal
+  for (const auto& traverse : traverses) {
+    if (traverse.source().value() == query_state.from.value() &&
+        (traverse.traverse_type() == TraverseType::Left ||
+         traverse.traverse_type() == TraverseType::Full)) {
+      schema_join_types[query_state.from.value()] = traverse.traverse_type();
+      break;
+    }
+  }
 
   // Build ordered list of schema references to process
   std::vector<SchemaRef> ordered_schemas;
@@ -1093,6 +1103,7 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows(
 
     log_debug(">>Processing schema '{}' nodes '{}'", schema_ref.value(),
               schema_nodes);
+    std::set<int64_t> local_visited;
 
     // For INNER join: only process nodes that have connections
     // For LEFT join: process all nodes from the "left" side
@@ -1111,7 +1122,7 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows(
 
       // Process this node with BFS
       auto res = populate_rows_bfs(node_id, schema_ref, output_schema,
-                                   query_state, global_visited);
+                                   query_state, local_visited);
       if (!res.ok()) {
         log_error("Failed to populate rows for node {} in schema '{}': {}",
                   node_id, schema_ref.value(), res.status().ToString());
@@ -1126,6 +1137,7 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows(
       // Mark this node as visited
       global_visited.insert(node_id);
     }
+    global_visited.insert(local_visited.begin(), local_visited.end());
 
     // For LEFT JOIN: ensure we've processed all required nodes
     // if (join_type == TraverseType::Left || join_type == TraverseType::Full) {
