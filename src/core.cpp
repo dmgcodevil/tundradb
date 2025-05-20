@@ -23,35 +23,14 @@ namespace fs = std::filesystem;
 namespace tundradb {
 
 arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
-    std::shared_ptr<SchemaRegistry> schema_registry,
+    const std::shared_ptr<arrow::Schema>& schema,
     const std::vector<std::shared_ptr<Node>>& nodes) {
   log_debug("Creating table from {} nodes with schema '{}'", nodes.size(),
-            nodes.empty() ? "unknown" : nodes[0]->schema_name);
-
-  if (nodes.empty()) {
-    log_error("Cannot create table from empty nodes list");
-    return arrow::Status::Invalid("Cannot create table from empty nodes list");
-  }
-
-  // All nodes should have the same schema
-  std::string schema_name = nodes[0]->schema_name;
-  log_debug("Using schema '{}' for table creation", schema_name);
-
-  // Get schema from SchemaRegistry
-  auto schema_result = schema_registry->get(schema_name);
-  if (!schema_result.ok()) {
-    log_error("Failed to get schema '{}': {}", schema_name,
-              schema_result.status().ToString());
-    return schema_result.status();
-  }
-  auto arrow_schema = schema_result.ValueOrDie();
-
-  log_debug("Creating table from schema: {}", arrow_schema->ToString());
-  log_debug("Retrieved schema with {} fields", arrow_schema->num_fields());
+            schema->ToString());
 
   // Create builders for each field
   std::vector<std::unique_ptr<arrow::ArrayBuilder>> builders;
-  for (const auto& field : arrow_schema->fields()) {
+  for (const auto& field : schema->fields()) {
     log_debug("Creating builder for field '{}' with type {}", field->name(),
               field->type()->ToString());
     auto builder_result = arrow::MakeBuilder(field->type());
@@ -66,16 +45,9 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
   // Populate builders with data from each node
   log_debug("Adding data from {} nodes to builders", nodes.size());
   for (const auto& node : nodes) {
-    // Ensure node has the expected schema
-    if (node->schema_name != schema_name) {
-      log_error("Node schema '{}' doesn't match expected schema '{}'",
-                node->schema_name, schema_name);
-      return arrow::Status::Invalid("Inconsistent schema names in nodes list");
-    }
-
     // Add each field's value to the appropriate builder
-    for (int i = 0; i < arrow_schema->num_fields(); i++) {
-      const auto& field_name = arrow_schema->field(i)->name();
+    for (int i = 0; i < schema->num_fields(); i++) {
+      const auto& field_name = schema->field(i)->name();
 
       // Find the array in the node's data
       auto res = node->get_field(field_name);
@@ -135,7 +107,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
   // Create table
   log_debug("Creating table with {} rows and {} columns",
             arrays.empty() ? 0 : arrays[0]->length(), arrays.size());
-  return arrow::Table::Make(arrow_schema, arrays);
+  return arrow::Table::Make(schema, arrays);
 }
 
 arrow::Result<std::set<int64_t>> get_ids_from_table(
@@ -354,8 +326,8 @@ struct QueryState {
   arrow::Result<std::string> resolve_schema(const SchemaRef& schema_ref) {
     if (aliases.contains(schema_ref.value()) && schema_ref.is_declaration()) {
       return arrow::Status::Invalid(
-          "duplicated schema alias {}. already assigned to {}",
-          schema_ref.value(), aliases[schema_ref.value()]);
+          "duplicated schema alias '" + schema_ref.value() +
+          "' already assigned to '" + aliases[schema_ref.value()] + "'");
     }
     if (schema_ref.is_declaration()) {
       aliases[schema_ref.value()] = schema_ref.schema();
@@ -996,10 +968,16 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows_bfs(
       std::unordered_map<std::string, std::vector<GraphConnection>>
           grouped_connections;
 
+      bool skip = false;
       if (query_state.connections.contains(item.node_id)) {
         for (const auto& conn : query_state.connections.at(item.node_id)) {
           if (!visited_schemas.contains(conn.target.value())) {
-            grouped_connections[conn.target.value()].push_back(conn);
+            if (query_state.ids.at(conn.target.value())
+                    .contains(conn.target_id)) {
+              grouped_connections[conn.target.value()].push_back(conn);
+            } else {
+              skip = true;
+            }
           }
         }
       }
@@ -1007,11 +985,14 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows_bfs(
 
       if (grouped_connections.empty()) {
         // we've done
-        auto r = *item.row;
-        r.path = item.path;
-        r.id = row_id_counter++;
-        std::cout << "add row: " << r.ToString() << std::endl;
-        result->push_back(r);
+        if (!skip) {
+          auto r = *item.row;
+          r.path = item.path;
+          r.id = row_id_counter++;
+          std::cout << "add row: " << r.ToString() << std::endl;
+          result->push_back(r);
+        }
+
       } else {
         for (const auto& pair : grouped_connections) {
           const auto& connections = pair.second;
@@ -1221,11 +1202,55 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows(
   return rows;  //  std::make_shared<std::vector<Row>>(std::mov);
 }
 
+arrow::Result<std::shared_ptr<arrow::Table>> create_empty_table(
+    const std::shared_ptr<arrow::Schema>& schema) {
+  // Create empty arrays for each field in the schema
+  std::vector<std::shared_ptr<arrow::Array>> empty_arrays;
+
+  for (const auto& field : schema->fields()) {
+    std::shared_ptr<arrow::Array> empty_array;
+
+    switch (field->type()->id()) {
+      case arrow::Type::INT64: {
+        arrow::Int64Builder builder;
+        ARROW_RETURN_NOT_OK(builder.Finish(&empty_array));
+        break;
+      }
+      case arrow::Type::STRING: {
+        arrow::StringBuilder builder;
+        ARROW_RETURN_NOT_OK(builder.Finish(&empty_array));
+        break;
+      }
+      case arrow::Type::DOUBLE: {
+        arrow::DoubleBuilder builder;
+        ARROW_RETURN_NOT_OK(builder.Finish(&empty_array));
+        break;
+      }
+      case arrow::Type::BOOL: {
+        arrow::BooleanBuilder builder;
+        ARROW_RETURN_NOT_OK(builder.Finish(&empty_array));
+        break;
+      }
+      default:
+        // For any other type, create a generic empty array
+        empty_array = std::make_shared<arrow::NullArray>(0);
+    }
+
+    empty_arrays.push_back(empty_array);
+  }
+
+  // Create table from schema and empty arrays
+  return arrow::Table::Make(schema, empty_arrays);
+}
+
 arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_rows(
     const std::shared_ptr<std::vector<Row>>& rows,
     const std::shared_ptr<arrow::Schema>& schema = nullptr) {
   if (!rows || rows->empty()) {
-    return arrow::Status::Invalid("No rows provided to create table");
+    if (schema == nullptr) {
+      return arrow::Status::Invalid("No rows provided to create table");
+    }
+    return create_empty_table(schema);
   }
 
   std::shared_ptr<arrow::Schema> output_schema;
@@ -1366,6 +1391,8 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
                     filtered_table_result.status().ToString());
           return filtered_table_result.status();
         }
+        log_info("filtered '{}' table ", variable);
+        print_table(filtered_table_result.ValueOrDie());
         auto res = query_state.update_table(filtered_table_result.ValueOrDie(),
                                             SchemaRef::parse(variable));
         if (!res.ok()) {
@@ -1486,7 +1513,10 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
             neighbors.push_back(node_res.ValueOrDie());
           }
         }
-        auto table_result = create_table_from_nodes(schema_registry, neighbors);
+        auto target_table_schema =
+            schema_registry->get(target_schema).ValueOrDie();
+        auto table_result =
+            create_table_from_nodes(target_table_schema, neighbors);
         if (!table_result.ok()) {
           log_error("Failed to create table from neighbors: {}",
                     table_result.status().ToString());
@@ -1523,6 +1553,8 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
   auto rows = row_res.ValueOrDie();
   auto output_table_res = create_table_from_rows(rows, output_schema);
   if (!output_table_res.ok()) {
+    log_error("Failed to create table from rows: {}",
+              output_table_res.status().ToString());
     return output_table_res.status();
   }
   result->set_table(output_table_res.ValueOrDie());
