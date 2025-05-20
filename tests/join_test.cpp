@@ -1307,6 +1307,146 @@ TEST(JoinTest, FullOuterJoin) {
       << "Should include right-join effect (AWS with no connected users)";
 }
 
+TEST(JoinTest, SelectClauseFiltering) {
+  auto db = setup_test_db();
+  
+  // Create some connections for our test
+  db->connect(0, "friend", 1).ValueOrDie();    // alex -> bob
+  db->connect(0, "friend", 2).ValueOrDie();    // alex -> jeff
+  db->connect(1, "works-at", 6).ValueOrDie();  // bob -> google
+  
+  // Query with SELECT - only get user (u) and friend (f) columns
+  Query query = Query::from("u:users")
+                    .traverse("u", "friend", "f:users", TraverseType::Inner)
+                    .traverse("f", "works-at", "c:companies", TraverseType::Inner)
+                    .select({"u", "f"})  // Only select u.* and f.* columns
+                    .build();
+
+  auto query_result = db->query(query);
+  ASSERT_TRUE(query_result.ok());
+  auto result_table = query_result.ValueOrDie()->table();
+  ASSERT_NE(result_table, nullptr);
+
+  // Pretty print for debugging
+  std::cout << "SelectClauseFiltering Result Table:" << std::endl;
+  print_table(result_table);
+  arrow::PrettyPrint(*result_table, {}, &std::cout);
+
+  // Verify that only columns with u.* and f.* prefixes are in the result
+  for (const auto& field : result_table->schema()->fields()) {
+    std::string field_name = field->name();
+    ASSERT_TRUE(field_name.find("u.") == 0 || field_name.find("f.") == 0)
+        << "Found unexpected column: " << field_name;
+  }
+
+  // Verify no company (c.*) columns are present
+  bool has_company_column = false;
+  for (const auto& field : result_table->schema()->fields()) {
+    if (field->name().find("c.") == 0) {
+      has_company_column = true;
+      break;
+    }
+  }
+  ASSERT_FALSE(has_company_column) << "Company columns should be filtered out";
+
+  // Verify we have the expected number of rows (same as without SELECT)
+  ASSERT_EQ(result_table->num_rows(), 1) << "Should have 1 row for alex->bob->google";
+
+  // Verify we have expected data in the columns
+  auto u_id_col = result_table->GetColumnByName("u.id");
+  auto u_name_col = result_table->GetColumnByName("u.name");
+  auto f_id_col = result_table->GetColumnByName("f.id");
+  auto f_name_col = result_table->GetColumnByName("f.name");
+
+  ASSERT_NE(u_id_col, nullptr);
+  ASSERT_NE(u_name_col, nullptr);
+  ASSERT_NE(f_id_col, nullptr);
+  ASSERT_NE(f_name_col, nullptr);
+
+  // Check u.id (should be 0 - alex)
+  auto u_id_scalar = std::static_pointer_cast<arrow::Int64Scalar>(
+      u_id_col->GetScalar(0).ValueOrDie());
+  ASSERT_EQ(u_id_scalar->value, 0);
+
+  // Check u.name (should be "alex")
+  auto u_name_scalar = std::static_pointer_cast<arrow::StringScalar>(
+      u_name_col->GetScalar(0).ValueOrDie());
+  ASSERT_EQ(u_name_scalar->view(), "alex");
+
+  // Check f.id (should be 1 - bob)
+  auto f_id_scalar = std::static_pointer_cast<arrow::Int64Scalar>(
+      f_id_col->GetScalar(0).ValueOrDie());
+  ASSERT_EQ(f_id_scalar->value, 1);
+
+  // Check f.name (should be "bob")
+  auto f_name_scalar = std::static_pointer_cast<arrow::StringScalar>(
+      f_name_col->GetScalar(0).ValueOrDie());
+  ASSERT_EQ(f_name_scalar->view(), "bob");
+}
+
+// Test for specific column selection
+TEST(JoinTest, SelectSpecificColumns) {
+  auto db = setup_test_db();
+  
+  // Create some connections for our test
+  db->connect(0, "friend", 1).ValueOrDie();    // alex -> bob
+  db->connect(0, "friend", 2).ValueOrDie();    // alex -> jeff
+  
+  // Query with SELECT for specific columns
+  Query query = Query::from("u:users")
+                    .traverse("u", "friend", "f:users", TraverseType::Inner)
+                    .select({"u.name", "f.age"})  // Only select specific columns
+                    .build();
+
+  auto query_result = db->query(query);
+  ASSERT_TRUE(query_result.ok());
+  auto result_table = query_result.ValueOrDie()->table();
+  ASSERT_NE(result_table, nullptr);
+
+  // Pretty print for debugging
+  std::cout << "SelectSpecificColumns Result Table:" << std::endl;
+  print_table(result_table);
+  arrow::PrettyPrint(*result_table, {}, &std::cout);
+
+  // Verify we have exactly 2 columns
+  ASSERT_EQ(result_table->schema()->num_fields(), 2);
+  
+  // Verify the column names are exactly what we requested
+  ASSERT_EQ(result_table->schema()->field(0)->name(), "u.name");
+  ASSERT_EQ(result_table->schema()->field(1)->name(), "f.age");
+
+  // Verify we have 2 rows (alex->bob and alex->jeff)
+  ASSERT_EQ(result_table->num_rows(), 2);
+  
+  // Find row with f.age = 31 (bob)
+  int bob_row = -1;
+  int jeff_row = -1;
+  
+  auto f_age_col = result_table->GetColumnByName("f.age");
+  for (int i = 0; i < result_table->num_rows(); ++i) {
+    auto age_scalar = std::static_pointer_cast<arrow::Int64Scalar>(
+        f_age_col->GetScalar(i).ValueOrDie());
+    if (age_scalar->value == 31) {
+      bob_row = i;  // Found bob's row
+    } else if (age_scalar->value == 33) {
+      jeff_row = i; // Found jeff's row
+    }
+  }
+  
+  ASSERT_NE(bob_row, -1) << "Should have a row with bob (age 31)";
+  ASSERT_NE(jeff_row, -1) << "Should have a row with jeff (age 33)";
+  
+  // Verify alex's name appears in both rows
+  auto u_name_col = result_table->GetColumnByName("u.name");
+  auto bob_u_name = std::static_pointer_cast<arrow::StringScalar>(
+      u_name_col->GetScalar(bob_row).ValueOrDie());
+  auto jeff_u_name = std::static_pointer_cast<arrow::StringScalar>(
+      u_name_col->GetScalar(jeff_row).ValueOrDie());
+  
+  ASSERT_EQ(bob_u_name->view(), "alex");
+  ASSERT_EQ(jeff_u_name->view(), "alex");
+}
+
 }  // namespace tundradb
 
 int main(int argc, char** argv) {

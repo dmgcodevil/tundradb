@@ -1340,6 +1340,73 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_rows(
   return arrow::Table::Make(output_schema, arrays);
 }
 
+#include <arrow/table.h>
+#include <memory>
+#include <string>
+#include <vector>
+#include <unordered_set>
+
+// Function to project a table based on Select clause
+std::shared_ptr<arrow::Table> apply_select(const std::shared_ptr<Select>& select,
+                                          const std::shared_ptr<arrow::Table>& table) {
+  // If select is null or fields are empty, return the original table
+  if (!select || select->fields().empty()) {
+    return table;
+  }
+
+  // Get all column names
+  std::vector<std::string> all_columns;
+  for (const auto& field : table->schema()->fields()) {
+    all_columns.push_back(field->name());
+  }
+
+  // Track which columns to keep
+  std::unordered_set<int> columns_to_keep;
+
+  // Process each field in the SELECT clause
+  for (const auto& field : select->fields()) {
+    bool is_prefix = true;
+
+    // Check if it's a fully qualified name (contains a dot)
+    if (field.find('.') != std::string::npos) {
+      // This is a fully qualified column name, look for exact match
+      for (int i = 0; i < all_columns.size(); ++i) {
+        if (all_columns[i] == field) {
+          columns_to_keep.insert(i);
+          break;
+        }
+      }
+      is_prefix = false;
+    }
+
+    // If it's a prefix (or no exact match was found), find all columns starting with prefix
+    if (is_prefix) {
+      std::string prefix = field + ".";
+      for (int i = 0; i < all_columns.size(); ++i) {
+        // Check if column starts with the prefix
+        if (all_columns[i].find(prefix) == 0) {
+          columns_to_keep.insert(i);
+        }
+      }
+    }
+  }
+
+  // Convert set to vector and sort for consistent column order
+  std::vector<int> column_indices(columns_to_keep.begin(), columns_to_keep.end());
+  std::sort(column_indices.begin(), column_indices.end());
+
+  // Create a result with selected columns
+  arrow::Result<std::shared_ptr<arrow::Table>> result = table->SelectColumns(column_indices);
+
+  if (!result.ok()) {
+    // Handle error - you might want to define how to handle errors
+    // For now, let's return the original table if selection fails
+    return table;
+  }
+
+  return result.ValueOrDie();
+}
+
 arrow::Result<std::shared_ptr<QueryResult>> Database::query(
     const Query& query) const {
   QueryState query_state;
@@ -1560,7 +1627,8 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
               output_table_res.status().ToString());
     return output_table_res.status();
   }
-  result->set_table(output_table_res.ValueOrDie());
+  auto output_table = output_table_res.ValueOrDie();
+  result->set_table(apply_select(query.select(), output_table));
 
   return result;
 }

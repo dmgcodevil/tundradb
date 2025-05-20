@@ -99,7 +99,7 @@ class Clause {
   virtual ~Clause() = default;
 
   // Potential common functionality or type identification
-  enum class Type { WHERE, TRAVERSE, PROJECT, ORDER_BY, LIMIT };
+  enum class Type { WHERE, TRAVERSE, PROJECT, ORDER_BY, LIMIT, SELECT };
   virtual Type type() const = 0;
 };
 
@@ -145,20 +145,37 @@ class Traverse : public Clause {
   [[nodiscard]] TraverseType traverse_type() const { return traverse_type_; }
 };
 
+struct Select : public Clause {
+  std::vector<std::string> fields_;
+
+ public:
+  Select(std::vector<std::string> fields) : fields_(std::move(fields)) {}
+
+  Type type() const override { return Type::SELECT; }
+
+  [[nodiscard]] const std::vector<std::string>& fields() const {
+    return fields_;
+  }
+};
+
 class Query {
  private:
   SchemaRef from_;
   std::vector<std::shared_ptr<Clause>> clauses_;
+  std::shared_ptr<Select> select_;
 
   // Constructor used by Builder
-  Query(SchemaRef from, std::vector<std::shared_ptr<Clause>> clauses)
-      : from_(std::move(from)), clauses_(std::move(clauses)) {}
+  Query(SchemaRef from, std::vector<std::shared_ptr<Clause>> clauses, std::shared_ptr<Select> select)
+      : from_(std::move(from)), clauses_(std::move(clauses)), select_(std::move(select)) {}
 
  public:
   class Builder;
   const SchemaRef& from() const { return from_; }
   const std::vector<std::shared_ptr<Clause>>& clauses() const {
     return clauses_;
+  }
+  [[nodiscard]] const std::shared_ptr<Select>& select() const {
+    return select_;
   }
 
   // Builder creation
@@ -169,6 +186,7 @@ class Query {
    private:
     SchemaRef from_;
     std::vector<std::shared_ptr<Clause>> clauses_;
+    std::shared_ptr<Select> select_;
 
    public:
     explicit Builder(std::string schema) : from_(SchemaRef::parse(schema)) {}
@@ -188,9 +206,14 @@ class Query {
       return *this;
     }
 
+   Builder& select(std::vector<std::string> names = {}) {
+      select_ = std::make_shared<Select>(std::move(names));
+      return *this;
+    }
+
     // Additional builder methods for other clause types
 
-    Query build() { return Query(from_, std::move(clauses_)); }
+    Query build() { return Query(from_, std::move(clauses_), std::move(select_)); }
   };
 };
 
