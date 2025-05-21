@@ -1324,18 +1324,19 @@ TEST(JoinTest, FullOuterJoin) {
 
 TEST(JoinTest, SelectClauseFiltering) {
   auto db = setup_test_db();
-  
+
   // Create some connections for our test
   db->connect(0, "friend", 1).ValueOrDie();    // alex -> bob
   db->connect(0, "friend", 2).ValueOrDie();    // alex -> jeff
   db->connect(1, "works-at", 6).ValueOrDie();  // bob -> google
-  
+
   // Query with SELECT - only get user (u) and friend (f) columns
-  Query query = Query::from("u:users")
-                    .traverse("u", "friend", "f:users", TraverseType::Inner)
-                    .traverse("f", "works-at", "c:companies", TraverseType::Inner)
-                    .select({"u", "f"})  // Only select u.* and f.* columns
-                    .build();
+  Query query =
+      Query::from("u:users")
+          .traverse("u", "friend", "f:users", TraverseType::Inner)
+          .traverse("f", "works-at", "c:companies", TraverseType::Inner)
+          .select({"u", "f"})  // Only select u.* and f.* columns
+          .build();
 
   auto query_result = db->query(query);
   ASSERT_TRUE(query_result.ok());
@@ -1365,7 +1366,8 @@ TEST(JoinTest, SelectClauseFiltering) {
   ASSERT_FALSE(has_company_column) << "Company columns should be filtered out";
 
   // Verify we have the expected number of rows (same as without SELECT)
-  ASSERT_EQ(result_table->num_rows(), 1) << "Should have 1 row for alex->bob->google";
+  ASSERT_EQ(result_table->num_rows(), 1)
+      << "Should have 1 row for alex->bob->google";
 
   // Verify we have expected data in the columns
   auto u_id_col = result_table->GetColumnByName("u.id");
@@ -1402,16 +1404,17 @@ TEST(JoinTest, SelectClauseFiltering) {
 // Test for specific column selection
 TEST(JoinTest, SelectSpecificColumns) {
   auto db = setup_test_db();
-  
+
   // Create some connections for our test
-  db->connect(0, "friend", 1).ValueOrDie();    // alex -> bob
-  db->connect(0, "friend", 2).ValueOrDie();    // alex -> jeff
-  
+  db->connect(0, "friend", 1).ValueOrDie();  // alex -> bob
+  db->connect(0, "friend", 2).ValueOrDie();  // alex -> jeff
+
   // Query with SELECT for specific columns
-  Query query = Query::from("u:users")
-                    .traverse("u", "friend", "f:users", TraverseType::Inner)
-                    .select({"u.name", "f.age"})  // Only select specific columns
-                    .build();
+  Query query =
+      Query::from("u:users")
+          .traverse("u", "friend", "f:users", TraverseType::Inner)
+          .select({"u.name", "f.age"})  // Only select specific columns
+          .build();
 
   auto query_result = db->query(query);
   ASSERT_TRUE(query_result.ok());
@@ -1425,18 +1428,18 @@ TEST(JoinTest, SelectSpecificColumns) {
 
   // Verify we have exactly 2 columns
   ASSERT_EQ(result_table->schema()->num_fields(), 2);
-  
+
   // Verify the column names are exactly what we requested
   ASSERT_EQ(result_table->schema()->field(0)->name(), "u.name");
   ASSERT_EQ(result_table->schema()->field(1)->name(), "f.age");
 
   // Verify we have 2 rows (alex->bob and alex->jeff)
   ASSERT_EQ(result_table->num_rows(), 2);
-  
+
   // Find row with f.age = 31 (bob)
   int bob_row = -1;
   int jeff_row = -1;
-  
+
   auto f_age_col = result_table->GetColumnByName("f.age");
   for (int i = 0; i < result_table->num_rows(); ++i) {
     auto age_scalar = std::static_pointer_cast<arrow::Int64Scalar>(
@@ -1444,20 +1447,20 @@ TEST(JoinTest, SelectSpecificColumns) {
     if (age_scalar->value == 31) {
       bob_row = i;  // Found bob's row
     } else if (age_scalar->value == 33) {
-      jeff_row = i; // Found jeff's row
+      jeff_row = i;  // Found jeff's row
     }
   }
-  
+
   ASSERT_NE(bob_row, -1) << "Should have a row with bob (age 31)";
   ASSERT_NE(jeff_row, -1) << "Should have a row with jeff (age 33)";
-  
+
   // Verify alex's name appears in both rows
   auto u_name_col = result_table->GetColumnByName("u.name");
   auto bob_u_name = std::static_pointer_cast<arrow::StringScalar>(
       u_name_col->GetScalar(bob_row).ValueOrDie());
   auto jeff_u_name = std::static_pointer_cast<arrow::StringScalar>(
       u_name_col->GetScalar(jeff_row).ValueOrDie());
-  
+
   ASSERT_EQ(bob_u_name->view(), "alex");
   ASSERT_EQ(jeff_u_name->view(), "alex");
 }

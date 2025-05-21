@@ -165,8 +165,11 @@ class Query {
   std::shared_ptr<Select> select_;
 
   // Constructor used by Builder
-  Query(SchemaRef from, std::vector<std::shared_ptr<Clause>> clauses, std::shared_ptr<Select> select)
-      : from_(std::move(from)), clauses_(std::move(clauses)), select_(std::move(select)) {}
+  Query(SchemaRef from, std::vector<std::shared_ptr<Clause>> clauses,
+        std::shared_ptr<Select> select)
+      : from_(std::move(from)),
+        clauses_(std::move(clauses)),
+        select_(std::move(select)) {}
 
  public:
   class Builder;
@@ -206,14 +209,16 @@ class Query {
       return *this;
     }
 
-   Builder& select(std::vector<std::string> names = {}) {
+    Builder& select(std::vector<std::string> names = {}) {
       select_ = std::make_shared<Select>(std::move(names));
       return *this;
     }
 
     // Additional builder methods for other clause types
 
-    Query build() { return Query(from_, std::move(clauses_), std::move(select_)); }
+    Query build() {
+      return Query(from_, std::move(clauses_), std::move(select_));
+    }
   };
 };
 

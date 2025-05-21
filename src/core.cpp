@@ -1345,14 +1345,16 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_rows(
 }
 
 #include <arrow/table.h>
+
 #include <memory>
 #include <string>
-#include <vector>
 #include <unordered_set>
+#include <vector>
 
 // Function to project a table based on Select clause
-std::shared_ptr<arrow::Table> apply_select(const std::shared_ptr<Select>& select,
-                                          const std::shared_ptr<arrow::Table>& table) {
+std::shared_ptr<arrow::Table> apply_select(
+    const std::shared_ptr<Select>& select,
+    const std::shared_ptr<arrow::Table>& table) {
   // If select is null or fields are empty, return the original table
   if (!select || select->fields().empty()) {
     return table;
@@ -1383,7 +1385,8 @@ std::shared_ptr<arrow::Table> apply_select(const std::shared_ptr<Select>& select
       is_prefix = false;
     }
 
-    // If it's a prefix (or no exact match was found), find all columns starting with prefix
+    // If it's a prefix (or no exact match was found), find all columns starting
+    // with prefix
     if (is_prefix) {
       std::string prefix = field + ".";
       for (int i = 0; i < all_columns.size(); ++i) {
@@ -1396,11 +1399,13 @@ std::shared_ptr<arrow::Table> apply_select(const std::shared_ptr<Select>& select
   }
 
   // Convert set to vector and sort for consistent column order
-  std::vector<int> column_indices(columns_to_keep.begin(), columns_to_keep.end());
+  std::vector<int> column_indices(columns_to_keep.begin(),
+                                  columns_to_keep.end());
   std::sort(column_indices.begin(), column_indices.end());
 
   // Create a result with selected columns
-  arrow::Result<std::shared_ptr<arrow::Table>> result = table->SelectColumns(column_indices);
+  arrow::Result<std::shared_ptr<arrow::Table>> result =
+      table->SelectColumns(column_indices);
 
   if (!result.ok()) {
     // Handle error - you might want to define how to handle errors

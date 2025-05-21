@@ -219,7 +219,8 @@ T ValueOrDieWithContext(
 /**
  * Convert an Arrow scalar value to a string representation
  */
-std::string stringifyArrowScalar(const std::shared_ptr<arrow::ChunkedArray>& column, int64_t row_idx);
+std::string stringifyArrowScalar(
+    const std::shared_ptr<arrow::ChunkedArray>& column, int64_t row_idx);
 }  // namespace tundradb
 
 #endif  // UTILS_HPP
