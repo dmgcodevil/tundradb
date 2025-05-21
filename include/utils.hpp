@@ -215,6 +215,11 @@ T ValueOrDieWithContext(
 // Macro for easier usage that automatically includes function name
 #define VALUE_OR_DIE_CTX(result, context) \
   ValueOrDieWithContext((result), (context))
+
+/**
+ * Convert an Arrow scalar value to a string representation
+ */
+std::string stringifyArrowScalar(const std::shared_ptr<arrow::ChunkedArray>& column, int64_t row_idx);
 }  // namespace tundradb
 
 #endif  // UTILS_HPP

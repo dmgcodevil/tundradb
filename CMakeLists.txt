@@ -107,6 +107,7 @@ add_library(core
         src/snapshot.cpp
         src/edge_store.cpp
         src/table_info.cpp
+        src/utils.cpp
         include/schema.hpp
 )
 
@@ -146,6 +147,104 @@ target_link_libraries(tundradb
         Parquet::parquet_shared
         nlohmann_json::nlohmann_json
         ${UUID_LIBRARY}
+)
+
+# Interactive shell executable
+add_executable(tundra_shell src/tundra_shell.cpp)
+target_link_libraries(tundra_shell
+    PRIVATE
+        core
+        tundraql_parser
+        Arrow::arrow_shared
+        Parquet::parquet_shared
+        nlohmann_json::nlohmann_json
+        ${UUID_LIBRARY}
+        ${ANTLR4_RUNTIME}
+)
+
+# ANTLR Integration
+# Find Java for running ANTLR generator
+find_package(Java REQUIRED)
+
+# Define ANTLR jar location
+set(ANTLR_JAR_LOCATION "${CMAKE_CURRENT_SOURCE_DIR}/antlr/lib/antlr-4.13.2-complete.jar")
+
+# Set up the output directory
+set(ANTLR_OUTPUT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/antlr_generated")
+file(MAKE_DIRECTORY ${ANTLR_OUTPUT_DIR})
+
+# Define generated files
+set(TUNDRAQL_GENERATED_SRC
+    ${ANTLR_OUTPUT_DIR}/TundraQLLexer.cpp
+    ${ANTLR_OUTPUT_DIR}/TundraQLParser.cpp
+    ${ANTLR_OUTPUT_DIR}/TundraQLBaseListener.cpp
+    ${ANTLR_OUTPUT_DIR}/TundraQLListener.cpp
+    ${ANTLR_OUTPUT_DIR}/TundraQLBaseVisitor.cpp
+    ${ANTLR_OUTPUT_DIR}/TundraQLVisitor.cpp
+)
+
+# Mark files as generated
+foreach(src_file ${TUNDRAQL_GENERATED_SRC})
+    set_source_files_properties(
+        ${src_file}
+        PROPERTIES
+        GENERATED TRUE
+    )
+endforeach()
+
+# Custom target for ANTLR parser generation
+add_custom_target(GenerateTundraQLParser DEPENDS ${TUNDRAQL_GENERATED_SRC})
+
+# Custom command to generate ANTLR files
+add_custom_command(
+    OUTPUT ${TUNDRAQL_GENERATED_SRC}
+    COMMAND
+    ${Java_JAVA_EXECUTABLE} -jar ${ANTLR_JAR_LOCATION} -Werror -Dlanguage=Cpp -listener -visitor -o ${ANTLR_OUTPUT_DIR} -package tundraql ${CMAKE_CURRENT_SOURCE_DIR}/antlr/TundraQL.g4
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/antlr/TundraQL.g4
+    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+    COMMENT "Generating ANTLR4 parser"
+)
+
+# Add ANTLR runtime library
+# On macOS with Homebrew, you may need to adjust these paths
+if(APPLE)
+    find_library(ANTLR4_RUNTIME antlr4-runtime PATHS /opt/homebrew/lib /usr/local/lib)
+    include_directories(/opt/homebrew/include/antlr4-runtime /usr/local/include/antlr4-runtime)
+else()
+    find_library(ANTLR4_RUNTIME antlr4-runtime PATHS /usr/local/lib)
+    include_directories(/usr/local/include/antlr4-runtime)
+endif()
+
+if(NOT ANTLR4_RUNTIME)
+    message(WARNING "ANTLR4 runtime library not found. Please install it via Homebrew or from source.")
+endif()
+
+# Create a library for the ANTLR parser
+add_library(tundraql_parser
+    ${TUNDRAQL_GENERATED_SRC}
+)
+
+# Make sure the parser is generated first
+add_dependencies(tundraql_parser GenerateTundraQLParser)
+
+# Include the generated header files
+target_include_directories(tundraql_parser
+    PUBLIC
+        ${ANTLR_OUTPUT_DIR}
+)
+
+# Link ANTLR runtime to the parser library
+if(ANTLR4_RUNTIME)
+    target_link_libraries(tundraql_parser
+        PRIVATE
+            ${ANTLR4_RUNTIME}
+    )
+endif()
+
+# Link the parser library to the main executable
+target_link_libraries(tundradb
+    PRIVATE
+        tundraql_parser
 )
 
 # Enable testing
