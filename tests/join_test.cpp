@@ -112,6 +112,21 @@ std::shared_ptr<Database> setup_test_db() {
   return db;
 }
 
+TEST(JoinTest, MatchAll) {
+  auto db = setup_test_db();
+  Query query = Query::from("u:users").build();
+  auto query_result = db->query(query);
+  ASSERT_TRUE(query_result.ok());
+
+  auto result_table = query_result.ValueOrDie()->table();
+  ASSERT_NE(result_table, nullptr);
+
+  // Pretty print for debugging if needed
+  std::cout << "Result Table:" << std::endl;
+  arrow::PrettyPrint(*result_table, {}, &std::cout);
+  ASSERT_EQ(result_table->num_rows(), 5);
+}
+
 TEST(JoinTest, UserFriendCompanyInnerJoin) {
   auto db = setup_test_db();
 

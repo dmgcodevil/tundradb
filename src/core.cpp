@@ -1054,7 +1054,11 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows(
   // Map schemas to their join types
   std::unordered_map<std::string, TraverseType> schema_join_types;
   schema_join_types[query_state.from.value()] =
-      TraverseType::Inner;  // FROM is always inner
+      TraverseType::Inner;  // FROM is always inner by default
+  if (traverses.empty()) {
+    schema_join_types[query_state.from.value()] = TraverseType::Left;
+  }
+
   // Only apply LEFT JOIN to FROM schema if the FROM schema is directly involved
   // in a LEFT JOIN traversal
   for (const auto& traverse : traverses) {
