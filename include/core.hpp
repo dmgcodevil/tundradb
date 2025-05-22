@@ -434,7 +434,7 @@ class ShardManager {
     log_debug("inserting node id " + std::to_string(node->id));
     auto it = shards.find(node->schema_name);
     if (it == shards.end()) {
-      std::cout << " Create new schema entry for: " << node->schema_name
+      std::cout << " Create new shard entry for: " << node->schema_name
                 << std::endl;
       shards[node->schema_name] = std::vector<std::shared_ptr<Shard>>();
       create_new_shard(node);

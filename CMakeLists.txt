@@ -24,6 +24,7 @@ find_package(GTest REQUIRED)
 find_package(TBB REQUIRED)
 
 include_directories(libs/linenoise)
+include_directories(libs/json)
 
 message(STATUS "ArrowDataset libs: ${ARROW_DATASET_LIBRARIES}")
 
@@ -55,20 +56,20 @@ elseif(UNIX)
 endif()
 
 # Check if nlohmann_json target already exists
-if(NOT TARGET nlohmann_json::nlohmann_json)
-  # Include FetchContent for downloading dependencies
-  include(FetchContent)
-
-  # Add nlohmann/json
-  FetchContent_Declare(
-    json
-    GIT_REPOSITORY https://github.com/nlohmann/json.git
-    GIT_TAG v3.11.2
-  )
-  FetchContent_MakeAvailable(json)
-else()
-  message(STATUS "nlohmann_json target already exists, skipping FetchContent")
-endif()
+#if(NOT TARGET nlohmann_json::nlohmann_json)
+#  # Include FetchContent for downloading dependencies
+#  include(FetchContent)
+#
+#  # Add nlohmann/json
+#  FetchContent_Declare(
+#    json
+#    GIT_REPOSITORY https://github.com/nlohmann/json.git
+#    GIT_TAG v3.11.2
+#  )
+#  FetchContent_MakeAvailable(json)
+#else()
+#  message(STATUS "nlohmann_json target already exists, skipping FetchContent")
+#endif()
 # Check if we already have json in a local path
 #set(JSON_SOURCE_DIR "${CMAKE_SOURCE_DIR}/external/json" CACHE PATH "Path to json source")
 #
@@ -127,7 +128,6 @@ target_link_libraries(core
         Arrow::arrow_shared
         ArrowDataset::arrow_dataset_shared
         Parquet::parquet_shared
-        nlohmann_json::nlohmann_json
         spdlog::spdlog
         ${UUID_LIBRARY}
         ${CDS_LIB}
@@ -147,7 +147,6 @@ target_link_libraries(tundradb
         core
         Arrow::arrow_shared
         Parquet::parquet_shared
-        nlohmann_json::nlohmann_json
         ${UUID_LIBRARY}
 )
 
@@ -159,7 +158,6 @@ target_link_libraries(tundra_shell
         tundraql_parser
         Arrow::arrow_shared
         Parquet::parquet_shared
-        nlohmann_json::nlohmann_json
         ${UUID_LIBRARY}
         ${ANTLR4_RUNTIME}
 )

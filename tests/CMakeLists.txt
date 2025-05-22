@@ -111,7 +111,6 @@ target_link_libraries(sharding_test
         core
         Arrow::arrow_shared
         Parquet::parquet_shared
-        nlohmann_json::nlohmann_json
         GTest::GTest
         GTest::Main
         pthread
@@ -123,7 +122,6 @@ target_link_libraries(snapshot_test
         core
         Arrow::arrow_shared
         Parquet::parquet_shared
-        nlohmann_json::nlohmann_json
         GTest::GTest
         GTest::Main
         pthread
@@ -187,7 +185,6 @@ target_link_libraries(database_test
         core
         Arrow::arrow_shared
         Parquet::parquet_shared
-        nlohmann_json::nlohmann_json
         GTest::GTest
         GTest::Main
         pthread
@@ -199,7 +196,6 @@ target_link_libraries(join_test
         core
         Arrow::arrow_shared
         Parquet::parquet_shared
-        nlohmann_json::nlohmann_json
         GTest::GTest
         GTest::Main
         pthread

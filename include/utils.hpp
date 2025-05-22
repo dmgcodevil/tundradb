@@ -72,6 +72,7 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
     const std::shared_ptr<arrow::Schema>& schema,
     const std::vector<std::shared_ptr<Node>>& nodes, size_t chunk_size) {
   auto final_schema = schema;  // prepend_id_field(schema);
+  log_info("Creating table. schema: {}", schema->ToString());
   if (nodes.empty()) {
     // Return empty table with the given schema
     std::vector<std::shared_ptr<arrow::ChunkedArray>> empty_columns;
@@ -106,11 +107,11 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
 
   for (const auto& node : nodes) {
     // explicitly add id field
-    ARROW_RETURN_NOT_OK(
-        static_cast<arrow::Int64Builder*>(builders[0].get())->Append(node->id));
+    // ARROW_RETURN_NOT_OK(
+    //     static_cast<arrow::Int64Builder*>(builders[0].get())->Append(node->id));
     // For each field, extract the value from the node and append to the builder
     // start from 1 to skip "id" field
-    for (int i = 1; i < final_schema->num_fields(); i++) {
+    for (int i = 0; i < final_schema->num_fields(); i++) {
       const auto& field = final_schema->field(i);
       auto field_result = node->get_field(field->name());
       if (!field_result.ok()) {
