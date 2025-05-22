@@ -11,10 +11,149 @@
 
 #include "file_utils.hpp"
 #include "logger.hpp"
+#include "types.hpp"
 
 using namespace std::string_literals;
 
 namespace tundradb {
+
+/**
+ * @brief A simplified representation of a field schema
+ */
+struct FieldMetadata {
+  std::string name;
+  ValueType type;
+  bool nullable = true;
+
+  // Allow JSON serialization/deserialization
+  NLOHMANN_DEFINE_TYPE_INTRUSIVE(FieldMetadata, name, type, nullable)
+};
+
+/**
+ * @brief A simplified representation of a schema
+ */
+struct SchemaMetadata {
+  std::string name;
+  int version;
+  std::vector<FieldMetadata> fields;
+
+  // Allow JSON serialization/deserialization
+  NLOHMANN_DEFINE_TYPE_INTRUSIVE(SchemaMetadata, name, version, fields)
+};
+
+/**
+ * @brief Convert an Arrow field to FieldMetadata
+ *
+ * @param field The Arrow field to convert
+ * @return arrow::Result<FieldMetadata> The resulting field metadata
+ */
+inline arrow::Result<FieldMetadata> ArrowFieldToMetadata(
+    const std::shared_ptr<arrow::Field> &field) {
+  FieldMetadata result;
+  result.name = field->name();
+  result.nullable = field->nullable();
+
+  switch (field->type()->id()) {
+    case arrow::Type::BOOL:
+      result.type = ValueType::Bool;
+      break;
+    case arrow::Type::INT8:
+    case arrow::Type::INT16:
+    case arrow::Type::INT32:
+    case arrow::Type::INT64:
+    case arrow::Type::UINT8:
+    case arrow::Type::UINT16:
+    case arrow::Type::UINT32:
+    case arrow::Type::UINT64:
+      result.type = ValueType::Int64;
+      break;
+    case arrow::Type::FLOAT:
+    case arrow::Type::DOUBLE:
+      result.type = ValueType::Double;
+      break;
+    case arrow::Type::STRING:
+    case arrow::Type::LARGE_STRING:
+      result.type = ValueType::String;
+      break;
+    default:
+      return arrow::Status::NotImplemented("Unsupported Arrow type: ",
+                                           field->type()->ToString());
+  }
+
+  return result;
+}
+
+/**
+ * @brief Convert FieldMetadata to an Arrow field
+ *
+ * @param metadata The field metadata to convert
+ * @return arrow::Result<std::shared_ptr<arrow::Field>> The resulting Arrow
+ * field
+ */
+inline arrow::Result<std::shared_ptr<arrow::Field>> MetadataToArrowField(
+    const FieldMetadata &metadata) {
+  std::shared_ptr<arrow::DataType> type;
+
+  switch (metadata.type) {
+    case ValueType::Bool:
+      type = arrow::boolean();
+      break;
+    case ValueType::Int64:
+      type = arrow::int64();
+      break;
+    case ValueType::Double:
+      type = arrow::float64();
+      break;
+    case ValueType::String:
+      type = arrow::utf8();
+      break;
+    default:
+      return arrow::Status::NotImplemented("Unsupported ValueType: ",
+                                           static_cast<int>(metadata.type));
+  }
+
+  return arrow::field(metadata.name, type, metadata.nullable);
+}
+
+/**
+ * @brief Convert an Arrow schema to SchemaMetadata
+ *
+ * @param schema The Arrow schema to convert
+ * @return arrow::Result<SchemaMetadata> The resulting schema metadata
+ */
+inline arrow::Result<SchemaMetadata> ArrowSchemaToMetadata(
+    const std::string &schema_name,
+    const std::shared_ptr<arrow::Schema> &schema) {
+  SchemaMetadata result;
+  result.name = schema_name;
+  result.version = 0;
+
+  for (const auto &field : schema->fields()) {
+    ARROW_ASSIGN_OR_RAISE(auto field_metadata, ArrowFieldToMetadata(field));
+    result.fields.push_back(field_metadata);
+  }
+
+  return result;
+}
+
+/**
+ * @brief Convert SchemaMetadata to an Arrow schema
+ *
+ * @param metadata The schema metadata to convert
+ * @return arrow::Result<std::shared_ptr<arrow::Schema>> The resulting Arrow
+ * schema
+ */
+inline arrow::Result<std::shared_ptr<arrow::Schema>> MetadataToArrowSchema(
+    const SchemaMetadata &metadata) {
+  std::vector<std::shared_ptr<arrow::Field>> fields;
+
+  for (const auto &field_metadata : metadata.fields) {
+    ARROW_ASSIGN_OR_RAISE(auto field, MetadataToArrowField(field_metadata));
+    fields.push_back(field);
+  }
+
+  return arrow::schema(fields);
+}
 
 struct Snapshot {
   int64_t id = 0;
@@ -42,6 +181,7 @@ struct Snapshot {
 struct Metadata {
   int current_snapshot_index = -1;
   std::vector<Snapshot> snapshots;
+  std::vector<SchemaMetadata> schemas;
 
   // Get current snapshot safely
   Snapshot *get_current_snapshot() {
@@ -62,13 +202,15 @@ struct Metadata {
 
   // Custom serialization for Metadata
   friend void to_json(nlohmann::json &j, const Metadata &m) {
-    j = nlohmann::json{{"snapshots", m.snapshots},
+    j = nlohmann::json{{"schemas", m.schemas},
+                       {"snapshots", m.snapshots},
                        {"current_snapshot_index", m.current_snapshot_index}};
   }
 
   // Custom deserialization for Metadata
   friend void from_json(const nlohmann::json &j, Metadata &m) {
     j.at("snapshots").get_to(m.snapshots);
+    j.at("schemas").get_to(m.schemas);
     m.current_snapshot_index = j.value("current_snapshot_index", -1);
   }
 

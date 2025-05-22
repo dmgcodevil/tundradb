@@ -3,6 +3,7 @@
 #include <arrow/pretty_print.h>
 #include <spdlog/spdlog.h>
 
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <sstream>
@@ -14,6 +15,7 @@
 #include "antlr_generated/TundraQLLexer.h"
 #include "antlr_generated/TundraQLParser.h"
 #include "core.hpp"
+#include "logger.hpp"
 #include "utils.hpp"
 
 // Function prototypes
@@ -58,7 +60,7 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
 
     // Add schema to registry
     auto schema_registry = db.get_schema_registry();
-    auto result = schema_registry->add(schema_name, arrow_schema);
+    auto result = schema_registry->create(schema_name, arrow_schema);
     if (!result.ok()) {
       throw std::runtime_error("Failed to add schema: " +
                                result.status().ToString());
@@ -358,6 +360,22 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
 
     return result_table;
   }
+  antlrcpp::Any visitCommitStatement(
+      tundraql::TundraQLParser::CommitStatementContext* ctx) override {
+    spdlog::info("Executing COMMIT command");
+
+    // Create a snapshot
+    auto result = db.create_snapshot();
+    if (!result.ok()) {
+      throw std::runtime_error("Failed to create snapshot: " +
+                               result.status().ToString());
+    }
+
+    auto snapshot_id = result.ValueOrDie();
+    std::cout << "Created snapshot with ID: " << snapshot_id << std::endl;
+
+    return snapshot_id;
+  }
 };
 
 // Custom formatter for tables using ASCII art
@@ -507,16 +525,43 @@ std::string stringifyArrowScalar(
       auto bool_array = std::static_pointer_cast<arrow::BooleanArray>(chunk);
       return bool_array->Value(chunk_row) ? "true" : "false";
     }
+    case arrow::Type::TIMESTAMP: {
+      auto timestamp_array =
+          std::static_pointer_cast<arrow::TimestampArray>(chunk);
+      return std::to_string(timestamp_array->Value(chunk_row));
+    }
     default:
-      return "Unsupported type";
+      return "Unsupported";
   }
 }
 }  // namespace tundradb
 
-int main() {
-  // Initialize database with a temporary path
-  std::string db_path =
-      "tundra_shell_db_" + std::to_string(tundradb::now_millis());
+int main(int argc, char* argv[]) {
+  tundradb::Logger::getInstance().setLevel(tundradb::LogLevel::DEBUG);
+  // Parse command-line arguments
+  std::string db_path = "./test-db";
+
+  // Simple argument parsing
+  for (int i = 1; i < argc; i++) {
+    std::string arg = argv[i];
+    if (arg == "--db-path" || arg == "-d") {
+      if (i + 1 < argc) {
+        db_path = argv[++i];
+      } else {
+        std::cerr << "Error: --db-path requires a directory path\n";
+        return 1;
+      }
+    } else if (arg == "--help" || arg == "-h") {
+      std::cout << "Usage: tundra_shell [OPTIONS]\n"
+                << "Options:\n"
+                << "  -d, --db-path PATH   Set the database path (default: "
+                   "./test-db)\n"
+                << "  -h, --help           Show this help message\n";
+      return 0;
+    }
+  }
+
+  // Initialize database with the specified path
   auto config = tundradb::make_config()
                     .with_db_path(db_path)
                     .with_shard_capacity(1000)

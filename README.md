@@ -104,6 +104,14 @@ CREATE EDGE FRIEND FROM User(0) TO User(2);  -- Alex is friends with Jeff
 CREATE EDGE FRIEND FROM User(1) TO User(4);  -- Bob is friends with Matt
 ```
 
+### Commiting changes
+
+To store data on disk:
+
+```sql
+COMMIT;
+```
+
 ## Query Examples
 
 ### Basic Node Queries

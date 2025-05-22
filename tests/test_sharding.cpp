@@ -32,7 +32,7 @@ class ShardingTest : public ::testing::Test {
     auto name_field = arrow::field("name", arrow::utf8());
     auto count_field = arrow::field("count", arrow::int64());
     auto schema = arrow::schema({name_field, count_field});
-    auto result = db->get_schema_registry()->add("test-schema", schema);
+    auto result = db->get_schema_registry()->create("test-schema", schema);
     ASSERT_TRUE(result.ok())
         << "Failed to register schema: " << result.status().ToString();
   }
@@ -213,7 +213,7 @@ class CompactionTest : public ::testing::TestWithParam<CompactionScenario> {
     auto counter_field = arrow::field("counter", arrow::int64());
     auto schema = arrow::schema({counter_field});
 
-    auto result = db->get_schema_registry()->add("test-schema", schema);
+    auto result = db->get_schema_registry()->create("test-schema", schema);
     ASSERT_TRUE(result.ok())
         << "Failed to register schema: " << result.status().ToString();
   }

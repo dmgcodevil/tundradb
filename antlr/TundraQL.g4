@@ -1,7 +1,7 @@
 grammar TundraQL;
 
 // Entry point for parsing a full command
-statement: createSchemaStatement | createNodeStatement | createEdgeStatement | matchStatement EOF;
+statement: createSchemaStatement | createNodeStatement | createEdgeStatement | matchStatement | commitStatement EOF;
 
 // --- Schema Definition ---
 createSchemaStatement: K_CREATE K_SCHEMA IDENTIFIER LPAREN schemaFieldList RPAREN SEMI;
@@ -21,6 +21,9 @@ nodeLocator: IDENTIFIER LPAREN INTEGER_LITERAL RPAREN; // e.g., User(123)
 
 // --- Match Statement ---
 matchStatement: K_MATCH pathPattern (K_WHERE whereClause)? (K_SELECT selectClause)? SEMI;
+
+// --- Commit Statement ---
+commitStatement: K_COMMIT SEMI;
 
 pathPattern: nodePattern (edgePattern nodePattern)*;
 
@@ -63,6 +66,7 @@ K_RIGHT: 'RIGHT';
 K_FULL: 'FULL';
 K_AND: 'AND';
 K_OR: 'OR';
+K_COMMIT: 'COMMIT';
 
 // --- Data Types for Schema ---
 T_STRING: 'STRING';

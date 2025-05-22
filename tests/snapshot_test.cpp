@@ -35,7 +35,7 @@ void create_user_schema(Database& db) {
   auto age_field = arrow::field("age", arrow::int64());
   auto schema = arrow::schema({name_field, age_field});
 
-  db.get_schema_registry()->add("users", schema).ValueOrDie();
+  db.get_schema_registry()->create("users", schema).ValueOrDie();
 }
 
 // Test fixture to handle setup and teardown

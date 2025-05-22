@@ -20,7 +20,23 @@ arrow::Result<bool> SnapshotManager::initialize() {
     if (this->metadata.get_current_snapshot() != nullptr) {
       log_info("Current snapshot id = " +
                std::to_string(this->metadata.get_current_snapshot()->id));
-
+      log_info("Initializing schemas");
+      for (const auto &schema_metadata : this->metadata.schemas) {
+        log_info("Loading schema " + schema_metadata.name);
+        auto arrow_schema_result = MetadataToArrowSchema(schema_metadata);
+        if (!arrow_schema_result.ok()) {
+          log_error("Failed to load schema: " +
+                    arrow_schema_result.status().ToString());
+        }
+        auto arrow_shema = arrow_schema_result.ValueOrDie();
+        auto add_schema_result =
+            schema_registry_->add(schema_metadata.name, arrow_shema);
+        if (!add_schema_result.ok()) {
+          log_error("Failed to add schema to registry: " +
+                    add_schema_result.status().ToString());
+          return arrow_schema_result.status();
+        }
+      }
       log_info("Load the manifest and initialize shards");
       auto manifest_result = read_json_file<Manifest>(
           this->metadata.get_current_snapshot()->manifest_location);
@@ -74,6 +90,7 @@ arrow::Result<bool> SnapshotManager::initialize() {
 
       // Load and add each shard
       for (auto &[schema_name, shards] : grouped_shards) {
+        log_info("Loading shard '{}', size={}", schema_name, shards.size());
         for (auto &shard_metadata : shards) {
           auto shard_result = this->storage->read_shard(shard_metadata);
           if (!shard_result.ok()) {
@@ -98,6 +115,10 @@ arrow::Result<bool> SnapshotManager::initialize() {
             log_error("Failed to add shard: " + add_result.status().ToString());
             return add_result
                 .status();  // Return the error instead of continuing
+          }
+          for (const auto &node : shard->get_nodes()) {
+            log_debug("Adding node {}", node->id);
+            node_manager->add_node(node);
           }
         }
       }
@@ -271,6 +292,15 @@ arrow::Result<Snapshot> SnapshotManager::commit() {
   std::string metadata_location =
       this->metadata_manager->write_metadata(this->metadata).ValueOrDie();
   log_info("Saved metadata to: " + metadata_location);
+
+  log_info("Updating schemas");
+  std::vector<SchemaMetadata> schemas;
+  for (const auto &name : this->schema_registry_->get_schema_names()) {
+    auto arrow_shema = this->schema_registry_->get(name).ValueOrDie();
+    schemas.push_back(ArrowSchemaToMetadata(name, arrow_shema).ValueOrDie());
+  }
+  log_info("schemas count {}", schemas.size());
+  this->metadata.schemas = schemas;
 
   // Update database info to point to the new metadata location
   DatabaseInfo db_info;

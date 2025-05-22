@@ -47,12 +47,14 @@ class SnapshotManager {
                            std::shared_ptr<Storage> storage,
                            std::shared_ptr<ShardManager> shard_manager,
                            std::shared_ptr<EdgeStore> edge_store,
-                           std::shared_ptr<NodeManager> node_manager)
+                           std::shared_ptr<NodeManager> node_manager,
+                           std::shared_ptr<SchemaRegistry> schema_registry)
       : metadata_manager(std::move(metadata_manager)),
         storage(std::move(storage)),
         shard_manager(std::move(shard_manager)),
         edge_store(std::move(edge_store)),
-        node_manager(std::move(node_manager)) {}
+        node_manager(std::move(node_manager)),
+        schema_registry_(std::move(schema_registry)) {}
 
   arrow::Result<bool> initialize();
   arrow::Result<Snapshot> commit();
@@ -63,6 +65,7 @@ class SnapshotManager {
   std::shared_ptr<MetadataManager> metadata_manager;
   std::shared_ptr<Storage> storage;
   std::shared_ptr<ShardManager> shard_manager;
+  std::shared_ptr<SchemaRegistry> schema_registry_;
   std::shared_ptr<EdgeStore> edge_store;
   std::shared_ptr<NodeManager> node_manager;
   Metadata metadata;
@@ -715,7 +718,8 @@ class Database {
                                           config);
       metadata_manager = std::make_shared<MetadataManager>(db_path);
       snapshot_manager = std::make_shared<SnapshotManager>(
-          metadata_manager, storage, shard_manager, edge_store, node_manager);
+          metadata_manager, storage, shard_manager, edge_store, node_manager,
+          schema_registry);
     }
   }
 

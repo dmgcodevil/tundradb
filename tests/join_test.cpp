@@ -99,8 +99,8 @@ std::shared_ptr<Database> setup_test_db() {
   auto users_schema = create_users_schema();
   auto companies_schema = create_companies_schema();
   auto db = std::make_shared<Database>(config);
-  db->get_schema_registry()->add("users", users_schema).ValueOrDie();
-  db->get_schema_registry()->add("companies", companies_schema).ValueOrDie();
+  db->get_schema_registry()->create("users", users_schema).ValueOrDie();
+  db->get_schema_registry()->create("companies", companies_schema).ValueOrDie();
   const auto users =
       std::vector({User{"alex", 25}, User{"bob", 31}, User{"jeff", 33},
                    User{"sam", 21}, User{"matt", 40}});

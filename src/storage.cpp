@@ -163,7 +163,6 @@ arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(
         std::static_pointer_cast<arrow::Int64Array>(node_data["id"]);
     int64_t node_id = id_array->Value(0);
 
-    node_data.erase("id");
     auto node =
         std::make_shared<Node>(node_id, shard_metadata.schema_name, node_data);
 

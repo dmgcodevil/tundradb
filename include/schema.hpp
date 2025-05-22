@@ -37,10 +37,16 @@ class SchemaRegistry {
   }
 
   // Add a schema with the given name
-  arrow::Result<bool> add(const std::string &name,
-                          std::shared_ptr<arrow::Schema> schema) {
+  arrow::Result<bool> create(const std::string &name,
+                             std::shared_ptr<arrow::Schema> schema) {
     auto normalized_schema = PrependIdField(schema);
     schemas.insert(std::make_pair(name, normalized_schema));
+    return {true};
+  }
+
+  arrow::Result<bool> add(const std::string &name,
+                          std::shared_ptr<arrow::Schema> schema) {
+    schemas.insert(std::make_pair(name, schema));
     return {true};
   }
 

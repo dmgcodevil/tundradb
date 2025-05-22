@@ -44,7 +44,7 @@ class DatabaseTest : public ::testing::Test {
     auto name_field = arrow::field("name", arrow::utf8());
     auto age_field = arrow::field("age", arrow::int64());
     auto schema = arrow::schema({name_field, age_field});
-    db.get_schema_registry()->add("users", schema).ValueOrDie();
+    db.get_schema_registry()->create("users", schema).ValueOrDie();
   }
 
   // Helper to create user nodes
