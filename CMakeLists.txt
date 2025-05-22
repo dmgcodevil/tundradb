@@ -23,6 +23,8 @@ find_package(benchmark REQUIRED)
 find_package(GTest REQUIRED)
 find_package(TBB REQUIRED)
 
+include_directories(libs/linenoise)
+
 message(STATUS "ArrowDataset libs: ${ARROW_DATASET_LIBRARIES}")
 
 # Find CDS library
@@ -150,7 +152,7 @@ target_link_libraries(tundradb
 )
 
 # Interactive shell executable
-add_executable(tundra_shell src/tundra_shell.cpp)
+add_executable(tundra_shell src/tundra_shell.cpp libs/linenoise/linenoise.c)
 target_link_libraries(tundra_shell
     PRIVATE
         core

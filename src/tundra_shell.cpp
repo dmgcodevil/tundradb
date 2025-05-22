@@ -3,19 +3,19 @@
 #include <arrow/pretty_print.h>
 #include <spdlog/spdlog.h>
 
-#include <fstream>
 #include <iostream>
 #include <memory>
 #include <sstream>
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <fstream>
 
+#include "linenoise.h"
 #include "antlr_generated/TundraQLBaseVisitor.h"
 #include "antlr_generated/TundraQLLexer.h"
 #include "antlr_generated/TundraQLParser.h"
 #include "core.hpp"
-#include "logger.hpp"
 #include "utils.hpp"
 
 // Function prototypes
@@ -60,7 +60,7 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
 
     // Add schema to registry
     auto schema_registry = db.get_schema_registry();
-    auto result = schema_registry->create(schema_name, arrow_schema);
+    auto result = schema_registry->add(schema_name, arrow_schema);
     if (!result.ok()) {
       throw std::runtime_error("Failed to add schema: " +
                                result.status().ToString());
@@ -360,6 +360,8 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
 
     return result_table;
   }
+
+  // Handle COMMIT statements
   antlrcpp::Any visitCommitStatement(
       tundraql::TundraQLParser::CommitStatementContext* ctx) override {
     spdlog::info("Executing COMMIT command");
@@ -536,94 +538,166 @@ std::string stringifyArrowScalar(
 }
 }  // namespace tundradb
 
-int main(int argc, char* argv[]) {
-  tundradb::Logger::getInstance().setLevel(tundradb::LogLevel::DEBUG);
-  // Parse command-line arguments
-  std::string db_path = "./test-db";
-
-  // Simple argument parsing
-  for (int i = 1; i < argc; i++) {
-    std::string arg = argv[i];
-    if (arg == "--db-path" || arg == "-d") {
-      if (i + 1 < argc) {
-        db_path = argv[++i];
-      } else {
-        std::cerr << "Error: --db-path requires a directory path\n";
-        return 1;
-      }
-    } else if (arg == "--help" || arg == "-h") {
-      std::cout << "Usage: tundra_shell [OPTIONS]\n"
-                << "Options:\n"
-                << "  -d, --db-path PATH   Set the database path (default: "
-                   "./test-db)\n"
-                << "  -h, --help           Show this help message\n";
-      return 0;
+// Auto-completion function for linenoise
+static void completionCallback(const char *buf, linenoiseCompletions *lc) {
+    // Add basic TundraQL keywords for auto-completion
+    if (buf[0] == '\0') {
+        // Empty buffer, show all top-level commands
+        linenoiseAddCompletion(lc, "CREATE ");
+        linenoiseAddCompletion(lc, "MATCH ");
+        linenoiseAddCompletion(lc, "COMMIT");
+        return;
     }
-  }
+    
+    // Handle CREATE completion
+    if (strncasecmp(buf, "CREATE ", 7) == 0) {
+        linenoiseAddCompletion(lc, "CREATE SCHEMA ");
+        linenoiseAddCompletion(lc, "CREATE NODE ");
+        linenoiseAddCompletion(lc, "CREATE EDGE ");
+        return;
+    }
+    
+    // More completion logic can be added here for other commands
+}
 
-  // Initialize database with the specified path
-  auto config = tundradb::make_config()
+// Hinting function for linenoise (shows hints as you type)
+static char *hintsCallback(const char *buf, int *color, int *bold) {
+    // Set hint color to gray
+    *color = 35; // Magenta
+    *bold = 0;
+    
+    if (strcmp(buf, "CREATE ") == 0) {
+        return const_cast<char*>("SCHEMA|NODE|EDGE");
+    }
+    if (strcmp(buf, "CREATE SCHEMA ") == 0) {
+        return const_cast<char*>("name (field1: TYPE, ...)");
+    }
+    if (strcmp(buf, "CREATE NODE ") == 0) {
+        return const_cast<char*>("type (prop1=value1, ...)");
+    }
+    if (strcmp(buf, "CREATE EDGE ") == 0) {
+        return const_cast<char*>("type FROM source TO target");
+    }
+    if (strcmp(buf, "MATCH ") == 0) {
+        return const_cast<char*>("(node1)-[rel]->(node2)");
+    }
+    
+    // More hints can be added here
+    return NULL;
+}
+
+int main(int argc, char* argv[]) {
+    // Parse command-line arguments
+    std::string db_path = "./test-db";
+    
+    // Simple argument parsing
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+        if (arg == "--db-path" || arg == "-d") {
+            if (i + 1 < argc) {
+                db_path = argv[++i];
+            } else {
+                std::cerr << "Error: --db-path requires a directory path\n";
+                return 1;
+            }
+        } else if (arg == "--help" || arg == "-h") {
+            std::cout << "Usage: tundra_shell [OPTIONS]\n"
+                      << "Options:\n"
+                      << "  -d, --db-path PATH   Set the database path (default: ./test-db)\n"
+                      << "  -h, --help           Show this help message\n";
+            return 0;
+        }
+    }
+    
+    // Initialize database with the specified path
+    auto config = tundradb::make_config()
                     .with_db_path(db_path)
                     .with_shard_capacity(1000)
                     .with_chunk_size(1000)
                     .build();
-
-  tundradb::Database db(config);
-  auto init_result = db.initialize();
-  if (!init_result.ok()) {
-    std::cerr << "Failed to initialize database: "
-              << init_result.status().ToString() << std::endl;
-    return 1;
-  }
-
-  std::cout << "TundraDB Shell\n";
-  std::cout << "Type 'exit' to quit\n";
-  std::cout << "Database path: " << db_path << "\n";
-
-  std::string input;
-
-  while (true) {
-    std::cout << "\ntundra> ";
-    std::string line;
-    std::getline(std::cin, line);
-
-    if (line == "exit") {
-      break;
+    
+    tundradb::Database db(config);
+    auto init_result = db.initialize();
+    if (!init_result.ok()) {
+        std::cerr << "Failed to initialize database: " << init_result.status().ToString() << std::endl;
+        return 1;
     }
-
-    // Accumulate input until we get a semicolon
-    input += line;
-    if (input.find(';') == std::string::npos) {
-      input += " ";  // Add space for multi-line input
-      continue;
+    
+    std::cout << "TundraDB Shell\n";
+    std::cout << "Type 'exit' to quit\n";
+    std::cout << "Database path: " << db_path << "\n";
+    
+    // Set up linenoise
+    linenoiseSetCompletionCallback(completionCallback);
+    linenoiseSetHintsCallback(hintsCallback);
+    linenoiseHistorySetMaxLen(1000);
+    
+    // Load history from file if exists
+    std::string history_file = db_path + "/tundra_history.txt";
+    linenoiseHistoryLoad(history_file.c_str());
+    
+    // Define multi-line mode state
+    bool multi_line_mode = false;
+    std::string input;
+    
+    // Main input loop
+    char* line;
+    while ((line = linenoise("tundra> ")) != nullptr) {
+        // Skip empty lines
+        if (strlen(line) == 0) {
+            free(line);
+            continue;
+        }
+        
+        // Handle exit command
+        if (strcmp(line, "exit") == 0) {
+            free(line);
+            break;
+        }
+        
+        // Add line to history
+        linenoiseHistoryAdd(line);
+        linenoiseHistorySave(history_file.c_str());
+        
+        // Process the line
+        std::string line_str(line);
+        free(line);
+        
+        // Accumulate input until we get a semicolon
+        input += line_str;
+        
+        // Check if the query is complete (ends with semicolon)
+        if (input.find(';') != std::string::npos) {
+            try {
+                // Parse the input
+                antlr4::ANTLRInputStream input_stream(input);
+                tundraql::TundraQLLexer lexer(&input_stream);
+                antlr4::CommonTokenStream tokens(&lexer);
+                tundraql::TundraQLParser parser(&tokens);
+                
+                auto statement = parser.statement();
+                
+                if (parser.getNumberOfSyntaxErrors() > 0) {
+                    std::cerr << "Syntax error in input\n";
+                    input.clear();
+                    continue;
+                }
+                
+                // Visit the parse tree
+                TundraQLVisitorImpl visitor(db);
+                visitor.visit(statement);
+                
+            } catch (const std::exception& e) {
+                std::cerr << "Error: " << e.what() << std::endl;
+            }
+            
+            // Clear input for next command
+            input.clear();
+        } else {
+            // Incomplete query, add a space for continuation
+            input += " ";
+        }
     }
-
-    try {
-      // Parse the input
-      antlr4::ANTLRInputStream input_stream(input);
-      tundraql::TundraQLLexer lexer(&input_stream);
-      antlr4::CommonTokenStream tokens(&lexer);
-      tundraql::TundraQLParser parser(&tokens);
-
-      auto statement = parser.statement();
-
-      if (parser.getNumberOfSyntaxErrors() > 0) {
-        std::cerr << "Syntax error in input\n";
-        input.clear();
-        continue;
-      }
-
-      // Visit the parse tree
-      TundraQLVisitorImpl visitor(db);
-      visitor.visit(statement);
-
-    } catch (const std::exception& e) {
-      std::cerr << "Error: " << e.what() << std::endl;
-    }
-
-    // Clear input for next command
-    input.clear();
-  }
-
-  return 0;
+    
+    return 0;
 }
