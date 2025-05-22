@@ -25,6 +25,19 @@ Required dependencies:
 - Apache Arrow: `brew install apache-arrow`
 - spdlog: `brew install spdlog`
 - libcds: `brew install libcds`
+- gtest: `brew install googletest`
+- Google Benchmark:
+  ```
+    git clone https://github.com/google/benchmark.git && \
+    cd benchmark && \
+    mkdir build && \
+    cd build && \
+    cmake -DCMAKE_BUILD_TYPE=Release -DBENCHMARK_ENABLE_GTEST_TESTS=OFF .. && \
+    make -j && \
+    make install && \
+  ```
+- TBB: `brew install tbb`
+- Java: `brew install openjdk@21` then `export PATH="/opt/homebrew/opt/openjdk@21/bin:$PATH"`
 
 ## Getting Started
 
