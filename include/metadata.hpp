@@ -4,7 +4,7 @@
 #include <arrow/result.h>
 
 #include <filesystem>
-#include <nlohmann/json.hpp>
+#include "../libs/json/json.hpp"
 #include <sstream>
 #include <string>
 #include <vector>

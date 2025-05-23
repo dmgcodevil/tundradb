@@ -5,7 +5,7 @@
 
 #include <filesystem>
 #include <fstream>
-#include <nlohmann/json.hpp>
+#include "../libs/json/json.hpp"
 #include <string>
 
 namespace tundradb {

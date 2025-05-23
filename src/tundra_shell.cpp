@@ -1,7 +1,7 @@
 #include <cstdio>  // Include this first to define EOF
 
 // First include json before antlr to prevent conflicts
-#include <nlohmann/json.hpp>
+#include "../libs/json/json.hpp"
 
 // Now include Arrow libraries
 #include <arrow/api.h>

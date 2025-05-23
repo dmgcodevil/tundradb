@@ -10,7 +10,7 @@
 
 #include <filesystem>
 #include <fstream>
-#include <nlohmann/json.hpp>
+#include "../libs/json/json.hpp"
 #include <random>
 #include <string>
 #include <unordered_map>
