@@ -244,13 +244,15 @@ CREATE EDGE FRIEND FROM User(0) TO User(2);  -- Alex is friends with Jeff
 
 ```
 
-Query-1:
+#### Test-1
+
+Query:
 
 ```sql
 MATCH (u:User)-[:FRIEND INNER]->(f:User);
 ```
 
-Result-1 (Correct):
+Result (✅ Correct):
 
 ```
 +======+========+=======+======+========+=======+
@@ -265,13 +267,15 @@ Result-1 (Correct):
 ✓ Correct - Shows only Alex's relationships with Bob and Jeff
 ✓ Matches only exist where there's a FRIEND relationship
 
-Query-2:
+#### Test-2
+
+Query:
 
 ```sql
 MATCH (u:User)-[:FRIEND LEFT]->(f:User);
 ```
 
-Result-2 (Correct):
+Result (✅  Correct):
 
 ```
 +======+========+=======+======+========+=======+
@@ -292,13 +296,14 @@ Result-2 (Correct):
 ✓ Correct - Shows all users on the left side
 ✓ Bob, Jeff, and Sam have NULL values on the right because they don't have outgoing FRIEND relationships
 
-Query-3:
+#### Test-3
+Query:
 
 ```sql
 MATCH (u:User)-[:FRIEND RIGHT]->(f:User);
 ```
 
-Result-3 (Correct):
+Result (✅ Correct):
 
 ```
 +======+========+=======+======+========+=======+
@@ -315,13 +320,15 @@ Result-3 (Correct):
 ✓ Correct - Shows all users on the right side
 ✓ Sam has NULL values on the left because no one has a FRIEND relationship with Sam
 
-Query-4:
+#### Test-4
+
+Query:
 
 ```sql
 MATCH (u:User)-[:FRIEND FULL]->(f:User);
 ```
 
-Result-4 (Incorrect), [ticket](https://github.com/dmgcodevil/tundradb/issues/1)
+Result (❌ Incorrect), [ticket](https://github.com/dmgcodevil/tundradb/issues/1)
 
 ```
 +======+========+=======+======+========+=======+
@@ -358,5 +365,54 @@ For a proper FULL JOIN, you need to combine all distinct records from both sides
 As a left-side node with no matching right-side nodes
 As a right-side node with no matching left-side nodes
 
+#### Test-5:
 
+Add a new edge Bob -> Alex
 
+```sql
+CREATE EDGE FRIEND FROM User(1) TO User(0);
+```
+
+Query:
+
+```sql
+MATCH (u:User)-[:FRIEND INNER]->(f:User);
+```
+
+Result (✅ Correct):
+
+```sql
++======+========+=======+======+========+=======+
+| u.id | u.name | u.age | f.id | f.name | f.age |
++======+========+=======+======+========+=======+
+|  0   | "Alex" |  25   |  1   | "Bob"  |  31   |
++------+--------+-------+------+--------+-------+
+|  0   | "Alex" |  25   |  2   | "Jeff" |  33   |
++------+--------+-------+------+--------+-------+
+|  1   | "Bob"  |  31   |  0   | "Alex" |  25   |
++------+--------+-------+------+--------+-------+
+```
+
+#### Test-6:
+
+Query:
+
+```sql
+MATCH (u:User)-[:FRIEND INNER]->(f:User) WHERE u.age > 30;
+```
+
+Result (❌ Incorrect) [ticket](https://github.com/dmgcodevil/tundradb/issues/2)
+
+```
++======+========+=======+======+========+=======+
+| u.id | u.name | u.age | f.id | f.name | f.age |
++======+========+=======+======+========+=======+
+|  0   | "Alex" |  25   |  1   | "Bob"  |  31   |
++------+--------+-------+------+--------+-------+
+|  0   | "Alex" |  25   |  2   | "Jeff" |  33   |
++------+--------+-------+------+--------+-------+
+|  1   | "Bob"  |  31   |  0   | "Alex" |  25   |
++------+--------+-------+------+--------+-------+
+```
+
+Look like the shell doesn't parse/interpret `WHERE` clause in general.
