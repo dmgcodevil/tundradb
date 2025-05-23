@@ -324,10 +324,12 @@ struct QueryState {
   std::vector<Traverse> traversals;
 
   arrow::Result<std::string> resolve_schema(const SchemaRef& schema_ref) {
+    // todo we need to separate functions: assign alias , resolve
     if (aliases.contains(schema_ref.value()) && schema_ref.is_declaration()) {
-      return arrow::Status::Invalid(
+      log_warn(
           "duplicated schema alias '" + schema_ref.value() +
           "' already assigned to '" + aliases[schema_ref.value()] + "'");
+      return aliases[schema_ref.value()];
     }
     if (schema_ref.is_declaration()) {
       aliases[schema_ref.value()] = schema_ref.schema();

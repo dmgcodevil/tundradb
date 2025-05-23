@@ -158,6 +158,13 @@ WHERE u.age > 30 AND c.name = "AWS";
 
 ### Advanced Queries
 
+
+Find friends who work at the same company:
+
+```sql
+MATCH (u1:User)-[:FRIEND]->(u2:User),  (u1)-[:WORKS_AT]->(c:Company), (u2)-[:WORKS_AT]->(c);
+```
+
 Find friends and their companies they work for
 
 ```sql
