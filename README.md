@@ -226,3 +226,137 @@ SELECT u.name, u.age, c.name;
 ```
 
 This query would return Alex and Jeff, who both work at Google. 
+
+### Testing
+
+Find users with friends (Inner,Left/Right/Join):
+
+Input:
+
+```sql
+CREATE NODE User (name="Alex", age=25);  -- ID = 0
+CREATE NODE User (name="Bob", age=31);   -- ID = 1
+CREATE NODE User (name="Jeff", age=33);  -- ID = 2
+CREATE NODE User (name="Sam", age=21);   -- ID = 3
+
+CREATE EDGE FRIEND FROM User(0) TO User(1);  -- Alex is friends with Bob
+CREATE EDGE FRIEND FROM User(0) TO User(2);  -- Alex is friends with Jeff
+
+```
+
+Query-1:
+
+```sql
+MATCH (u:User)-[:FRIEND INNER]->(f:User);
+```
+
+Result-1 (Correct):
+
+```
++======+========+=======+======+========+=======+
+| u.id | u.name | u.age | f.id | f.name | f.age |
++======+========+=======+======+========+=======+
+|  0   | "Alex" |  25   |  1   | "Bob"  |  31   |
++------+--------+-------+------+--------+-------+
+|  0   | "Alex" |  25   |  2   | "Jeff" |  33   |
++------+--------+-------+------+--------+-------+
+```
+
+✓ Correct - Shows only Alex's relationships with Bob and Jeff
+✓ Matches only exist where there's a FRIEND relationship
+
+Query-2:
+
+```sql
+MATCH (u:User)-[:FRIEND LEFT]->(f:User);
+```
+
+Result-2 (Correct):
+
+```
++======+========+=======+======+========+=======+
+| u.id | u.name | u.age | f.id | f.name | f.age |
++======+========+=======+======+========+=======+
+|  0   | "Alex" |  25   |  1   | "Bob"  |  31   |
++------+--------+-------+------+--------+-------+
+|  0   | "Alex" |  25   |  2   | "Jeff" |  33   |
++------+--------+-------+------+--------+-------+
+|  1   | "Bob"  |  31   | null |  null  | null  |
++------+--------+-------+------+--------+-------+
+|  2   | "Jeff" |  33   | null |  null  | null  |
++------+--------+-------+------+--------+-------+
+|  3   | "Sam"  |  21   | null |  null  | null  |
++------+--------+-------+------+--------+-------+
+```
+
+✓ Correct - Shows all users on the left side
+✓ Bob, Jeff, and Sam have NULL values on the right because they don't have outgoing FRIEND relationships
+
+Query-3:
+
+```sql
+MATCH (u:User)-[:FRIEND RIGHT]->(f:User);
+```
+
+Result-3 (Correct):
+
+```
++======+========+=======+======+========+=======+
+| u.id | u.name | u.age | f.id | f.name | f.age |
++======+========+=======+======+========+=======+
+|  0   | "Alex" |  25   |  1   | "Bob"  |  31   |
++------+--------+-------+------+--------+-------+
+|  0   | "Alex" |  25   |  2   | "Jeff" |  33   |
++------+--------+-------+------+--------+-------+
+| null |  null  | null  |  3   | "Sam"  |  21   |
++------+--------+-------+------+--------+-------+
+```
+
+✓ Correct - Shows all users on the right side
+✓ Sam has NULL values on the left because no one has a FRIEND relationship with Sam
+
+Query-4:
+
+```sql
+MATCH (u:User)-[:FRIEND FULL]->(f:User);
+```
+
+Result-4 (Incorrect), [ticket](https://github.com/dmgcodevil/tundradb/issues/1)
+
+```
++======+========+=======+======+========+=======+
+| u.id | u.name | u.age | f.id | f.name | f.age |
++======+========+=======+======+========+=======+
+|  0   | "Alex" |  25   |  1   | "Bob"  |  31   |
++------+--------+-------+------+--------+-------+
+|  0   | "Alex" |  25   |  2   | "Jeff" |  33   |
++------+--------+-------+------+--------+-------+
+|  1   | "Bob"  |  31   | null |  null  | null  |
++------+--------+-------+------+--------+-------+
+|  2   | "Jeff" |  33   | null |  null  | null  |
++------+--------+-------+------+--------+-------+
+|  3   | "Sam"  |  21   | null |  null  | null  |
++------+--------+-------+------+--------+-------+
+```
+
+The Result-4 for the FULL JOIN is not entirely correct.
+A FULL JOIN (FULL OUTER JOIN) should include:
+All matching rows (like INNER JOIN)
+All non-matching rows from the left table (like LEFT JOIN)
+All non-matching rows from the right table (like RIGHT JOIN)
+The current Result-4 shows:
+Alex's relationships with Bob and Jeff (matching rows)
+Bob, Jeff, and Sam with NULL values on the right (left-only rows)
+But it's missing: a row with Sam on the right side and NULL values on the left
+The complete correct result should include this additional row:
+
+```
+| null |  null  | null  |  3   | "Sam"  |  21   |
+```
+
+For a proper FULL JOIN, you need to combine all distinct records from both sides of the relationship, so Sam should appear both:
+As a left-side node with no matching right-side nodes
+As a right-side node with no matching left-side nodes
+
+
+
