@@ -267,11 +267,59 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
       tundraql::TundraQLParser::MatchStatementContext* ctx) override {
     spdlog::info("Executing MATCH query");
 
-    // Process path pattern
-    auto pathPattern = ctx->pathPattern();
+    // Get the pattern list
+    auto patternList = ctx->patternList();
+    auto patterns = patternList->pathPattern();
+    
+    // Initialize query builder with the first pattern
+    auto query_builder = processPathPattern(patterns[0]);
+    
+    // Process any additional patterns (after commas)
+    for (size_t p = 1; p < patterns.size(); p++) {
+      // Each additional pattern is connected to the previous via the shared variables
+      // The query builder handles this automatically since we use the same aliases
+      processAdditionalPattern(query_builder, patterns[p]);
+    }
+
+    // Process SELECT clause if present
+    if (ctx->selectClause()) {
+      auto selectClause = ctx->selectClause();
+      std::vector<std::string> columns;
+
+      for (auto field : selectClause->selectField()) {
+        std::string column_name;
+        if (field->IDENTIFIER().size() > 1) {
+          // Table qualified column: u.name
+          column_name = field->IDENTIFIER(0)->getText() + "." +
+                        field->IDENTIFIER(1)->getText();
+        } else {
+          // Just table prefix: u
+          column_name = field->IDENTIFIER(0)->getText();
+        }
+
+        columns.push_back(column_name);
+      }
+
+      query_builder.select(columns);
+    }
+
+    // Build the query and execute it
+    auto query = query_builder.build();
+    auto result = db.query(query).ValueOrDie();
+    auto result_table = result->table();
+
+    // Print results
+    std::cout << "\nQuery results:\n";
+    printTableAsAscii(result_table);
+
+    return result_table;
+  }
+
+  // Helper method to process a single path pattern
+  tundradb::Query::Builder processPathPattern(tundraql::TundraQLParser::PathPatternContext* pathPattern) {
     auto nodes = pathPattern->nodePattern();
     auto edges = pathPattern->edgePattern();
-
+    
     // Add first node
     auto firstNode = nodes[0];
     std::string node_alias = firstNode->IDENTIFIER(0)->getText();
@@ -287,7 +335,7 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
 
     // Start the query builder with FROM clause
     auto query_builder = tundradb::Query::from(node_alias + ":" + node_type);
-
+    
     // Process each edge and subsequent node
     for (size_t i = 0; i < edges.size(); i++) {
       auto edge = edges[i];
@@ -326,49 +374,80 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
         target_type = target_alias;
       }
 
+      // Get source node alias
+      std::string source_alias = nodes[i]->IDENTIFIER(0)->getText();
+
       // Add the traverse to the query
       if (outgoing) {
-        query_builder.traverse(node_alias, edge_type,
+        query_builder.traverse(source_alias, edge_type,
                                target_alias + ":" + target_type, traverse_type);
       } else {
         // For incoming edges, swap source and target
         query_builder.traverse(target_alias + ":" + target_type, edge_type,
-                               node_alias, traverse_type);
+                               source_alias, traverse_type);
       }
     }
+    
+    return query_builder;
+  }
 
-    // Process SELECT clause if present
-    if (ctx->selectClause()) {
-      auto selectClause = ctx->selectClause();
-      std::vector<std::string> columns;
+  // Helper method to add additional patterns to an existing query
+  void processAdditionalPattern(tundradb::Query::Builder& query_builder, 
+                                tundraql::TundraQLParser::PathPatternContext* pathPattern) {
+    auto nodes = pathPattern->nodePattern();
+    auto edges = pathPattern->edgePattern();
+    
+    // Process each edge and subsequent node
+    for (size_t i = 0; i < edges.size(); i++) {
+      auto edge = edges[i];
+      auto nextNode = nodes[i + 1];
 
-      for (auto field : selectClause->selectField()) {
-        std::string column_name;
-        if (field->IDENTIFIER().size() > 1) {
-          // Table qualified column: u.name
-          column_name = field->IDENTIFIER(0)->getText() + "." +
-                        field->IDENTIFIER(1)->getText();
-        } else {
-          // Just table prefix: u
-          column_name = field->IDENTIFIER(0)->getText();
+      // Determine edge direction
+      bool outgoing = edge->GT() != nullptr;
+
+      // Get edge type if specified
+      std::string edge_type;
+      if (edge->IDENTIFIER() != nullptr) {
+        edge_type = edge->IDENTIFIER()->getText();
+      } else {
+        edge_type = "";  // Default edge type
+      }
+
+      // Determine join type
+      tundradb::TraverseType traverse_type = tundradb::TraverseType::Inner;
+      if (edge->joinSpecifier()) {
+        if (edge->joinSpecifier()->K_LEFT()) {
+          traverse_type = tundradb::TraverseType::Left;
+        } else if (edge->joinSpecifier()->K_RIGHT()) {
+          traverse_type = tundradb::TraverseType::Right;
+        } else if (edge->joinSpecifier()->K_FULL()) {
+          traverse_type = tundradb::TraverseType::Full;
         }
-
-        columns.push_back(column_name);
       }
 
-      query_builder.select(columns);
+      // Get target node type
+      std::string target_alias = nextNode->IDENTIFIER(0)->getText();
+      std::string target_type;
+
+      if (nextNode->IDENTIFIER().size() > 1) {
+        target_type = nextNode->IDENTIFIER(1)->getText();
+      } else {
+        target_type = target_alias;
+      }
+
+      // Get source node alias
+      std::string source_alias = nodes[i]->IDENTIFIER(0)->getText();
+
+      // Add the traverse to the query
+      if (outgoing) {
+        query_builder.traverse(source_alias, edge_type,
+                               target_alias + ":" + target_type, traverse_type);
+      } else {
+        // For incoming edges, swap source and target
+        query_builder.traverse(target_alias + ":" + target_type, edge_type,
+                               source_alias, traverse_type);
+      }
     }
-
-    // Build the query and execute it
-    auto query = query_builder.build();
-    auto result = db.query(query).ValueOrDie();
-    auto result_table = result->table();
-
-    // Print results
-    std::cout << "\nQuery results:\n";
-    printTableAsAscii(result_table);
-
-    return result_table;
   }
 
   // Handle COMMIT statements

@@ -158,12 +158,10 @@ WHERE u.age > 30 AND c.name = "AWS";
 
 ### Advanced Queries
 
-Find friends who work at the same company:
+Find friends and their companies they work for
 
 ```sql
-MATCH (u1:User)-[:FRIEND]->(u2:User), 
-      (u1)-[:WORKS_AT]->(c:Company), 
-      (u2)-[:WORKS_AT]->(c);
+MATCH (u:User)-[:FRIEND INNER]->(f:User), (f)-[:WORKS_AT INNER]->(c:Company);
 ```
 
 Find the average age of users at each company:

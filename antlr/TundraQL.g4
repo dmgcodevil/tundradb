@@ -20,7 +20,10 @@ createEdgeStatement: K_CREATE K_EDGE IDENTIFIER K_FROM nodeLocator K_TO nodeLoca
 nodeLocator: IDENTIFIER LPAREN INTEGER_LITERAL RPAREN; // e.g., User(123)
 
 // --- Match Statement ---
-matchStatement: K_MATCH pathPattern (K_WHERE whereClause)? (K_SELECT selectClause)? SEMI;
+matchStatement: K_MATCH patternList (K_WHERE whereClause)? (K_SELECT selectClause)? SEMI;
+
+// Updated to support multiple comma-separated patterns
+patternList: pathPattern (COMMA pathPattern)*;
 
 // --- Commit Statement ---
 commitStatement: K_COMMIT SEMI;
