@@ -481,7 +481,7 @@ Query:
 MATCH (u:User)-[:FRIEND INNER]->(f:User), (f)-[:WORKS_AT INNER]->(c:Company);
 ```
 
-Result (❌ Incorrect): [ticket](https://github.com/dmgcodevil/tundradb/issues/3)
+Result (✅ Fixed): [ticket](https://github.com/dmgcodevil/tundradb/issues/3)
 
 ```
 +======+========+=======+======+========+=======+======+==========+========+
