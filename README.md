@@ -540,3 +540,36 @@ Result (Correct):
 |  0   | "Alex" |  25   |  2   | "Jeff" |  33   |  5   | "AWS"  |  2000  |
 +------+--------+-------+------+--------+-------+------+--------+--------+
 ```
+
+#### Test-2
+
+For this test case we need to add a new user who works for the Google (as Alex)
+and hi also fried with alex
+
+
+```sql
+CREATE NODE User (name="Sam", age=21);  - id 6
+CREATE EDGE FRIEND FROM User(0) TO User(6);
+CREATE EDGE WORKS_AT FROM User(6) TO Company(3);
+```
+
+Query:
+
+```sql
+MATCH (u1:User)-[:FRIEND]->(u2:User),  (u1)-[:WORKS_AT]->(c:Company), (u2)-[:WORKS_AT]->(c);
+```
+
+Result (incorrect):
+
+```
++=======+=========+========+=======+=========+========+======+==========+========+
+| u1.id | u1.name | u1.age | u2.id | u2.name | u2.age | c.id |  c.name  | c.size |
++=======+=========+========+=======+=========+========+======+==========+========+
+|   0   | "Alex"  |   25   |   1   |  "Bob"  |   31   |  3   | "Google" |  3000  |
++-------+---------+--------+-------+---------+--------+------+----------+--------+
+|   0   | "Alex"  |   25   |   2   | "Jeff"  |   33   |  3   | "Google" |  3000  |
++-------+---------+--------+-------+---------+--------+------+----------+--------+
+|   0   | "Alex"  |   25   |   6   |  "Sam"  |   21   |  3   | "Google" |  3000  |
++-------+---------+--------+-------+---------+--------+------+----------+--------+
+```
+
