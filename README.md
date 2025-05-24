@@ -401,7 +401,37 @@ Query:
 MATCH (u:User)-[:FRIEND INNER]->(f:User) WHERE u.age > 30;
 ```
 
-Result (❌ Incorrect) [ticket](https://github.com/dmgcodevil/tundradb/issues/2)
+Result (✅ Fixed) [ticket](https://github.com/dmgcodevil/tundradb/issues/2)
+
+```
++======+========+=======+======+========+=======+
+| u.id | u.name | u.age | f.id | f.name | f.age |
++======+========+=======+======+========+=======+
+|  1   | "Bob"  |  31   |  0   | "Alex" |  25   |
++------+--------+-------+------+--------+-------+
+
+```
+
+OR filter `f`
+
+```sql
+MATCH (u:User)-[:FRIEND INNER]->(f:User) WHERE f.age > 30;
+```
+
+Result:
+
+```sql
++======+========+=======+======+========+=======+
+| u.id | u.name | u.age | f.id | f.name | f.age |
++======+========+=======+======+========+=======+
+|  0   | "Alex" |  25   |  1   | "Bob"  |  31   |
++------+--------+-------+------+--------+-------+
+```
+
+
+### Test suite User, Company
+
+Given:
 
 ```
 +======+========+=======+======+========+=======+
@@ -411,8 +441,56 @@ Result (❌ Incorrect) [ticket](https://github.com/dmgcodevil/tundradb/issues/2)
 +------+--------+-------+------+--------+-------+
 |  0   | "Alex" |  25   |  2   | "Jeff" |  33   |
 +------+--------+-------+------+--------+-------+
-|  1   | "Bob"  |  31   |  0   | "Alex" |  25   |
+|  1   | "Bob"  |  31   | null |  null  | null  |
++------+--------+-------+------+--------+-------+
+|  2   | "Jeff" |  33   | null |  null  | null  |
++------+--------+-------+------+--------+-------+
+|  3   | "Sam"  |  21   | null |  null  | null  |
 +------+--------+-------+------+--------+-------+
 ```
 
-Look like the shell doesn't parse/interpret `WHERE` clause in general.
+Create Company schema:
+
+```sql
+CREATE SCHEMA Company (name: STRING, size: INT64);
+```
+
+Create companies:
+
+```sql
+CREATE NODE Company (name="Google", size=3000);  -- ID = 4
+CREATE NODE Company (name="IBM", size=1000);     -- ID = 5
+CREATE NODE Company (name="AWS", size=2000);     -- ID = 6
+```
+
+
+Create edges:
+
+```sql
+CREATE EDGE WORKS_AT FROM User(0) TO Company(4);  -- Alex works at Google
+CREATE EDGE WORKS_AT FROM User(1) TO Company(5);  -- Bob works at IBM
+```
+
+
+#### Test-1
+
+
+Query:
+
+```sql
+MATCH (u:User)-[:FRIEND INNER]->(f:User), (f)-[:WORKS_AT INNER]->(c:Company);
+```
+
+Result (❌ Incorrect): [ticket](https://github.com/dmgcodevil/tundradb/issues/3)
+
+```
++======+========+=======+======+========+=======+======+==========+========+
+| u.id | u.name | u.age | f.id | f.name | f.age | c.id |  c.name  | c.size |
++======+========+=======+======+========+=======+======+==========+========+
+|  0   | "Alex" |  25   |  1   | "Bob"  |  31   |  3   |  "IBM"   |  1000  |
++------+--------+-------+------+--------+-------+------+----------+--------+
+|  0   | "Alex" |  25   |  1   | "Bob"  |  31   |  4   | "Google" |  3000  |
++------+--------+-------+------+--------+-------+------+----------+--------+
+|  1   | "Bob"  |  31   |  0   | "Alex" |  25   |  5   |  "IBM"   |  1000  |
++------+--------+-------+------+--------+-------+------+----------+--------+
+```
