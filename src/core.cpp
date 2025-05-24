@@ -794,11 +794,92 @@ struct RowNode {
       std::vector<Row> temp_product_accumulator;
       for (const auto& r1_from_current_group : groups_for_product[i]) {
         for (const auto& r2_from_previous_product : final_merged_rows) {
-          Row merged_r = r1_from_current_group.merge(r2_from_previous_product);
-          // Set the path of the newly merged row to the path of the current
-          // RowNode
-          merged_r.path = {this->path_segment};
-          temp_product_accumulator.push_back(merged_r);
+          // Check for conflicts in shared variables between rows
+          bool can_merge = true;
+
+          // Get variable prefixes (schema names) from cells
+          std::unordered_map<std::string, int64_t> schema_ids_r1;
+          std::unordered_map<std::string, int64_t> schema_ids_r2;
+
+          // Extract schema prefixes and IDs from both rows
+          for (const auto& [field_name, value] : r1_from_current_group.cells) {
+            if (!value || !value->is_valid) continue;
+
+            // Extract schema prefix (everything before the first dot)
+            size_t dot_pos = field_name.find('.');
+            if (dot_pos != std::string::npos) {
+              std::string schema = field_name.substr(0, dot_pos);
+
+              // Store ID for this schema if it's an ID field
+              if (field_name.substr(dot_pos + 1) == "id") {
+                auto id_scalar =
+                    std::static_pointer_cast<arrow::Int64Scalar>(value);
+                schema_ids_r1[schema] = id_scalar->value;
+              }
+            }
+          }
+
+          for (const auto& [field_name, value] :
+               r2_from_previous_product.cells) {
+            if (!value || !value->is_valid) continue;
+
+            // Extract schema prefix (everything before the first dot)
+            size_t dot_pos = field_name.find('.');
+            if (dot_pos != std::string::npos) {
+              std::string schema = field_name.substr(0, dot_pos);
+
+              // Store ID for this schema if it's an ID field
+              if (field_name.substr(dot_pos + 1) == "id") {
+                auto id_scalar =
+                    std::static_pointer_cast<arrow::Int64Scalar>(value);
+                schema_ids_r2[schema] = id_scalar->value;
+              }
+            }
+          }
+
+          // Check for conflicts - same schema name but different IDs
+          for (const auto& [schema, id1] : schema_ids_r1) {
+            if (schema_ids_r2.count(schema) > 0 &&
+                schema_ids_r2[schema] != id1) {
+              // Found a conflict - same schema but different IDs
+              log_debug(
+                  "Conflict detected: Schema '{}' has different IDs: {} vs {}",
+                  schema, id1, schema_ids_r2[schema]);
+              can_merge = false;
+              break;
+            }
+          }
+
+          // Additional cell-by-cell check for conflicts
+          if (can_merge) {
+            for (const auto& [field_name, value1] :
+                 r1_from_current_group.cells) {
+              if (!value1 || !value1->is_valid) continue;
+
+              auto it = r2_from_previous_product.cells.find(field_name);
+              if (it != r2_from_previous_product.cells.end() && it->second &&
+                  it->second->is_valid) {
+                // Both rows have this field with non-null values - check if
+                // they match
+                if (!value1->Equals(*(it->second))) {
+                  log_debug(
+                      "Conflict detected: Field '{}' has different values",
+                      field_name);
+                  can_merge = false;
+                  break;
+                }
+              }
+            }
+          }
+
+          if (can_merge) {
+            Row merged_r =
+                r1_from_current_group.merge(r2_from_previous_product);
+            // Set the path of the newly merged row to the path of the current
+            // RowNode
+            merged_r.path = {this->path_segment};
+            temp_product_accumulator.push_back(merged_r);
+          }
         }
       }
       final_merged_rows = std::move(temp_product_accumulator);
@@ -900,14 +981,13 @@ struct QueueItem {
   SchemaRef schema_ref;
   int level;
   std::shared_ptr<Row> row;
-  // std::vector<std::string> path;
-  std::set<int64_t> path_visited_nodes;  // Nodes visited in this specific path
+  std::set<std::string>
+      path_visited_nodes;  // schema:node visited in this specific path
   std::vector<PathSegment> path;
 
   QueueItem(int64_t id, const SchemaRef& schema, int l, std::shared_ptr<Row> r)
       : node_id(id), schema_ref(schema), level(l), row(r) {
-    // path.push_back(schema_ref.value());
-    path_visited_nodes.insert(id);
+    path_visited_nodes.insert(schema_ref.value() + ":" + std::to_string(id));
     path.push_back(PathSegment{schema.value(), id});
   }
 };
@@ -942,9 +1022,8 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows_bfs(
     int64_t node_id, const SchemaRef& start_schema,
     const std::shared_ptr<arrow::Schema>& output_schema,
     const QueryState& query_state, std::set<int64_t>& global_visited) {
-  log_debug("populate_rows_bfs::node={}", node_id);
+  log_debug("populate_rows_bfs::node={}:{}", start_schema.value(), node_id);
   auto result = std::make_shared<std::vector<Row>>();
-  std::set<std::string> visited_schemas;
   int64_t row_id_counter = 0;
   auto initial_row =
       std::make_shared<Row>(create_empty_row_from_schema(output_schema));
@@ -960,7 +1039,10 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows_bfs(
       auto node = query_state.node_manager->get_node(item.node_id).ValueOrDie();
       global_visited.insert(item.node_id);
       item.row->set_cell_from_node(item.schema_ref, node);
-      visited_schemas.insert(item.schema_ref.value());
+      std::string schema_node_key =
+          item.schema_ref.value() + ":" + std::to_string(item.node_id);
+      item.path_visited_nodes.insert(schema_node_key);
+      // visited_schemas.insert(schema_node_key);
 
       // group connections by target schema
       std::unordered_map<std::string, std::vector<GraphConnection>>
@@ -971,7 +1053,9 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows_bfs(
         for (const auto& conn :
              query_state.connections.at(item.schema_ref.value())
                  .at(item.node_id)) {
-          if (!visited_schemas.contains(conn.target.value())) {
+          std::string schema_node_key =
+              conn.target.value() + ":" + std::to_string(conn.target_id);
+          if (!item.path_visited_nodes.contains(schema_node_key)) {
             if (query_state.ids.at(conn.target.value())
                     .contains(conn.target_id)) {
               grouped_connections[conn.target.value()].push_back(conn);

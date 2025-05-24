@@ -1736,6 +1736,83 @@ TEST(JoinTest, MultiPatternPathThroughFriends) {
   // Skip detailed field validation since we've already verified the patterns
 }
 
+TEST(JoinTest, MultiPatternWithSharedVars) {
+  auto db = setup_test_db();
+  db->connect(0, "FRIEND", 1).ValueOrDie();    // Alex -> Bob
+  db->connect(0, "FRIEND", 2).ValueOrDie();    // Alex -> Jeff
+  db->connect(0, "WORKS_AT", 6).ValueOrDie();  // Alex -> Google
+  db->connect(2, "WORKS_AT", 6).ValueOrDie();  // Jeff -> Google
+  db->connect(1, "WORKS_AT", 5).ValueOrDie();
+
+  Query query = Query::from("u:users")
+                    .traverse("u", "FRIEND", "f:users")
+                    .traverse("f", "WORKS_AT", "c:companies")
+                    .traverse("u", "WORKS_AT", "c")
+                    .build();
+
+  auto query_result = db->query(query);
+  ASSERT_TRUE(query_result.ok());
+  auto result_table = query_result.ValueOrDie()->table();
+  ASSERT_NE(result_table, nullptr);
+
+  // Pretty print for debugging
+  std::cout << "SelfJoinWithLeftJoin Result Table:" << std::endl;
+  print_table(result_table);
+  arrow::PrettyPrint(*result_table, {}, &std::cout);
+  // 0	alex	25	2	jeff	33	6	google	3000
+  ASSERT_EQ(result_table->num_rows(), 1);
+
+  auto u_id_col = result_table->GetColumnByName("u.id");
+  auto u_name_col = result_table->GetColumnByName("u.name");
+  auto u_age_col = result_table->GetColumnByName("u.age");
+  auto f_id_col = result_table->GetColumnByName("f.id");
+  auto f_age_col = result_table->GetColumnByName("f.age");
+  auto f_name_col = result_table->GetColumnByName("f.name");
+  auto c_id_col = result_table->GetColumnByName("c.id");
+  auto c_name_col = result_table->GetColumnByName("c.name");
+
+  ASSERT_NE(u_id_col, nullptr);
+  ASSERT_NE(u_age_col, nullptr);
+  ASSERT_NE(u_name_col, nullptr);
+  ASSERT_NE(f_id_col, nullptr);
+  ASSERT_NE(f_name_col, nullptr);
+  ASSERT_NE(f_age_col, nullptr);
+
+  // Check u.id (should be 0 - alex)
+  auto u_id_scalar = std::static_pointer_cast<arrow::Int64Scalar>(
+      u_id_col->GetScalar(0).ValueOrDie());
+  ASSERT_EQ(u_id_scalar->value, 0);
+
+  // Check u.age (should be 25)
+  auto u_age_scalar = std::static_pointer_cast<arrow::Int64Scalar>(
+      u_age_col->GetScalar(0).ValueOrDie());
+  ASSERT_EQ(u_age_scalar->value, 25);
+
+  // Check u.name (should be "alex")
+  auto u_name_scalar = std::static_pointer_cast<arrow::StringScalar>(
+      u_name_col->GetScalar(0).ValueOrDie());
+  ASSERT_EQ(u_name_scalar->view(), "alex");
+
+  // Check f.id (should be 2 - jeff)
+  auto f_id_scalar = std::static_pointer_cast<arrow::Int64Scalar>(
+      f_id_col->GetScalar(0).ValueOrDie());
+  ASSERT_EQ(f_id_scalar->value, 2);
+
+  // Check f.name (should be "jeff")
+  auto f_name_scalar = std::static_pointer_cast<arrow::StringScalar>(
+      f_name_col->GetScalar(0).ValueOrDie());
+  ASSERT_EQ(f_name_scalar->view(), "jeff");
+
+  // Check c.id (should be 6 - google)
+  auto c_id_scalar = std::static_pointer_cast<arrow::Int64Scalar>(
+      c_id_col->GetScalar(0).ValueOrDie());
+  ASSERT_EQ(c_id_scalar->value, 6);
+
+  auto c_name_scalar = std::static_pointer_cast<arrow::StringScalar>(
+      c_name_col->GetScalar(0).ValueOrDie());
+  ASSERT_EQ(c_name_scalar->view(), "google");
+}
+
 }  // namespace tundradb
 
 int main(int argc, char** argv) {
