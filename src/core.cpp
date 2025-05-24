@@ -316,7 +316,10 @@ struct QueryState {
   std::unordered_map<std::string, std::shared_ptr<arrow::Table>> tables;
   std::unordered_map<std::string, std::set<int64_t>> ids;
   std::unordered_map<std::string, std::string> aliases;
-  std::map<int64_t, std::vector<GraphConnection>> connections;  // outgoing
+  std::unordered_map<std::string,
+                     std::map<int64_t, std::vector<GraphConnection>>>
+      connections;  // outgoing
+
   std::unordered_map<int64_t, std::vector<GraphConnection>> incoming;
 
   std::shared_ptr<NodeManager> node_manager;
@@ -326,9 +329,8 @@ struct QueryState {
   arrow::Result<std::string> resolve_schema(const SchemaRef& schema_ref) {
     // todo we need to separate functions: assign alias , resolve
     if (aliases.contains(schema_ref.value()) && schema_ref.is_declaration()) {
-      log_warn(
-          "duplicated schema alias '" + schema_ref.value() +
-          "' already assigned to '" + aliases[schema_ref.value()] + "'");
+      log_warn("duplicated schema alias '" + schema_ref.value() +
+               "' already assigned to '" + aliases[schema_ref.value()] + "'");
       return aliases[schema_ref.value()];
     }
     if (schema_ref.is_declaration()) {
@@ -372,6 +374,12 @@ struct QueryState {
     return true;
   }
 
+  bool has_outgoing(const SchemaRef& schema_ref, int64_t node_id) const {
+    return connections.contains(schema_ref.value()) &&
+           connections.at(schema_ref.value()).contains(node_id) &&
+           !connections.at(schema_ref.value()).at(node_id).empty();
+  }
+
   std::string ToString() const {
     std::stringstream ss;
     ss << "QueryState {\n";
@@ -401,30 +409,14 @@ struct QueryState {
     // nodes with connections\n";
     ss << "  Connections (Outgoing) (" << connections.size()
        << " source nodes):";
-    int source_nodes_printed = 0;
-    for (const auto& [source_id, conns_vec] : connections) {
-      if (source_nodes_printed >= 3 &&
-          connections.size() > 5) {  // Limit nodes printed for brevity
-        ss << "      ... and " << (connections.size() - source_nodes_printed)
-           << " more source nodes ...\n";
-        break;
-      }
-      ss << "    - Source ID " << source_id << " (" << conns_vec.size()
-         << " outgoing):";
-      int conns_printed_for_source = 0;
-      for (const auto& conn : conns_vec) {
-        if (conns_printed_for_source >= 3 &&
-            conns_vec.size() > 5) {  // Limit connections per node
-          ss << "        ... and "
-             << (conns_vec.size() - conns_printed_for_source)
-             << " more connections ...\n";
-          break;
+    for (const auto& [from, conns] : connections) {
+      for (const auto& [from_id, conn_vec] : conns) {
+        ss << "from " << from << ":" << from_id << ":\n";
+        for (const auto& conn : conn_vec) {
+          ss << "    - " << conn.target.value() << ":" << conn.target_id
+             << "\n";
         }
-        ss << "        -> " << conn.target.value() << ":" << conn.target_id
-           << " (via '" << conn.edge_type << "')\n";
-        conns_printed_for_source++;
       }
-      source_nodes_printed++;
     }
 
     // ss << "  Connections (Incoming): " << incoming.size() << " target nodes
@@ -479,51 +471,54 @@ arrow::Result<std::shared_ptr<arrow::Schema>> build_denormalized_schema(
   std::set<std::string> processed_schemas;
 
   // First add fields from the FROM schema
-  std::string from_schema = query_state.from.schema();
-  std::string from_alias = query_state.from.value();
+  std::string from_schema = query_state.from.value();
 
   log_debug("Adding fields from FROM schema '{}'", from_schema);
 
-  auto schema_result = query_state.schema_registry->get(from_schema);
+  auto schema_result =
+      query_state.schema_registry->get(query_state.aliases.at(from_schema));
   if (!schema_result.ok()) {
     return schema_result.status();
   }
 
   auto arrow_schema = schema_result.ValueOrDie();
   for (const auto& field : arrow_schema->fields()) {
-    std::string prefixed_field_name = from_alias + "." + field->name();
+    std::string prefixed_field_name = from_schema + "." + field->name();
     processed_fields.insert(prefixed_field_name);
     fields.push_back(arrow::field(prefixed_field_name, field->type()));
   }
   processed_schemas.insert(from_schema);
 
-  // Now process all referenced schemas in the connections
-  for (const auto& [node_id, node_connections] : query_state.connections) {
-    for (const auto& conn : node_connections) {
-      std::string target_schema = conn.target.schema();
-      std::string target_alias = conn.target.value();
+  std::vector<SchemaRef> unique_schemas;
+  for (const auto& traversal : query_state.traversals) {
+    if (processed_schemas.insert(traversal.source().value()).second) {
+      unique_schemas.push_back(traversal.source());
+    }
+    if (processed_schemas.insert(traversal.target().value()).second) {
+      unique_schemas.push_back(traversal.target());
+    }
+  }
 
-      if (processed_schemas.insert(target_alias).second) {
-        log_debug("Adding fields from target schema '{}'", target_schema);
+  for (const auto& schema_ref : unique_schemas) {
+    log_debug("Adding fields from schema '{}'", schema_ref.value());
 
-        auto target_schema_result =
-            query_state.schema_registry->get(target_schema);
-        if (!target_schema_result.ok()) {
-          return target_schema_result.status();
-        }
+    schema_result = query_state.schema_registry->get(
+        query_state.aliases.at(schema_ref.value()));
+    if (!schema_result.ok()) {
+      return schema_result.status();
+    }
 
-        auto target_arrow_schema = target_schema_result.ValueOrDie();
-        for (const auto& field : target_arrow_schema->fields()) {
-          std::string prefixed_field_name = target_alias + "." + field->name();
-          if (processed_fields.contains(prefixed_field_name)) {
-            return arrow::Status::KeyError("Field '{}' already exists",
-                                           prefixed_field_name);
-          }
-
-          processed_fields.insert(prefixed_field_name);
-          fields.push_back(arrow::field(prefixed_field_name, field->type()));
-        }
+    arrow_schema = schema_result.ValueOrDie();
+    for (const auto& field : arrow_schema->fields()) {
+      std::string prefixed_field_name =
+          schema_ref.value() + "." + field->name();
+      if (processed_fields.contains(prefixed_field_name)) {
+        return arrow::Status::KeyError("Field '{}' already exists",
+                                       prefixed_field_name);
       }
+
+      processed_fields.insert(prefixed_field_name);
+      fields.push_back(arrow::field(prefixed_field_name, field->type()));
     }
   }
 
@@ -972,8 +967,10 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows_bfs(
           grouped_connections;
 
       bool skip = false;
-      if (query_state.connections.contains(item.node_id)) {
-        for (const auto& conn : query_state.connections.at(item.node_id)) {
+      if (query_state.has_outgoing(item.schema_ref, item.node_id)) {
+        for (const auto& conn :
+             query_state.connections.at(item.schema_ref.value())
+                 .at(item.node_id)) {
           if (!visited_schemas.contains(conn.target.value())) {
             if (query_state.ids.at(conn.target.value())
                     .contains(conn.target_id)) {
@@ -1121,8 +1118,7 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows(
 
       // For INNER JOIN: Skip nodes without connections
       if (join_type == TraverseType::Inner &&
-          (!query_state.connections.contains(node_id) ||
-           query_state.connections.at(node_id).empty())) {
+          !query_state.has_outgoing(schema_ref, node_id)) {
         continue;
       }
 
@@ -1533,7 +1529,20 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
               auto conn = GraphConnection{
                   traverse->source(), source_id,      traverse->edge_type(), "",
                   traverse->target(), target_node->id};
-              query_state.connections[source_id].push_back(conn);
+
+              /*
+
+              Connections (Outgoing) (3 source nodes):    - Source ID 0 (3
+            outgoing):        -> f:1 (via 'friend')
+                -> f:2 (via 'friend')
+                -> f:3 (via 'friend')
+            - Source ID 1 (1 outgoing):        -> c:6 (via 'works-at')
+            - Source ID 2 (1 outgoing):        -> l:5 (via 'likes')
+
+               */
+
+              query_state.connections[traverse->source().value()][source_id]
+                  .push_back(conn);
               query_state.incoming[target_node->id].push_back(conn);
             }
           } else {
@@ -1557,7 +1566,8 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           }
           query_state.tables[source.value()] = table_result.ValueOrDie();
         }
-        log_debug("found {} neighbors", matched_target_ids.size());
+        log_debug("found {} neighbors for {}", matched_target_ids.size(),
+                  traverse->target().toString());
 
         if (traverse->traverse_type() == TraverseType::Inner) {
           // intersect
@@ -1578,6 +1588,8 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
 
           query_state.ids[traverse->target().value()] = intersect_ids;
           log_info("intersect_ids count: {}", intersect_ids.size());
+          log_info("{} intersect_ids: {}", traverse->target().toString(),
+                   intersect_ids);
         } else if (traverse->traverse_type() == TraverseType::Left) {
           query_state.ids[traverse->target().value()].insert(
               matched_target_ids.begin(), matched_target_ids.end());

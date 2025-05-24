@@ -10,12 +10,12 @@
 
 #include <filesystem>
 #include <fstream>
-#include "../libs/json/json.hpp"
 #include <random>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
+#include "../libs/json/json.hpp"
 #include "logger.hpp"
 #include "metadata.hpp"
 #include "table_info.hpp"

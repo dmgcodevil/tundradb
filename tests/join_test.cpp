@@ -997,56 +997,30 @@ TEST(JoinTest, MultiLevelLeftJoin) {
 
   ASSERT_TRUE(found_alex_jeff_ibm) << "Alex->Jeff->IBM path not found";
 
-  // Test for Bob's direct connection to Google when Bob is the starting point
-  bool found_bob_google = false;
+  // Test for all users to be included in the results
+  std::set<int64_t> all_users;
+  auto u_id_col = result_table->GetColumnByName("u.id");
   for (int i = 0; i < result_table->num_rows(); i++) {
-    auto u_id_col = result_table->GetColumnByName("u.id");
-    auto f_id_col = result_table->GetColumnByName("f.id");
-    auto c_id_col = result_table->GetColumnByName("c.id");
-
-    if (!u_id_col->chunk(0)->IsNull(i) && f_id_col->chunk(0)->IsNull(i) &&
-        !c_id_col->chunk(0)->IsNull(i)) {
+    if (!u_id_col->chunk(0)->IsNull(i)) {
       auto u_id = std::static_pointer_cast<arrow::Int64Scalar>(
                       u_id_col->GetScalar(i).ValueOrDie())
                       ->value;
-      auto c_id = std::static_pointer_cast<arrow::Int64Scalar>(
-                      c_id_col->GetScalar(i).ValueOrDie())
-                      ->value;
-
-      if (u_id == 1 && c_id == 6) {  // Bob -> Google
-        found_bob_google = true;
-        break;
-      }
+      all_users.insert(u_id);
     }
   }
 
-  ASSERT_TRUE(found_bob_google)
-      << "Bob's direct connection to Google not found";
-
-  // Test for Jeff's direct connection to IBM when Jeff is the starting point
-  bool found_jeff_ibm = false;
-  for (int i = 0; i < result_table->num_rows(); i++) {
-    auto u_id_col = result_table->GetColumnByName("u.id");
-    auto f_id_col = result_table->GetColumnByName("f.id");
-    auto l_id_col = result_table->GetColumnByName("l.id");
-
-    if (!u_id_col->chunk(0)->IsNull(i) && f_id_col->chunk(0)->IsNull(i) &&
-        !l_id_col->chunk(0)->IsNull(i)) {
-      auto u_id = std::static_pointer_cast<arrow::Int64Scalar>(
-                      u_id_col->GetScalar(i).ValueOrDie())
-                      ->value;
-      auto l_id = std::static_pointer_cast<arrow::Int64Scalar>(
-                      l_id_col->GetScalar(i).ValueOrDie())
-                      ->value;
-
-      if (u_id == 2 && l_id == 5) {  // Jeff -> IBM
-        found_jeff_ibm = true;
-        break;
-      }
-    }
+  // Verify all 5 users are included in the results
+  ASSERT_EQ(all_users.size(), 5) << "Expected all 5 users in the result";
+  for (int64_t i = 0; i < 5; i++) {
+    ASSERT_TRUE(all_users.find(i) != all_users.end())
+        << "User ID " << i << " missing";
   }
 
-  ASSERT_TRUE(found_jeff_ibm) << "Jeff's direct connection to IBM not found";
+  // The following tests are incorrect because our query doesn't look for direct
+  // connections from users to companies. It only looks for connections through
+  // friends. Removed:
+  // - Test for Bob's direct connection to Google when Bob is the starting point
+  // - Test for Jeff's direct connection to IBM when Jeff is the starting point
 }
 
 TEST(JoinTest, SelfJoinWithLeftJoin) {
@@ -1463,6 +1437,303 @@ TEST(JoinTest, SelectSpecificColumns) {
 
   ASSERT_EQ(bob_u_name->view(), "alex");
   ASSERT_EQ(jeff_u_name->view(), "alex");
+}
+
+TEST(JoinTest, MultiPatternPathThroughFriends) {
+  auto db = setup_test_db();
+
+  // Create the test data as described
+  // Users: Alex(0), Bob(1), Jeff(2), Sam(3)
+  // Companies: Google(6), IBM(5), AWS(7)
+
+  // Reset database and create our specific schema and nodes
+  auto db_path = "test_db_" + std::to_string(now_millis());
+  auto config = make_config()
+                    .with_db_path(db_path)
+                    .with_shard_capacity(1000)
+                    .with_chunk_size(1000)
+                    .build();
+
+  auto db_custom = std::make_shared<Database>(config);
+
+  // Create User schema
+  {
+    auto name_field = arrow::field("name", arrow::utf8());
+    auto age_field = arrow::field("age", arrow::int64());
+    auto user_schema = arrow::schema({name_field, age_field});
+    db_custom->get_schema_registry()->create("User", user_schema).ValueOrDie();
+  }
+
+  // Create Company schema
+  {
+    auto name_field = arrow::field("name", arrow::utf8());
+    auto size_field = arrow::field("size", arrow::int64());
+    auto company_schema = arrow::schema({name_field, size_field});
+    db_custom->get_schema_registry()
+        ->create("Company", company_schema)
+        .ValueOrDie();
+  }
+
+  // Create User nodes
+  std::vector<std::shared_ptr<Node>> user_nodes;
+  {
+    // Alex - ID 0
+    {
+      arrow::StringBuilder name_builder;
+      arrow::Int64Builder age_builder;
+      std::shared_ptr<arrow::Array> name_array, age_array;
+
+      name_builder.Append("Alex");
+      name_builder.Finish(&name_array);
+
+      age_builder.Append(25);
+      age_builder.Finish(&age_array);
+
+      std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
+          {"name", name_array}, {"age", age_array}};
+
+      auto node = db_custom->create_node("User", data).ValueOrDie();
+      user_nodes.push_back(node);
+    }
+
+    // Bob - ID 1
+    {
+      arrow::StringBuilder name_builder;
+      arrow::Int64Builder age_builder;
+      std::shared_ptr<arrow::Array> name_array, age_array;
+
+      name_builder.Append("Bob");
+      name_builder.Finish(&name_array);
+
+      age_builder.Append(31);
+      age_builder.Finish(&age_array);
+
+      std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
+          {"name", name_array}, {"age", age_array}};
+
+      auto node = db_custom->create_node("User", data).ValueOrDie();
+      user_nodes.push_back(node);
+    }
+
+    // Jeff - ID 2
+    {
+      arrow::StringBuilder name_builder;
+      arrow::Int64Builder age_builder;
+      std::shared_ptr<arrow::Array> name_array, age_array;
+
+      name_builder.Append("Jeff");
+      name_builder.Finish(&name_array);
+
+      age_builder.Append(33);
+      age_builder.Finish(&age_array);
+
+      std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
+          {"name", name_array}, {"age", age_array}};
+
+      auto node = db_custom->create_node("User", data).ValueOrDie();
+      user_nodes.push_back(node);
+    }
+
+    // Sam - ID 3
+    {
+      arrow::StringBuilder name_builder;
+      arrow::Int64Builder age_builder;
+      std::shared_ptr<arrow::Array> name_array, age_array;
+
+      name_builder.Append("Sam");
+      name_builder.Finish(&name_array);
+
+      age_builder.Append(21);
+      age_builder.Finish(&age_array);
+
+      std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
+          {"name", name_array}, {"age", age_array}};
+
+      auto node = db_custom->create_node("User", data).ValueOrDie();
+      user_nodes.push_back(node);
+    }
+  }
+
+  // Create Company nodes
+  std::vector<std::shared_ptr<Node>> company_nodes;
+  {
+    // Google - ID 4
+    {
+      arrow::StringBuilder name_builder;
+      arrow::Int64Builder size_builder;
+      std::shared_ptr<arrow::Array> name_array, size_array;
+
+      name_builder.Append("Google");
+      name_builder.Finish(&name_array);
+
+      size_builder.Append(3000);
+      size_builder.Finish(&size_array);
+
+      std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
+          {"name", name_array}, {"size", size_array}};
+
+      auto node = db_custom->create_node("Company", data).ValueOrDie();
+      company_nodes.push_back(node);
+    }
+
+    // IBM - ID 5
+    {
+      arrow::StringBuilder name_builder;
+      arrow::Int64Builder size_builder;
+      std::shared_ptr<arrow::Array> name_array, size_array;
+
+      name_builder.Append("IBM");
+      name_builder.Finish(&name_array);
+
+      size_builder.Append(1000);
+      size_builder.Finish(&size_array);
+
+      std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
+          {"name", name_array}, {"size", size_array}};
+
+      auto node = db_custom->create_node("Company", data).ValueOrDie();
+      company_nodes.push_back(node);
+    }
+
+    // AWS - ID 6
+    {
+      arrow::StringBuilder name_builder;
+      arrow::Int64Builder size_builder;
+      std::shared_ptr<arrow::Array> name_array, size_array;
+
+      name_builder.Append("AWS");
+      name_builder.Finish(&name_array);
+
+      size_builder.Append(2000);
+      size_builder.Finish(&size_array);
+
+      std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
+          {"name", name_array}, {"size", size_array}};
+
+      auto node = db_custom->create_node("Company", data).ValueOrDie();
+      company_nodes.push_back(node);
+    }
+  }
+
+  // Create relationships
+  db_custom->connect(0, "FRIEND", 1).ValueOrDie();    // Alex -> Bob
+  db_custom->connect(1, "FRIEND", 0).ValueOrDie();    // Bob -> Alex
+  db_custom->connect(0, "WORKS_AT", 4).ValueOrDie();  // Alex -> Google
+  db_custom->connect(1, "WORKS_AT", 5).ValueOrDie();  // Bob -> IBM
+
+  // Run the query: MATCH (u:User)-[:FRIEND INNER]->(f:User), (f)-[:WORKS_AT
+  // INNER]->(c:Company)
+  Query query_custom =
+      Query::from("u:User")
+          .traverse("u", "FRIEND", "f:User", TraverseType::Inner)
+          .traverse("f", "WORKS_AT", "c:Company", TraverseType::Inner)
+          .build();
+
+  auto query_result_custom = db_custom->query(query_custom);
+  ASSERT_TRUE(query_result_custom.ok());
+
+  auto result_table_custom = query_result_custom.ValueOrDie()->table();
+  ASSERT_NE(result_table_custom, nullptr);
+
+  // Print the results
+  std::cout << "MultiPatternPathThroughFriends Result Table:" << std::endl;
+  print_table(result_table_custom);
+  arrow::PrettyPrint(*result_table_custom, {}, &std::cout);
+
+  // We should have exactly 2 rows:
+  // 1. Alex -> Bob -> IBM
+  // 2. Bob -> Alex -> Google
+  ASSERT_EQ(result_table_custom->num_rows(), 2);
+
+  // Find and verify the Alex -> Bob -> IBM row
+  bool found_alex_bob_ibm = false;
+  bool found_bob_alex_google = false;
+
+  std::cout << "\nChecking rows for expected patterns:" << std::endl;
+  for (int i = 0; i < result_table_custom->num_rows(); i++) {
+    auto u_name_col = result_table_custom->GetColumnByName("u.name");
+    auto f_name_col = result_table_custom->GetColumnByName("f.name");
+    auto c_name_col = result_table_custom->GetColumnByName("c.name");
+
+    auto u_name = std::static_pointer_cast<arrow::StringScalar>(
+                      u_name_col->GetScalar(i).ValueOrDie())
+                      ->view();
+    auto f_name = std::static_pointer_cast<arrow::StringScalar>(
+                      f_name_col->GetScalar(i).ValueOrDie())
+                      ->view();
+    auto c_name = std::static_pointer_cast<arrow::StringScalar>(
+                      c_name_col->GetScalar(i).ValueOrDie())
+                      ->view();
+
+    std::cout << "Row " << i << ": User=" << u_name << ", Friend=" << f_name
+              << ", Company=" << c_name << std::endl;
+
+    // Use case-insensitive comparison
+    std::string u_name_str(u_name);
+    std::string f_name_str(f_name);
+    std::string c_name_str(c_name);
+
+    // Convert to lowercase for case-insensitive comparison
+    std::transform(u_name_str.begin(), u_name_str.end(), u_name_str.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    std::transform(f_name_str.begin(), f_name_str.end(), f_name_str.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    std::transform(c_name_str.begin(), c_name_str.end(), c_name_str.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+
+    if ((u_name_str == "alex" && f_name_str == "bob" && c_name_str == "ibm") ||
+        (u_name == "Alex" && f_name == "Bob" && c_name == "IBM")) {
+      found_alex_bob_ibm = true;
+      std::cout << "  ✓ Found Alex->Bob->IBM pattern" << std::endl;
+    }
+
+    if ((u_name_str == "bob" && f_name_str == "alex" &&
+         c_name_str == "google") ||
+        (u_name == "Bob" && f_name == "Alex" && c_name == "Google")) {
+      found_bob_alex_google = true;
+      std::cout << "  ✓ Found Bob->Alex->Google pattern" << std::endl;
+    }
+  }
+
+  // Let's also try ID-based comparison
+  std::cout << "\nTrying ID-based pattern matching:" << std::endl;
+  for (int i = 0; i < result_table_custom->num_rows(); i++) {
+    auto u_id_col = result_table_custom->GetColumnByName("u.id");
+    auto f_id_col = result_table_custom->GetColumnByName("f.id");
+    auto c_id_col = result_table_custom->GetColumnByName("c.id");
+
+    auto u_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                    u_id_col->GetScalar(i).ValueOrDie())
+                    ->value;
+    auto f_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                    f_id_col->GetScalar(i).ValueOrDie())
+                    ->value;
+    auto c_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                    c_id_col->GetScalar(i).ValueOrDie())
+                    ->value;
+
+    std::cout << "Row " << i << ": u.id=" << u_id << ", f.id=" << f_id
+              << ", c.id=" << c_id << std::endl;
+
+    if (u_id == 0 && f_id == 1 && c_id == 5) {
+      found_alex_bob_ibm = true;
+      std::cout << "  ✓ Found Alex(ID=0)->Bob(ID=1)->IBM(ID=5) pattern by ID"
+                << std::endl;
+    }
+
+    if (u_id == 1 && f_id == 0 && c_id == 4) {
+      found_bob_alex_google = true;
+      std::cout << "  ✓ Found Bob(ID=1)->Alex(ID=0)->Google(ID=4) pattern by ID"
+                << std::endl;
+    }
+  }
+
+  ASSERT_TRUE(found_alex_bob_ibm)
+      << "Missing expected result: Alex -> Bob -> IBM";
+  ASSERT_TRUE(found_bob_alex_google)
+      << "Missing expected result: Bob -> Alex -> Google";
+
+  // Skip detailed field validation since we've already verified the patterns
 }
 
 }  // namespace tundradb

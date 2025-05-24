@@ -270,14 +270,15 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
     // Get the pattern list
     auto patternList = ctx->patternList();
     auto patterns = patternList->pathPattern();
-    
+
     // Initialize query builder with the first pattern
     auto query_builder = processPathPattern(patterns[0]);
-    
+
     // Process any additional patterns (after commas)
     for (size_t p = 1; p < patterns.size(); p++) {
-      // Each additional pattern is connected to the previous via the shared variables
-      // The query builder handles this automatically since we use the same aliases
+      // Each additional pattern is connected to the previous via the shared
+      // variables The query builder handles this automatically since we use the
+      // same aliases
       processAdditionalPattern(query_builder, patterns[p]);
     }
 
@@ -322,10 +323,11 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
   }
 
   // Helper method to process a single path pattern
-  tundradb::Query::Builder processPathPattern(tundraql::TundraQLParser::PathPatternContext* pathPattern) {
+  tundradb::Query::Builder processPathPattern(
+      tundraql::TundraQLParser::PathPatternContext* pathPattern) {
     auto nodes = pathPattern->nodePattern();
     auto edges = pathPattern->edgePattern();
-    
+
     // Add first node
     auto firstNode = nodes[0];
     std::string node_alias = firstNode->IDENTIFIER(0)->getText();
@@ -341,7 +343,7 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
 
     // Start the query builder with FROM clause
     auto query_builder = tundradb::Query::from(node_alias + ":" + node_type);
-    
+
     // Process each edge and subsequent node
     for (size_t i = 0; i < edges.size(); i++) {
       auto edge = edges[i];
@@ -393,16 +395,17 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
                                source_alias, traverse_type);
       }
     }
-    
+
     return query_builder;
   }
 
   // Helper method to add additional patterns to an existing query
-  void processAdditionalPattern(tundradb::Query::Builder& query_builder, 
-                                tundraql::TundraQLParser::PathPatternContext* pathPattern) {
+  void processAdditionalPattern(
+      tundradb::Query::Builder& query_builder,
+      tundraql::TundraQLParser::PathPatternContext* pathPattern) {
     auto nodes = pathPattern->nodePattern();
     auto edges = pathPattern->edgePattern();
-    
+
     // Process each edge and subsequent node
     for (size_t i = 0; i < edges.size(); i++) {
       auto edge = edges[i];
@@ -457,44 +460,52 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
   }
 
   // Helper method to process WHERE clause
-  void processWhereClause(tundradb::Query::Builder& query_builder, 
-                         tundraql::TundraQLParser::WhereClauseContext* whereClause) {
+  void processWhereClause(
+      tundradb::Query::Builder& query_builder,
+      tundraql::TundraQLParser::WhereClauseContext* whereClause) {
     auto expression = whereClause->expression();
-    
+
     // For now, we only handle simple expressions like "a.field > value"
     if (expression->term().size() == 1) {
       auto term = expression->term(0);
-      
+
       // Check if the term has a comparison operator
-      if (term->EQ() || term->NEQ() || term->GT() || term->LT() || term->GTE() || term->LTE()) {
+      if (term->EQ() || term->NEQ() || term->GT() || term->LT() ||
+          term->GTE() || term->LTE()) {
         // Get the left and right operands
         auto leftFactor = term->factor(0);
         auto rightFactor = term->factor(1);
-        
+
         // Get the field name (should be in format alias.field)
         std::string fieldName;
         if (leftFactor->IDENTIFIER().size() == 2) {
-          fieldName = leftFactor->IDENTIFIER(0)->getText() + "." + 
+          fieldName = leftFactor->IDENTIFIER(0)->getText() + "." +
                       leftFactor->IDENTIFIER(1)->getText();
         } else {
           // Can't handle just a field name without alias
           spdlog::warn("WHERE clause field must be in format alias.field");
           return;
         }
-        
+
         // Get the comparison operator
         tundradb::CompareOp op;
-        if (term->EQ()) op = tundradb::CompareOp::Eq;
-        else if (term->NEQ()) op = tundradb::CompareOp::NotEq;
-        else if (term->GT()) op = tundradb::CompareOp::Gt;
-        else if (term->LT()) op = tundradb::CompareOp::Lt;
-        else if (term->GTE()) op = tundradb::CompareOp::Gte;
-        else if (term->LTE()) op = tundradb::CompareOp::Lte;
+        if (term->EQ())
+          op = tundradb::CompareOp::Eq;
+        else if (term->NEQ())
+          op = tundradb::CompareOp::NotEq;
+        else if (term->GT())
+          op = tundradb::CompareOp::Gt;
+        else if (term->LT())
+          op = tundradb::CompareOp::Lt;
+        else if (term->GTE())
+          op = tundradb::CompareOp::Gte;
+        else if (term->LTE())
+          op = tundradb::CompareOp::Lte;
         else {
           spdlog::warn("Unsupported comparison operator in WHERE clause");
           return;
         }
-        
+
         // Get the value from the right operand
         tundradb::Value value;
         if (rightFactor->value()) {
@@ -502,9 +513,11 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
           if (valueNode->INTEGER_LITERAL()) {
             // Integer value
             try {
-              int64_t intValue = std::stoll(valueNode->INTEGER_LITERAL()->getText());
+              int64_t intValue =
+                  std::stoll(valueNode->INTEGER_LITERAL()->getText());
               value = tundradb::Value(intValue);
-              spdlog::debug("WHERE condition: {} {} {}", fieldName, static_cast<int>(op), intValue);
+              spdlog::debug("WHERE condition: {} {} {}", fieldName,
+                            static_cast<int>(op), intValue);
             } catch (const std::exception& e) {
               spdlog::error("Failed to parse integer literal: {}", e.what());
               return;
@@ -512,9 +525,11 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
           } else if (valueNode->FLOAT_LITERAL()) {
             // Float value
             try {
-              double doubleValue = std::stod(valueNode->FLOAT_LITERAL()->getText());
+              double doubleValue =
+                  std::stod(valueNode->FLOAT_LITERAL()->getText());
               value = tundradb::Value(doubleValue);
-              spdlog::debug("WHERE condition: {} {} {}", fieldName, static_cast<int>(op), doubleValue);
+              spdlog::debug("WHERE condition: {} {} {}", fieldName,
+                            static_cast<int>(op), doubleValue);
             } catch (const std::exception& e) {
               spdlog::error("Failed to parse float literal: {}", e.what());
               return;
@@ -523,11 +538,13 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
             // String value (remove quotes)
             std::string stringValue = valueNode->STRING_LITERAL()->getText();
             // Remove surrounding quotes
-            if (stringValue.size() >= 2 && stringValue.front() == '"' && stringValue.back() == '"') {
+            if (stringValue.size() >= 2 && stringValue.front() == '"' &&
+                stringValue.back() == '"') {
               stringValue = stringValue.substr(1, stringValue.size() - 2);
             }
             value = tundradb::Value(stringValue);
-            spdlog::debug("WHERE condition: {} {} \"{}\"", fieldName, static_cast<int>(op), stringValue);
+            spdlog::debug("WHERE condition: {} {} \"{}\"", fieldName,
+                          static_cast<int>(op), stringValue);
           } else {
             spdlog::warn("Unsupported value type in WHERE clause");
             return;
@@ -540,14 +557,15 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
           spdlog::warn("Invalid right operand in WHERE clause");
           return;
         }
-        
+
         // Add the WHERE clause to the query builder
         query_builder.where(fieldName, op, value);
         spdlog::info("Added WHERE condition: {}", fieldName);
       }
     } else {
       // Complex expressions with AND/OR are not supported yet
-      spdlog::warn("Complex WHERE expressions with AND/OR are not supported yet");
+      spdlog::warn(
+          "Complex WHERE expressions with AND/OR are not supported yet");
     }
   }
 
