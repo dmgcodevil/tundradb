@@ -281,6 +281,12 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
       processAdditionalPattern(query_builder, patterns[p]);
     }
 
+    // Process WHERE clause if present
+    if (ctx->whereClause()) {
+      spdlog::info("Processing WHERE clause");
+      processWhereClause(query_builder, ctx->whereClause());
+    }
+
     // Process SELECT clause if present
     if (ctx->selectClause()) {
       auto selectClause = ctx->selectClause();
@@ -447,6 +453,101 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
         query_builder.traverse(target_alias + ":" + target_type, edge_type,
                                source_alias, traverse_type);
       }
+    }
+  }
+
+  // Helper method to process WHERE clause
+  void processWhereClause(tundradb::Query::Builder& query_builder, 
+                         tundraql::TundraQLParser::WhereClauseContext* whereClause) {
+    auto expression = whereClause->expression();
+    
+    // For now, we only handle simple expressions like "a.field > value"
+    if (expression->term().size() == 1) {
+      auto term = expression->term(0);
+      
+      // Check if the term has a comparison operator
+      if (term->EQ() || term->NEQ() || term->GT() || term->LT() || term->GTE() || term->LTE()) {
+        // Get the left and right operands
+        auto leftFactor = term->factor(0);
+        auto rightFactor = term->factor(1);
+        
+        // Get the field name (should be in format alias.field)
+        std::string fieldName;
+        if (leftFactor->IDENTIFIER().size() == 2) {
+          fieldName = leftFactor->IDENTIFIER(0)->getText() + "." + 
+                      leftFactor->IDENTIFIER(1)->getText();
+        } else {
+          // Can't handle just a field name without alias
+          spdlog::warn("WHERE clause field must be in format alias.field");
+          return;
+        }
+        
+        // Get the comparison operator
+        tundradb::CompareOp op;
+        if (term->EQ()) op = tundradb::CompareOp::Eq;
+        else if (term->NEQ()) op = tundradb::CompareOp::NotEq;
+        else if (term->GT()) op = tundradb::CompareOp::Gt;
+        else if (term->LT()) op = tundradb::CompareOp::Lt;
+        else if (term->GTE()) op = tundradb::CompareOp::Gte;
+        else if (term->LTE()) op = tundradb::CompareOp::Lte;
+        else {
+          spdlog::warn("Unsupported comparison operator in WHERE clause");
+          return;
+        }
+        
+        // Get the value from the right operand
+        tundradb::Value value;
+        if (rightFactor->value()) {
+          auto valueNode = rightFactor->value();
+          if (valueNode->INTEGER_LITERAL()) {
+            // Integer value
+            try {
+              int64_t intValue = std::stoll(valueNode->INTEGER_LITERAL()->getText());
+              value = tundradb::Value(intValue);
+              spdlog::debug("WHERE condition: {} {} {}", fieldName, static_cast<int>(op), intValue);
+            } catch (const std::exception& e) {
+              spdlog::error("Failed to parse integer literal: {}", e.what());
+              return;
+            }
+          } else if (valueNode->FLOAT_LITERAL()) {
+            // Float value
+            try {
+              double doubleValue = std::stod(valueNode->FLOAT_LITERAL()->getText());
+              value = tundradb::Value(doubleValue);
+              spdlog::debug("WHERE condition: {} {} {}", fieldName, static_cast<int>(op), doubleValue);
+            } catch (const std::exception& e) {
+              spdlog::error("Failed to parse float literal: {}", e.what());
+              return;
+            }
+          } else if (valueNode->STRING_LITERAL()) {
+            // String value (remove quotes)
+            std::string stringValue = valueNode->STRING_LITERAL()->getText();
+            // Remove surrounding quotes
+            if (stringValue.size() >= 2 && stringValue.front() == '"' && stringValue.back() == '"') {
+              stringValue = stringValue.substr(1, stringValue.size() - 2);
+            }
+            value = tundradb::Value(stringValue);
+            spdlog::debug("WHERE condition: {} {} \"{}\"", fieldName, static_cast<int>(op), stringValue);
+          } else {
+            spdlog::warn("Unsupported value type in WHERE clause");
+            return;
+          }
+        } else if (rightFactor->IDENTIFIER().size() > 0) {
+          // Handle field comparison (not implemented yet)
+          spdlog::warn("Field comparison in WHERE clause not supported yet");
+          return;
+        } else {
+          spdlog::warn("Invalid right operand in WHERE clause");
+          return;
+        }
+        
+        // Add the WHERE clause to the query builder
+        query_builder.where(fieldName, op, value);
+        spdlog::info("Added WHERE condition: {}", fieldName);
+      }
+    } else {
+      // Complex expressions with AND/OR are not supported yet
+      spdlog::warn("Complex WHERE expressions with AND/OR are not supported yet");
     }
   }
 
