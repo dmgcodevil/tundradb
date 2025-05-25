@@ -1922,6 +1922,134 @@ TEST(JoinTest, FullJoinFriendRelationship) {
             40);  // matt
 }
 
+TEST(JoinTest, FullJoinMultiSchemaCornerCase) {
+  auto db = setup_test_db();
+
+  // Create a complex scenario with multiple schemas and FULL JOINs
+  // This test is designed to expose potential issues with the FULL JOIN
+  // implementation
+
+  // Friend relationships (users -> users)
+  db->connect(0, "friend", 1).ValueOrDie();  // alex -> bob
+  db->connect(1, "friend", 2).ValueOrDie();  // bob -> jeff
+
+  // Work relationships (users -> companies)
+  db->connect(0, "works-at", 5).ValueOrDie();  // alex -> ibm
+  db->connect(2, "works-at", 6).ValueOrDie();  // jeff -> google
+  // Note: bob (id=1) doesn't work anywhere
+  // Note: sam (id=3) and matt (id=4) don't have friends or work
+  // Note: aws (id=7) has no employees
+
+  // Query with chained FULL JOINs: users -> friends -> companies
+  // This should test the multi-schema FULL JOIN logic
+  Query query =
+      Query::from("u:users")
+          .traverse("u", "friend", "f:users", TraverseType::Full)
+          .traverse("f", "works-at", "c:companies", TraverseType::Full)
+          .build();
+
+  auto query_result = db->query(query);
+  ASSERT_TRUE(query_result.ok());
+
+  auto result_table = query_result.ValueOrDie()->table();
+  ASSERT_NE(result_table, nullptr);
+
+  // Pretty print for debugging
+  std::cout << "FullJoinMultiSchemaCornerCase Result Table:" << std::endl;
+  print_table(result_table);
+  arrow::PrettyPrint(*result_table, {}, &std::cout);
+
+  // Expected results for FULL JOIN chain:
+  // 1. Matched paths: alex->bob->NULL, bob->jeff->google
+  // 2. Left-side unmatched from first join: jeff, sam, matt (with NULL friends)
+  // 3. Right-side unmatched from first join: sam, matt (as unmatched friends)
+  // 4. Left-side unmatched from second join: users/friends with no companies
+  // 5. Right-side unmatched from second join: companies with no employees (ibm,
+  // aws)
+
+  // This is a complex scenario that should test edge cases in the FULL JOIN
+  // logic
+
+  // Let's verify some key patterns exist:
+  bool found_alex_bob_null = false;  // alex -> bob -> NULL (bob has no company)
+  bool found_bob_jeff_google = false;  // bob -> jeff -> google
+  bool found_unmatched_companies =
+      false;  // NULL -> NULL -> company (unmatched companies)
+  bool found_unmatched_users = false;  // user -> NULL -> NULL (unmatched users)
+
+  std::cout << "Analyzing result patterns:" << std::endl;
+
+  for (int i = 0; i < result_table->num_rows(); i++) {
+    auto u_id_col = result_table->GetColumnByName("u.id");
+    auto f_id_col = result_table->GetColumnByName("f.id");
+    auto c_id_col = result_table->GetColumnByName("c.id");
+
+    // Get values (handling NULLs)
+    std::optional<int64_t> u_id, f_id, c_id;
+
+    if (!u_id_col->chunk(0)->IsNull(i)) {
+      u_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                 u_id_col->GetScalar(i).ValueOrDie())
+                 ->value;
+    }
+
+    if (!f_id_col->chunk(0)->IsNull(i)) {
+      f_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                 f_id_col->GetScalar(i).ValueOrDie())
+                 ->value;
+    }
+
+    if (!c_id_col->chunk(0)->IsNull(i)) {
+      c_id = std::static_pointer_cast<arrow::Int64Scalar>(
+                 c_id_col->GetScalar(i).ValueOrDie())
+                 ->value;
+    }
+
+    std::cout << "Row " << i
+              << ": u=" << (u_id ? std::to_string(*u_id) : "NULL")
+              << " f=" << (f_id ? std::to_string(*f_id) : "NULL")
+              << " c=" << (c_id ? std::to_string(*c_id) : "NULL") << std::endl;
+
+    // Check for specific patterns
+    if (u_id == 0 && f_id == 1 && !c_id.has_value()) {
+      found_alex_bob_null = true;
+      std::cout << "  ✓ Found alex->bob->NULL pattern" << std::endl;
+    }
+
+    if (u_id == 1 && f_id == 2 && c_id == 6) {
+      found_bob_jeff_google = true;
+      std::cout << "  ✓ Found bob->jeff->google pattern" << std::endl;
+    }
+
+    if (!u_id.has_value() && !f_id.has_value() && c_id.has_value()) {
+      found_unmatched_companies = true;
+      std::cout << "  ✓ Found unmatched company pattern (NULL->NULL->company)"
+                << std::endl;
+    }
+
+    if (u_id.has_value() && !f_id.has_value() && !c_id.has_value()) {
+      found_unmatched_users = true;
+      std::cout << "  ✓ Found unmatched user pattern (user->NULL->NULL)"
+                << std::endl;
+    }
+  }
+
+  // Verify that FULL JOIN includes all expected patterns
+  ASSERT_TRUE(found_alex_bob_null)
+      << "Should include alex->bob->NULL (bob has no company)";
+  ASSERT_TRUE(found_bob_jeff_google)
+      << "Should include bob->jeff->google (complete path)";
+  ASSERT_TRUE(found_unmatched_companies)
+      << "Should include unmatched companies (NULL->NULL->company)";
+  ASSERT_TRUE(found_unmatched_users)
+      << "Should include unmatched users (user->NULL->NULL)";
+
+  // The exact number of rows depends on the complex FULL JOIN logic,
+  // but we should have at least these key patterns
+  ASSERT_GE(result_table->num_rows(), 4)
+      << "Should have at least the key patterns we're testing for";
+}
+
 }  // namespace tundradb
 
 int main(int argc, char** argv) {

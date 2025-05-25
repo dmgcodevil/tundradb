@@ -320,7 +320,9 @@ struct QueryState {
                      std::map<int64_t, std::vector<GraphConnection>>>
       connections;  // outgoing
 
-  std::unordered_map<int64_t, std::vector<GraphConnection>> incoming;
+  std::unordered_map<std::string,
+                     std::map<int64_t, std::vector<GraphConnection>>>
+      incoming;  // incoming connections grouped by schema
 
   std::shared_ptr<NodeManager> node_manager;
   std::shared_ptr<SchemaRegistry> schema_registry;
@@ -421,31 +423,45 @@ struct QueryState {
 
     // ss << "  Connections (Incoming): " << incoming.size() << " target nodes
     // with connections\n";
-    ss << "  Connections (Incoming) (" << incoming.size() << " target nodes):";
-    int target_nodes_printed = 0;
-    for (const auto& [target_id, conns_vec] : incoming) {
-      if (target_nodes_printed >= 3 &&
-          incoming.size() > 5) {  // Limit nodes printed
-        ss << "      ... and " << (incoming.size() - target_nodes_printed)
-           << " more target nodes ...\n";
+    ss << "  Connections (Incoming) (" << incoming.size()
+       << " target schemas):";
+    int target_schemas_printed = 0;
+    for (const auto& [target_schema, schema_incoming] : incoming) {
+      if (target_schemas_printed >= 3 &&
+          incoming.size() > 5) {  // Limit schemas printed
+        ss << "      ... and " << (incoming.size() - target_schemas_printed)
+           << " more target schemas ...\n";
         break;
       }
-      ss << "    - Target ID " << target_id << " (" << conns_vec.size()
-         << " incoming):";
-      int conns_printed_for_target = 0;
-      for (const auto& conn : conns_vec) {
-        if (conns_printed_for_target >= 3 &&
-            conns_vec.size() > 5) {  // Limit connections per node
+      ss << "    - Target Schema '" << target_schema << "' ("
+         << schema_incoming.size() << " nodes with incoming):";
+      int target_nodes_printed = 0;
+      for (const auto& [target_id, conns_vec] : schema_incoming) {
+        if (target_nodes_printed >= 3 &&
+            schema_incoming.size() > 5) {  // Limit nodes printed per schema
           ss << "        ... and "
-             << (conns_vec.size() - conns_printed_for_target)
-             << " more connections ...\n";
+             << (schema_incoming.size() - target_nodes_printed)
+             << " more target nodes ...\n";
           break;
         }
-        ss << "        <- " << conn.source.value() << ":" << conn.source_id
-           << " (via '" << conn.edge_type << "')\n";
-        conns_printed_for_target++;
+        ss << "      - Target ID " << target_id << " (" << conns_vec.size()
+           << " incoming):";
+        int conns_printed_for_target = 0;
+        for (const auto& conn : conns_vec) {
+          if (conns_printed_for_target >= 3 &&
+              conns_vec.size() > 5) {  // Limit connections per node
+            ss << "          ... and "
+               << (conns_vec.size() - conns_printed_for_target)
+               << " more connections ...\n";
+            break;
+          }
+          ss << "          <- " << conn.source.value() << ":" << conn.source_id
+             << " (via '" << conn.edge_type << "')\n";
+          conns_printed_for_target++;
+        }
+        target_nodes_printed++;
       }
-      target_nodes_printed++;
+      target_schemas_printed++;
     }
 
     ss << "  Traversals (" << traversals.size() << "):\n";
@@ -1273,6 +1289,120 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows(
     // }
   }
 
+  // Handle FULL JOIN right side: add unmatched target nodes
+  //
+  // For FULL JOIN, we need to include all records from both sides:
+  // 1. All matching relationships (already handled above)
+  // 2. All left-side records with no matches (already handled above)
+  // 3. All right-side records with no matches (handled here)
+  //
+  // Right-side unmatched means: nodes that could be targets but never appear
+  // as targets in any actual relationship for this traversal.
+  for (const auto& traverse : traverses) {
+    if (traverse.traverse_type() == TraverseType::Full) {
+      const auto& target_schema = traverse.target();
+      const auto& source_schema = traverse.source();
+
+      log_debug("FULL JOIN: Processing right-side for target schema '{}'",
+                target_schema.value());
+
+      // Find all target nodes that have no incoming connections
+      if (query_state.ids.contains(target_schema.value())) {
+        const auto& target_nodes = query_state.ids.at(target_schema.value());
+
+        log_debug("FULL JOIN: Target schema '{}' has {} nodes: {}",
+                  target_schema.value(), target_nodes.size(),
+                  fmt::format("{}", fmt::join(target_nodes, ", ")));
+
+        // Get all source nodes that have outgoing connections (to exclude from
+        // right-side)
+        //
+        // Important: In self-joins (like u:users -> f:users), a node can appear
+        // as both source and target. We should NOT include nodes that appear as
+        // sources with outgoing connections in the right-side unmatched
+        // results, because they are already represented on the left side.
+        //
+        // Example: If Alex has friend relationships (Alex->Bob, Alex->Jeff),
+        // then Alex should only appear on the left side, not as a right-side
+        // unmatched record.
+        std::set<int64_t> source_nodes_with_outgoing;
+        if (query_state.connections.contains(source_schema.value())) {
+          for (const auto& [source_id, connections] :
+               query_state.connections.at(source_schema.value())) {
+            if (!connections.empty()) {
+              source_nodes_with_outgoing.insert(source_id);
+            }
+          }
+        }
+
+        for (auto target_id : target_nodes) {
+          log_debug("FULL JOIN: Checking target node {}:{}",
+                    target_schema.value(), target_id);
+
+          // Skip if this node appears as a source with outgoing connections
+          // This prevents double-counting in self-joins where the same node
+          // could appear on both left and right sides
+          if (source_nodes_with_outgoing.contains(target_id)) {
+            log_debug(
+                "FULL JOIN: Target node {}:{} appears as source with outgoing "
+                "connections, skipping",
+                target_schema.value(), target_id);
+            continue;
+          }
+
+          // Check if this target node has any incoming connections for this
+          // traversal If it has incoming connections, it's already included in
+          // the matched results
+          bool has_incoming =
+              query_state.incoming.contains(target_schema.value()) &&
+              query_state.incoming.at(target_schema.value())
+                  .contains(target_id) &&
+              !query_state.incoming.at(target_schema.value())
+                   .at(target_id)
+                   .empty();
+
+          log_debug("FULL JOIN: Target node {}:{} has_incoming={}",
+                    target_schema.value(), target_id, has_incoming);
+
+          // Only add nodes that have no incoming connections and don't appear
+          // as sources These represent the "right-side unmatched" records in
+          // the FULL JOIN
+          if (!has_incoming) {
+            // This target node has no incoming connections, add it as a
+            // right-side unmatched row
+            auto target_node_result =
+                query_state.node_manager->get_node(target_id);
+            if (!target_node_result.ok()) {
+              log_error("Failed to get target node {}: {}", target_id,
+                        target_node_result.status().ToString());
+              continue;
+            }
+
+            // Create row with NULL for source data and actual data for target
+            // This represents: NULL <- target_node (no relationship points to
+            // this node)
+            Row right_join_row = create_empty_row_from_schema(output_schema);
+            right_join_row.set_cell_from_node(target_schema,
+                                              target_node_result.ValueOrDie());
+            right_join_row.path = {
+                PathSegment{target_schema.value(), target_id}};
+            right_join_row.id = target_id;
+
+            rows->push_back(right_join_row);
+
+            log_info(
+                "FULL JOIN: Added right-side unmatched row for target node "
+                "{}:{}",
+                target_schema.value(), target_id);
+          }
+        }
+      } else {
+        log_warn("FULL JOIN: Target schema '{}' not found in query state IDs",
+                 target_schema.value());
+      }
+    }
+  }
+
   log_debug("Generated {} total rows after processing all schemas",
             rows->size());
   return rows;
@@ -1605,20 +1735,10 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
                   traverse->source(), source_id,      traverse->edge_type(), "",
                   traverse->target(), target_node->id};
 
-              /*
-
-              Connections (Outgoing) (3 source nodes):    - Source ID 0 (3
-            outgoing):        -> f:1 (via 'friend')
-                -> f:2 (via 'friend')
-                -> f:3 (via 'friend')
-            - Source ID 1 (1 outgoing):        -> c:6 (via 'works-at')
-            - Source ID 2 (1 outgoing):        -> l:5 (via 'likes')
-
-               */
-
               query_state.connections[traverse->source().value()][source_id]
                   .push_back(conn);
-              query_state.incoming[target_node->id].push_back(conn);
+              query_state.incoming[traverse->target().value()][target_node->id]
+                  .push_back(conn);
             }
           } else {
             log_info("no edge found from {}:{}", source.value(), source_id);
