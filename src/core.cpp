@@ -1317,38 +1317,19 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows(
         // Get all source nodes that have outgoing connections (to exclude from
         // right-side)
         //
-        // Important: In self-joins (like u:users -> f:users), a node can appear
-        // as both source and target. We should NOT include nodes that appear as
-        // sources with outgoing connections in the right-side unmatched
-        // results, because they are already represented on the left side.
+        // Important: For self-referencing relationships (like manager:users ->
+        // employee:users), a node can be both a source (manager) and a target
+        // (employee). We should NOT exclude nodes just because they have
+        // outgoing connections - we should only check if they have incoming
+        // connections for this specific traversal.
         //
-        // Example: If Alex has friend relationships (Alex->Bob, Alex->Jeff),
-        // then Alex should only appear on the left side, not as a right-side
-        // unmatched record.
-        std::set<int64_t> source_nodes_with_outgoing;
-        if (query_state.connections.contains(source_schema.value())) {
-          for (const auto& [source_id, connections] :
-               query_state.connections.at(source_schema.value())) {
-            if (!connections.empty()) {
-              source_nodes_with_outgoing.insert(source_id);
-            }
-          }
-        }
+        // Example: Alex manages Bob and Sam (outgoing connections), but Alex is
+        // not managed by anyone (no incoming connections). Alex should appear
+        // as an unmatched employee (NULL -> Alex) in the FULL JOIN result.
 
         for (auto target_id : target_nodes) {
           log_debug("FULL JOIN: Checking target node {}:{}",
                     target_schema.value(), target_id);
-
-          // Skip if this node appears as a source with outgoing connections
-          // This prevents double-counting in self-joins where the same node
-          // could appear on both left and right sides
-          if (source_nodes_with_outgoing.contains(target_id)) {
-            log_debug(
-                "FULL JOIN: Target node {}:{} appears as source with outgoing "
-                "connections, skipping",
-                target_schema.value(), target_id);
-            continue;
-          }
 
           // Check if this target node has any incoming connections for this
           // traversal If it has incoming connections, it's already included in
@@ -1364,9 +1345,8 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows(
           log_debug("FULL JOIN: Target node {}:{} has_incoming={}",
                     target_schema.value(), target_id, has_incoming);
 
-          // Only add nodes that have no incoming connections and don't appear
-          // as sources These represent the "right-side unmatched" records in
-          // the FULL JOIN
+          // Only add nodes that have no incoming connections
+          // These represent the "right-side unmatched" records in the FULL JOIN
           if (!has_incoming) {
             // This target node has no incoming connections, add it as a
             // right-side unmatched row
