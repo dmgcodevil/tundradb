@@ -1813,6 +1813,115 @@ TEST(JoinTest, MultiPatternWithSharedVars) {
   ASSERT_EQ(c_name_scalar->view(), "google");
 }
 
+TEST(JoinTest, FullJoinFriendRelationship) {
+  auto db = setup_test_db();
+
+  // Create friend relationships
+  db->connect(0, "friend", 1).ValueOrDie();  // alex -> bob
+  db->connect(0, "friend", 2).ValueOrDie();  // alex -> jeff
+
+  Query query = Query::from("u:users")
+                    .traverse("u", "friend", "f:users", TraverseType::Full)
+                    .build();
+
+  auto query_result = db->query(query);
+  ASSERT_TRUE(query_result.ok());
+
+  auto result_table = query_result.ValueOrDie()->table();
+  ASSERT_NE(result_table, nullptr);
+
+  // Pretty print for debugging
+  std::cout << "FullJoinFriendRelationship Result Table:" << std::endl;
+  print_table(result_table);
+  arrow::PrettyPrint(*result_table, {}, &std::cout);
+
+  // Should have 8 rows total:
+  // 2 matched relationships (alex->bob, alex->jeff)
+  // 4 unmatched left records (bob, jeff, sam, matt with no outgoing friend
+  // edges) 2 unmatched right records (sam, matt with no incoming friend edges)
+  ASSERT_EQ(result_table->num_rows(), 8);
+
+  // Helper function to check if a row matches expected values
+  auto check_row = [&result_table](int row_idx,
+                                   const std::optional<int64_t>& u_id,
+                                   const std::optional<std::string>& u_name,
+                                   const std::optional<int64_t>& u_age,
+                                   const std::optional<int64_t>& f_id,
+                                   const std::optional<std::string>& f_name,
+                                   const std::optional<int64_t>& f_age) {
+    if (u_id.has_value()) {
+      auto u_id_col = result_table->GetColumnByName("u.id");
+      auto scalar_result = u_id_col->GetScalar(row_idx);
+      ASSERT_TRUE(scalar_result.ok());
+      ASSERT_TRUE(
+          scalar_result.ValueOrDie()->Equals(*arrow::MakeScalar(*u_id)));
+
+      auto u_name_col = result_table->GetColumnByName("u.name");
+      scalar_result = u_name_col->GetScalar(row_idx);
+      ASSERT_TRUE(scalar_result.ok());
+      ASSERT_TRUE(
+          scalar_result.ValueOrDie()->Equals(*arrow::MakeScalar(*u_name)));
+
+      auto u_age_col = result_table->GetColumnByName("u.age");
+      scalar_result = u_age_col->GetScalar(row_idx);
+      ASSERT_TRUE(scalar_result.ok());
+      ASSERT_TRUE(
+          scalar_result.ValueOrDie()->Equals(*arrow::MakeScalar(*u_age)));
+    } else {
+      auto u_id_col = result_table->GetColumnByName("u.id");
+      ASSERT_TRUE(u_id_col->chunk(0)->IsNull(row_idx));
+      auto u_name_col = result_table->GetColumnByName("u.name");
+      ASSERT_TRUE(u_name_col->chunk(0)->IsNull(row_idx));
+      auto u_age_col = result_table->GetColumnByName("u.age");
+      ASSERT_TRUE(u_age_col->chunk(0)->IsNull(row_idx));
+    }
+
+    if (f_id.has_value()) {
+      auto f_id_col = result_table->GetColumnByName("f.id");
+      auto scalar_result = f_id_col->GetScalar(row_idx);
+      ASSERT_TRUE(scalar_result.ok());
+      ASSERT_TRUE(
+          scalar_result.ValueOrDie()->Equals(*arrow::MakeScalar(*f_id)));
+
+      auto f_name_col = result_table->GetColumnByName("f.name");
+      scalar_result = f_name_col->GetScalar(row_idx);
+      ASSERT_TRUE(scalar_result.ok());
+      ASSERT_TRUE(
+          scalar_result.ValueOrDie()->Equals(*arrow::MakeScalar(*f_name)));
+
+      auto f_age_col = result_table->GetColumnByName("f.age");
+      scalar_result = f_age_col->GetScalar(row_idx);
+      ASSERT_TRUE(scalar_result.ok());
+      ASSERT_TRUE(
+          scalar_result.ValueOrDie()->Equals(*arrow::MakeScalar(*f_age)));
+    } else {
+      auto f_id_col = result_table->GetColumnByName("f.id");
+      ASSERT_TRUE(f_id_col->chunk(0)->IsNull(row_idx));
+      auto f_name_col = result_table->GetColumnByName("f.name");
+      ASSERT_TRUE(f_name_col->chunk(0)->IsNull(row_idx));
+      auto f_age_col = result_table->GetColumnByName("f.age");
+      ASSERT_TRUE(f_age_col->chunk(0)->IsNull(row_idx));
+    }
+  };
+
+  // Check matched relationships
+  check_row(0, 0, "alex", 25, 1, "bob", 31);   // alex -> bob
+  check_row(1, 0, "alex", 25, 2, "jeff", 33);  // alex -> jeff
+
+  // Check unmatched left records (users with no outgoing friend edges)
+  check_row(2, 1, "bob", 31, std::nullopt, std::nullopt, std::nullopt);  // bob
+  check_row(3, 2, "jeff", 33, std::nullopt, std::nullopt,
+            std::nullopt);                                               // jeff
+  check_row(4, 3, "sam", 21, std::nullopt, std::nullopt, std::nullopt);  // sam
+  check_row(5, 4, "matt", 40, std::nullopt, std::nullopt,
+            std::nullopt);  // matt
+
+  // Check unmatched right records (users with no incoming friend edges)
+  check_row(6, std::nullopt, std::nullopt, std::nullopt, 3, "sam", 21);  // sam
+  check_row(7, std::nullopt, std::nullopt, std::nullopt, 4, "matt",
+            40);  // matt
+}
+
 }  // namespace tundradb
 
 int main(int argc, char** argv) {
