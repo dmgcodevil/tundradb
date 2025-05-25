@@ -600,6 +600,26 @@ struct Row {
     return is_prefix(prefix, this->path);
   }
 
+  std::unordered_map<std::string, int64_t> extract_schema_ids() const {
+    std::unordered_map<std::string, int64_t> result;
+    for (const auto& [field_name, value] : cells) {
+      if (!value || !value->is_valid) continue;
+
+      // Extract schema prefix (everything before the first dot)
+      size_t dot_pos = field_name.find('.');
+      if (dot_pos != std::string::npos) {
+        std::string schema = field_name.substr(0, dot_pos);
+
+        // Store ID for this schema if it's an ID field
+        if (field_name.substr(dot_pos + 1) == "id") {
+          auto id_scalar = std::static_pointer_cast<arrow::Int64Scalar>(value);
+          result[schema] = id_scalar->value;
+        }
+      }
+    }
+    return result;
+  }
+
   // returns new Row which is result of merging this row and other
   Row merge(const Row& other) const {
     Row merged;
@@ -747,6 +767,7 @@ struct RowNode {
       return {this->row.value()};
     }
 
+    // collect all records from child node and group them by schema
     std::unordered_map<std::string, std::vector<Row>> grouped;
     for (const auto& c : children) {
       auto child_rows = c->merge_rows();
@@ -756,13 +777,16 @@ struct RowNode {
     }
 
     std::vector<std::vector<Row>> groups_for_product;
-    // Add this->row as its own group if it exists and has data,
+    // Add this->row as its own group (that is important for cartesian product)
+    // if it exists and has data,
     // to represent the node itself if it should be part of the product
     // independently.
     if (this->row.has_value()) {
       Row node_self_row = this->row.value();
       // Normalize path for the node's own row to ensure it combines correctly
       // and doesn't carry a longer BFS path if it was a leaf of BFS.
+      // i.e. current node path can be a:0->b:1->c:2
+      // this code sets it to 'c:2'
       node_self_row.path = {this->path_segment};
       groups_for_product.push_back({node_self_row});
     }
@@ -798,44 +822,10 @@ struct RowNode {
           bool can_merge = true;
 
           // Get variable prefixes (schema names) from cells
-          std::unordered_map<std::string, int64_t> schema_ids_r1;
-          std::unordered_map<std::string, int64_t> schema_ids_r2;
-
-          // Extract schema prefixes and IDs from both rows
-          for (const auto& [field_name, value] : r1_from_current_group.cells) {
-            if (!value || !value->is_valid) continue;
-
-            // Extract schema prefix (everything before the first dot)
-            size_t dot_pos = field_name.find('.');
-            if (dot_pos != std::string::npos) {
-              std::string schema = field_name.substr(0, dot_pos);
-
-              // Store ID for this schema if it's an ID field
-              if (field_name.substr(dot_pos + 1) == "id") {
-                auto id_scalar =
-                    std::static_pointer_cast<arrow::Int64Scalar>(value);
-                schema_ids_r1[schema] = id_scalar->value;
-              }
-            }
-          }
-
-          for (const auto& [field_name, value] :
-               r2_from_previous_product.cells) {
-            if (!value || !value->is_valid) continue;
-
-            // Extract schema prefix (everything before the first dot)
-            size_t dot_pos = field_name.find('.');
-            if (dot_pos != std::string::npos) {
-              std::string schema = field_name.substr(0, dot_pos);
-
-              // Store ID for this schema if it's an ID field
-              if (field_name.substr(dot_pos + 1) == "id") {
-                auto id_scalar =
-                    std::static_pointer_cast<arrow::Int64Scalar>(value);
-                schema_ids_r2[schema] = id_scalar->value;
-              }
-            }
-          }
+          std::unordered_map<std::string, int64_t> schema_ids_r1 =
+              r1_from_current_group.extract_schema_ids();
+          std::unordered_map<std::string, int64_t> schema_ids_r2 =
+              r2_from_previous_product.extract_schema_ids();
 
           // Check for conflicts - same schema name but different IDs
           for (const auto& [schema, id1] : schema_ids_r1) {
@@ -884,6 +874,7 @@ struct RowNode {
       }
       final_merged_rows = std::move(temp_product_accumulator);
       if (final_merged_rows.empty()) {
+        log_debug("product_accumulator is empty. stop merge");
         break;
       }
     }
