@@ -4,6 +4,7 @@
 #include <arrow/dataset/dataset.h>
 #include <arrow/dataset/scanner.h>
 #include <fmt/ranges.h>
+#include <support/CPPUtils.h>
 
 #include <chrono>
 #include <future>
@@ -285,7 +286,6 @@ std::set<int64_t> get_roots(
     const std::map<int64_t, std::vector<GraphConnection>>& connections) {
   std::set<int64_t> roots;
   std::unordered_map<int64_t, int64_t> count;
-  // roots.insert(connections.begin(), connections.end());
   std::vector<int64_t> stack;
   for (const auto& conn : connections) {
     count[conn.first] = 0;
@@ -347,19 +347,6 @@ struct QueryState {
   // removes node_id and updates all connections and ids
   void remove_node(int64_t node_id, const SchemaRef& schema_ref) {
     ids[schema_ref.value()].erase(node_id);
-    // if (!ids[schema_ref.value()].contains(node_id)) {
-    //   return;
-    // }
-    // updated_schemas.insert(schema_ref.value());
-    // ids[schema_ref.value()].erase(node_id);
-    // for (const auto& conn : incoming[node_id]) {
-    //   remove_node(conn.source_id, conn.source, updated_schemas);
-    // }
-    // for (const auto& conn : connections[node_id]) {
-    //   remove_node(conn.target_id, conn.target, updated_schemas);
-    // }
-    // connections.erase(node_id);
-    // incoming.erase(node_id);
   }
 
   arrow::Result<bool> update_table(std::shared_ptr<arrow::Table> table,
@@ -405,8 +392,6 @@ struct QueryState {
       ss << "    - " << alias << " -> " << schema_name << "\n";
     }
 
-    // ss << "  Connections (Outgoing): " << connections.size() << " source
-    // nodes with connections\n";
     ss << "  Connections (Outgoing) (" << connections.size()
        << " source nodes):";
     for (const auto& [from, conns] : connections) {
@@ -419,8 +404,6 @@ struct QueryState {
       }
     }
 
-    // ss << "  Connections (Incoming): " << incoming.size() << " target nodes
-    // with connections\n";
     ss << "  Connections (Incoming) (" << incoming.size() << " target nodes):";
     int target_nodes_printed = 0;
     for (const auto& [target_id, conns_vec] : incoming) {
@@ -728,17 +711,6 @@ struct RowNode {
 
   bool leaf() const { return row.has_value(); }
 
-  // find nodes where their path is prefix of path
-  // void find_prefix_nodes(const std::vector<PathSegment>& path,
-  //                        std::vector<RowNode*>& result) {
-  //   if (is_prefix(row.path, path)) {
-  //     result.emplace_back(this);
-  //     for (const auto& child : children) {
-  //       child->find_prefix_nodes(path, result);
-  //     }
-  //   }
-  // }
-
   void insert_row_dfs(size_t path_idx, const Row& new_row) {
     if (path_idx == new_row.path.size()) {
       this->row = new_row;
@@ -933,11 +905,6 @@ struct RowNode {
 
     ss << "\n";
 
-    // Print combined rows count if any
-    // if (!combined.empty()) {
-    //   ss << indent << "  Combined: " << combined.size() << " rows\n";
-    // }
-
     // Print children count
     ss << indent << "  Children: " << children.size() << "\n";
 
@@ -958,12 +925,10 @@ struct RowNode {
     return ss.str();
   }
 
-  // Overload stream operator for convenience
   friend std::ostream& operator<<(std::ostream& os, const RowNode& node) {
     return os << node.toString();
   }
 
-  // Print to stdout helper method
   void print(bool recursive = true) const { std::cout << toString(recursive); }
 };
 
@@ -1012,7 +977,7 @@ void log_grouped_connections(
 arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows_bfs(
     int64_t node_id, const SchemaRef& start_schema,
     const std::shared_ptr<arrow::Schema>& output_schema,
-    const QueryState& query_state, std::set<int64_t>& global_visited) {
+    const QueryState& query_state, std::set<std::string>& global_visited) {
   log_debug("populate_rows_bfs::node={}:{}", start_schema.value(), node_id);
   auto result = std::make_shared<std::vector<Row>>();
   int64_t row_id_counter = 0;
@@ -1028,12 +993,11 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows_bfs(
       auto item = queue.front();
       queue.pop();
       auto node = query_state.node_manager->get_node(item.node_id).ValueOrDie();
-      global_visited.insert(item.node_id);
       item.row->set_cell_from_node(item.schema_ref, node);
       std::string schema_node_key =
           item.schema_ref.value() + ":" + std::to_string(item.node_id);
+      global_visited.insert(schema_node_key);
       item.path_visited_nodes.insert(schema_node_key);
-      // visited_schemas.insert(schema_node_key);
 
       // group connections by target schema
       std::unordered_map<std::string, std::vector<GraphConnection>>
@@ -1112,8 +1076,6 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows_bfs(
     std::cout << "merge result: " << row.ToString() << std::endl;
   }
   return std::make_shared<std::vector<Row>>(merged);
-
-  // return result;
 }
 
 // process all schemas used in traverse
@@ -1123,7 +1085,8 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows(
     const QueryState& query_state, const std::vector<Traverse>& traverses,
     const std::shared_ptr<arrow::Schema>& output_schema) {
   auto rows = std::make_shared<std::vector<Row>>();
-  std::set<int64_t> global_visited;  // Track processed nodes across all schemas
+  std::set<std::string>
+      global_visited;  // Track processed nodes across all schemas
 
   // Map schemas to their join types
   std::unordered_map<std::string, TraverseType> schema_join_types;
@@ -1181,13 +1144,14 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows(
 
     log_debug(">>Processing schema '{}' nodes '{}'", schema_ref.value(),
               schema_nodes);
-    std::set<int64_t> local_visited;
+    std::set<std::string> local_visited;
 
     // For INNER join: only process nodes that have connections
     // For LEFT join: process all nodes from the "left" side
     for (auto node_id : schema_nodes) {
       // Skip if already processed in an earlier traversal
-      if (global_visited.contains(node_id)) {
+      auto key = schema_ref.value() + ":" + std::to_string(node_id);
+      if (global_visited.contains(key)) {
         continue;
       }
 
@@ -1212,65 +1176,9 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows(
                    std::make_move_iterator(res_value->end()));
 
       // Mark this node as visited
-      global_visited.insert(node_id);
+      global_visited.insert(key);
     }
     global_visited.insert(local_visited.begin(), local_visited.end());
-
-    // For LEFT JOIN: ensure we've processed all required nodes
-    // if (join_type == TraverseType::Left || join_type == TraverseType::Full) {
-    //   // Find the source schema for this left join
-    //   SchemaRef source_schema;
-    //   for (const auto& traverse : traverses) {
-    //     if (traverse.target().value() == schema_ref.value() &&
-    //         traverse.traverse_type() == join_type) {
-    //       source_schema = traverse.source();
-    //       break;
-    //     }
-    //   }
-    //
-    //   // Skip if no source found
-    //   if (source_schema.value().empty()) {
-    //     continue;
-    //   }
-    //
-    //   // For all source nodes that should have targets but don't
-    //   for (auto source_id : query_state.ids.at(source_schema.value())) {
-    //     bool has_connections = false;
-    //
-    //     // Check if this source has any connections to the target schema
-    //     if (query_state.connections.contains(source_id)) {
-    //       for (const auto& conn : query_state.connections.at(source_id)) {
-    //         if (conn.target.value() == schema_ref.value()) {
-    //           has_connections = true;
-    //           break;
-    //         }
-    //       }
-    //     }
-    //
-    //     // If no connections and not already processed, create a row with
-    //     NULLs
-    //     // for target
-    //     if (!has_connections && !global_visited.contains(source_id)) {
-    //       auto source_node_result =
-    //           query_state.node_manager->get_node(source_id);
-    //       if (!source_node_result.ok()) {
-    //         log_error("Failed to get source node {}: {}", source_id,
-    //                   source_node_result.status().ToString());
-    //         continue;
-    //       }
-    //
-    //       // Create row with source data and NULL for targets
-    //       Row left_join_row = create_empty_row_from_schema(output_schema);
-    //       left_join_row.set_cell_from_node(source_schema,
-    //                                        source_node_result.ValueOrDie());
-    //       left_join_row.path = {PathSegment{source_schema.value(),
-    //       source_id}}; left_join_row.id = source_id;
-    //
-    //       rows->push_back(left_join_row);
-    //       global_visited.insert(source_id);
-    //     }
-    //   }
-    // }
   }
 
   log_debug("Generated {} total rows after processing all schemas",
@@ -1570,7 +1478,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
 
         log_debug("Traversing from {} source nodes",
                   query_state.ids[source.value()].size());
-
+        std::set<int64_t> matched_source_ids;
         std::set<int64_t> matched_target_ids;
         std::set<int64_t> unmatched_source_ids;
         for (auto source_id : query_state.ids[source.value()]) {
@@ -1599,6 +1507,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
             }
           }
           if (!target_nodes.empty()) {
+            matched_source_ids.insert(source_id);
             for (const auto& target_node : target_nodes) {
               matched_target_ids.insert(target_node->id);
               auto conn = GraphConnection{
@@ -1668,10 +1577,19 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
         } else if (traverse->traverse_type() == TraverseType::Left) {
           query_state.ids[traverse->target().value()].insert(
               matched_target_ids.begin(), matched_target_ids.end());
-        } else {
-          query_state.ids[traverse->target().value()] =
+        } else {  // Right, Full remove nodes with incoming connections
+          auto target_ids =
               get_ids_from_table(get_table(target_schema).ValueOrDie())
                   .ValueOrDie();
+          log_debug(
+              "traverse type: '{}', remove matched_source_ids={} from "
+              "target_ds={}",
+              traverse->target().value(), matched_source_ids, target_ids);
+          std::set<int64_t> result;
+          std::set_difference(
+              target_ids.begin(), target_ids.end(), matched_source_ids.begin(),
+              matched_source_ids.end(), std::inserter(result, result.begin()));
+          query_state.ids[traverse->target().value()] = result;
         }
 
         std::vector<std::shared_ptr<Node>> neighbors;
