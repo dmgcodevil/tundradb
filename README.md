@@ -328,7 +328,7 @@ Query:
 MATCH (u:User)-[:FRIEND FULL]->(f:User);
 ```
 
-Result (❌ Incorrect), [ticket](https://github.com/dmgcodevil/tundradb/issues/1)
+Result (✅ Fixed), [ticket](https://github.com/dmgcodevil/tundradb/issues/1)
 
 ```
 +======+========+=======+======+========+=======+
