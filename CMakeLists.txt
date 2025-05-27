@@ -167,6 +167,15 @@ target_link_libraries(tundradb
 
 # Interactive shell executable
 add_executable(tundra_shell src/tundra_shell.cpp libs/linenoise/linenoise.c)
+
+# Add ANTLR4 include directory to tundra_shell if found
+if(ANTLR4_INCLUDE_DIR)
+    target_include_directories(tundra_shell
+        PRIVATE
+            ${ANTLR4_INCLUDE_DIR}
+    )
+endif()
+
 target_link_libraries(tundra_shell
     PRIVATE
         core
@@ -224,13 +233,11 @@ add_custom_command(
 # On macOS with Homebrew, you may need to adjust these paths
 if(APPLE)
     find_library(ANTLR4_RUNTIME antlr4-runtime PATHS /opt/homebrew/lib /usr/local/lib)
-    find_path(ANTLR4_INCLUDE_DIR antlr4-runtime.h PATHS /opt/homebrew/include/antlr4-runtime /usr/local/include/antlr4-runtime)
+    find_path(ANTLR4_INCLUDE_DIR antlr4-runtime/antlr4-runtime.h PATHS /opt/homebrew/include /usr/local/include)
 else()
     # Linux - look in standard locations and also check common install paths
     find_library(ANTLR4_RUNTIME antlr4-runtime PATHS /usr/local/lib /usr/lib /usr/lib/x86_64-linux-gnu)
-    find_path(ANTLR4_INCLUDE_DIR antlr4-runtime.h PATHS 
-        /usr/local/include/antlr4-runtime 
-        /usr/include/antlr4-runtime
+    find_path(ANTLR4_INCLUDE_DIR antlr4-runtime/antlr4-runtime.h PATHS 
         /usr/local/include
         /usr/include
     )
