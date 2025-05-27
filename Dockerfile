@@ -32,6 +32,7 @@ RUN wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | apt-key add - \
     && apt-get update \
     && apt-get install -y \
     libarrow-dev \
+    libarrow-dataset-dev \
     libparquet-dev \
     && rm -rf /var/lib/apt/lists/* \
     && rm ./apache-arrow-apt-source-latest-$(lsb_release -cs).deb
@@ -76,17 +77,7 @@ USER vscode
 # Set up the working directory
 WORKDIR /workspace
 
-# Install CDS from source (latest version)
-RUN git clone https://github.com/khizmax/libcds.git && \
-    cd libcds && \
-    mkdir build && \
-    cd build && \
-    cmake .. && \
-    make -j$(nproc) && \
-    make install && \
-    cd ../.. && \
-    rm -rf libcds
-
+# Force cache invalidation - updated 2025-01-26
 # Copy source code
 COPY . .
 
