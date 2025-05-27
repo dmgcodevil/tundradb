@@ -18,7 +18,7 @@
 #include <vector>
 
 // Finally include ANTLR after everything else
-#include <antlr4-runtime/antlr4-runtime.h>
+#include <antlr4-runtime.h>
 
 #include "antlr_generated/TundraQLBaseVisitor.h"
 #include "antlr_generated/TundraQLLexer.h"
