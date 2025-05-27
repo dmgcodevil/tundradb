@@ -224,17 +224,22 @@ add_custom_command(
 # On macOS with Homebrew, you may need to adjust these paths
 if(APPLE)
     find_library(ANTLR4_RUNTIME antlr4-runtime PATHS /opt/homebrew/lib /usr/local/lib)
-    include_directories(/opt/homebrew/include/antlr4-runtime /usr/local/include/antlr4-runtime)
+    find_path(ANTLR4_INCLUDE_DIR antlr4-runtime.h PATHS /opt/homebrew/include/antlr4-runtime /usr/local/include/antlr4-runtime)
 else()
-    # Linux - look in standard locations
-    find_library(ANTLR4_RUNTIME antlr4-runtime PATHS /usr/local/lib /usr/lib)
-    find_path(ANTLR4_INCLUDE_DIR antlr4-runtime.h PATHS /usr/local/include/antlr4-runtime /usr/include/antlr4-runtime)
-    if(ANTLR4_INCLUDE_DIR)
-        include_directories(${ANTLR4_INCLUDE_DIR})
-        message(STATUS "Found ANTLR4 headers at: ${ANTLR4_INCLUDE_DIR}")
-    else()
-        message(WARNING "ANTLR4 headers not found")
-    endif()
+    # Linux - look in standard locations and also check common install paths
+    find_library(ANTLR4_RUNTIME antlr4-runtime PATHS /usr/local/lib /usr/lib /usr/lib/x86_64-linux-gnu)
+    find_path(ANTLR4_INCLUDE_DIR antlr4-runtime.h PATHS 
+        /usr/local/include/antlr4-runtime 
+        /usr/include/antlr4-runtime
+        /usr/local/include
+        /usr/include
+    )
+endif()
+
+if(ANTLR4_INCLUDE_DIR)
+    message(STATUS "Found ANTLR4 headers at: ${ANTLR4_INCLUDE_DIR}")
+else()
+    message(WARNING "ANTLR4 headers not found")
 endif()
 
 if(NOT ANTLR4_RUNTIME)
@@ -251,11 +256,19 @@ add_library(tundraql_parser
 # Make sure the parser is generated first
 add_dependencies(tundraql_parser GenerateTundraQLParser)
 
-# Include the generated header files
+# Include the generated header files and ANTLR4 headers
 target_include_directories(tundraql_parser
     PUBLIC
         ${ANTLR_OUTPUT_DIR}
 )
+
+# Add ANTLR4 include directory if found
+if(ANTLR4_INCLUDE_DIR)
+    target_include_directories(tundraql_parser
+        PRIVATE
+            ${ANTLR4_INCLUDE_DIR}
+    )
+endif()
 
 # Link ANTLR runtime to the parser library
 if(ANTLR4_RUNTIME)
