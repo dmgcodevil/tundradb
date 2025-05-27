@@ -20,9 +20,9 @@
 // Finally include ANTLR after everything else
 #include <antlr4-runtime.h>
 
-#include "antlr_generated/TundraQLBaseVisitor.h"
-#include "antlr_generated/TundraQLLexer.h"
-#include "antlr_generated/TundraQLParser.h"
+#include "TundraQLBaseVisitor.h"
+#include "TundraQLLexer.h"
+#include "TundraQLParser.h"
 #include "core.hpp"
 #include "linenoise.h"
 #include "logger.hpp"
