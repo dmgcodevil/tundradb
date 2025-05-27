@@ -168,6 +168,15 @@ target_link_libraries(tundradb
 # Interactive shell executable
 add_executable(tundra_shell src/tundra_shell.cpp libs/linenoise/linenoise.c)
 
+# Add ANTLR generated include directory to tundra_shell
+target_include_directories(tundra_shell
+    PRIVATE
+        ${ANTLR_OUTPUT_DIR}
+)
+
+# Make sure ANTLR files are generated before building tundra_shell
+add_dependencies(tundra_shell GenerateTundraQLParser)
+
 target_link_libraries(tundra_shell
     PRIVATE
         core
