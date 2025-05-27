@@ -3,7 +3,6 @@
 #include <arrow/compute/api.h>
 #include <arrow/dataset/dataset.h>
 #include <arrow/dataset/scanner.h>
-#include <fmt/ranges.h>
 #include <support/CPPUtils.h>
 
 #include <chrono>
@@ -11,6 +10,8 @@
 #include <iostream>
 #include <list>
 #include <memory>
+#include <queue>
+#include <ranges>
 #include <stack>
 #include <thread>
 #include <utility>
@@ -22,6 +23,18 @@
 namespace fs = std::filesystem;
 
 namespace tundradb {
+
+// Utility function to join containers using C++23 ranges
+template<typename Container>
+std::string join_container(const Container& container, std::string_view delimiter = ", ") {
+  return [&]() {
+    std::ostringstream oss;
+    for (auto it = container.begin(); it != container.end(); ++it) {
+      oss << (it != container.begin() ? delimiter : "") << *it;
+    }
+    return oss.str();
+  }();
+}
 
 arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
     const std::shared_ptr<arrow::Schema>& schema,
@@ -250,7 +263,7 @@ void debug_connections(
     const std::map<int64_t, std::vector<GraphConnection>>& connections,
     std::vector<std::string> path, std::vector<std::string>& res) {
   if (!connections.contains(id)) {
-    res.push_back(fmt::format("{}", fmt::join(path, ", ")));
+    res.push_back(join_container(path));
     return;
   }
   for (const auto& conn : connections.at(id)) {
@@ -1142,8 +1155,8 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows(
     // Get all nodes for this schema
     const auto& schema_nodes = query_state.ids.at(schema_ref.value());
 
-    log_debug(">>Processing schema '{}' nodes '{}'", schema_ref.value(),
-              schema_nodes);
+    log_debug("Processing schema '{}' nodes: [{}]", schema_ref.value(),
+              join_container(schema_nodes));
     std::set<std::string> local_visited;
 
     // For INNER join: only process nodes that have connections
@@ -1573,7 +1586,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           query_state.ids[traverse->target().value()] = intersect_ids;
           log_info("intersect_ids count: {}", intersect_ids.size());
           log_info("{} intersect_ids: {}", traverse->target().toString(),
-                   intersect_ids);
+                   join_container(intersect_ids));
         } else if (traverse->traverse_type() == TraverseType::Left) {
           query_state.ids[traverse->target().value()].insert(
               matched_target_ids.begin(), matched_target_ids.end());
@@ -1582,9 +1595,10 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
               get_ids_from_table(get_table(target_schema).ValueOrDie())
                   .ValueOrDie();
           log_debug(
-              "traverse type: '{}', remove matched_source_ids={} from "
-              "target_ds={}",
-              traverse->target().value(), matched_source_ids, target_ids);
+              "traverse type: '{}', matched_source_ids=[{}], "
+              "target_ids=[{}]",
+              traverse->target().value(), join_container(matched_source_ids), 
+              join_container(target_ids));
           std::set<int64_t> result;
           std::set_difference(
               target_ids.begin(), target_ids.end(), matched_source_ids.begin(),

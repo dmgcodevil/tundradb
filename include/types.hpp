@@ -9,7 +9,7 @@
 
 namespace tundradb {
 
-enum class ValueType { Null, Int64, Double, String, Bool, Array, Map };
+enum class ValueType { Null, Int64, Double, String, Bool };
 
 class Value {
  public:
@@ -40,9 +40,7 @@ class Value {
 
  private:
   ValueType type_;
-  std::variant<std::monostate, int64_t, double, std::string, bool,
-               std::vector<Value>, std::unordered_map<std::string, Value> >
-      data_;
+  std::variant<std::monostate, int64_t, double, std::string, bool> data_;
 };
 
 }  // namespace tundradb

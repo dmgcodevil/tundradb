@@ -1,4 +1,4 @@
-FROM ubuntu:22.04
+FROM --platform=linux/amd64 ubuntu:24.04
 
 # Prevent interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
@@ -6,6 +6,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Install basic build tools and dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
+    gcc-13 \
+    g++-13 \
     git \
     pkg-config \
     python3 \
@@ -22,7 +24,13 @@ RUN apt-get update && apt-get install -y \
     libgtest-dev \
     libbenchmark-dev \
     libcds-dev \
+    openjdk-11-jdk \
+    sudo \
     && rm -rf /var/lib/apt/lists/*
+
+# Set GCC 13 as default
+RUN update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100 \
+    && update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 100
 
 # Add Arrow repository
 RUN wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | apt-key add - \
@@ -61,6 +69,18 @@ RUN cd /tmp && \
     cd / && \
     rm -rf /tmp/benchmark
 
+# Install fmt library from source (latest version with fmt::join)
+RUN cd /tmp && \
+    git clone https://github.com/fmtlib/fmt.git && \
+    cd fmt && \
+    mkdir build && \
+    cd build && \
+    cmake -DCMAKE_BUILD_TYPE=Release -DFMT_DOC=OFF -DFMT_TEST=OFF .. && \
+    make -j$(nproc) && \
+    make install && \
+    cd / && \
+    rm -rf /tmp/fmt
+
 # Install latest CMake
 RUN wget https://github.com/Kitware/CMake/releases/download/v3.30.0/cmake-3.30.0-linux-x86_64.sh \
     -q -O /tmp/cmake-install.sh \
@@ -70,8 +90,21 @@ RUN wget https://github.com/Kitware/CMake/releases/download/v3.30.0/cmake-3.30.0
     && ln -s /opt/cmake/bin/* /usr/local/bin/ \
     && rm /tmp/cmake-install.sh
 
-# Create a non-root user
-RUN useradd -m -s /bin/bash vscode
+# Install ANTLR4 runtime from source
+RUN cd /tmp && \
+    git clone https://github.com/antlr/antlr4.git && \
+    cd antlr4/runtime/Cpp && \
+    mkdir build && \
+    cd build && \
+    cmake .. -DCMAKE_BUILD_TYPE=Release && \
+    make -j$(nproc) && \
+    make install && \
+    cd / && \
+    rm -rf /tmp/antlr4
+
+# Create a non-root user and add to sudo group
+RUN useradd -m -s /bin/bash vscode && \
+    echo "vscode ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 USER vscode
 
 # Set up the working directory
@@ -82,7 +115,8 @@ WORKDIR /workspace
 COPY . .
 
 # Build the project
-RUN mkdir build && \
+RUN sudo rm -rf build && \
+    mkdir build && \
     cd build && \
     cmake .. && \
     make -j$(nproc)

@@ -17,7 +17,22 @@ list(APPEND CMAKE_PREFIX_PATH "/usr/local")
 
 # Find required packages
 find_package(Arrow REQUIRED)
-find_package(ArrowDataset REQUIRED)
+
+# ArrowDataset might be part of Arrow or a separate package
+# Try to find it as a separate package first
+find_package(ArrowDataset QUIET)
+if(ArrowDataset_FOUND AND TARGET ArrowDataset::arrow_dataset_shared)
+    set(ARROW_DATASET_LIB ArrowDataset::arrow_dataset_shared)
+    message(STATUS "Using ArrowDataset::arrow_dataset_shared")
+elseif(TARGET Arrow::arrow_dataset_shared)
+    set(ARROW_DATASET_LIB Arrow::arrow_dataset_shared)
+    message(STATUS "Using Arrow::arrow_dataset_shared")
+else()
+    # Fallback: assume dataset functionality is in the main arrow library
+    set(ARROW_DATASET_LIB Arrow::arrow_shared)
+    message(STATUS "Using Arrow::arrow_shared (assuming dataset functionality included)")
+endif()
+
 find_package(Parquet REQUIRED)
 find_package(benchmark REQUIRED)
 find_package(GTest REQUIRED)
@@ -126,7 +141,7 @@ target_include_directories(core
 target_link_libraries(core
     PUBLIC
         Arrow::arrow_shared
-        ArrowDataset::arrow_dataset_shared
+        ${ARROW_DATASET_LIB}
         Parquet::parquet_shared
         spdlog::spdlog
         ${UUID_LIBRARY}
@@ -170,7 +185,7 @@ find_package(Java REQUIRED)
 set(ANTLR_JAR_LOCATION "${CMAKE_CURRENT_SOURCE_DIR}/antlr/lib/antlr-4.13.2-complete.jar")
 
 # Set up the output directory
-set(ANTLR_OUTPUT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/antlr_generated")
+set(ANTLR_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/antlr_generated")
 file(MAKE_DIRECTORY ${ANTLR_OUTPUT_DIR})
 
 # Define generated files
