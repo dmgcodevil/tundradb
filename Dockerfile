@@ -96,9 +96,10 @@ RUN cd /tmp && \
     cd antlr4/runtime/Cpp && \
     mkdir build && \
     cd build && \
-    cmake .. -DCMAKE_BUILD_TYPE=Release && \
+    cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local && \
     make -j$(nproc) && \
     make install && \
+    ldconfig && \
     cd / && \
     rm -rf /tmp/antlr4
 

@@ -226,12 +226,21 @@ if(APPLE)
     find_library(ANTLR4_RUNTIME antlr4-runtime PATHS /opt/homebrew/lib /usr/local/lib)
     include_directories(/opt/homebrew/include/antlr4-runtime /usr/local/include/antlr4-runtime)
 else()
-    find_library(ANTLR4_RUNTIME antlr4-runtime PATHS /usr/local/lib)
-    include_directories(/usr/local/include/antlr4-runtime)
+    # Linux - look in standard locations
+    find_library(ANTLR4_RUNTIME antlr4-runtime PATHS /usr/local/lib /usr/lib)
+    find_path(ANTLR4_INCLUDE_DIR antlr4-runtime.h PATHS /usr/local/include/antlr4-runtime /usr/include/antlr4-runtime)
+    if(ANTLR4_INCLUDE_DIR)
+        include_directories(${ANTLR4_INCLUDE_DIR})
+        message(STATUS "Found ANTLR4 headers at: ${ANTLR4_INCLUDE_DIR}")
+    else()
+        message(WARNING "ANTLR4 headers not found")
+    endif()
 endif()
 
 if(NOT ANTLR4_RUNTIME)
     message(WARNING "ANTLR4 runtime library not found. Please install it via Homebrew or from source.")
+else()
+    message(STATUS "Found ANTLR4 runtime library: ${ANTLR4_RUNTIME}")
 endif()
 
 # Create a library for the ANTLR parser
