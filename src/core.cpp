@@ -3,7 +3,6 @@
 #include <arrow/compute/api.h>
 #include <arrow/dataset/dataset.h>
 #include <arrow/dataset/scanner.h>
-#include <support/CPPUtils.h>
 
 #include <chrono>
 #include <future>
