@@ -312,8 +312,12 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
 
     // Build the query and execute it
     auto query = query_builder.build();
-    auto result = db.query(query).ValueOrDie();
-    auto result_table = result->table();
+    auto result = db.query(query);
+    if (!result.ok()) {
+      tundradb::log_error("Query failed");
+      return result.status();
+    }
+    auto result_table = result.ValueOrDie()->table();
 
     // Print results
     std::cout << "\nQuery results:\n";

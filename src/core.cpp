@@ -1422,6 +1422,11 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
     log_info("processing 'from' {}", query.from().toString());
     ARROW_ASSIGN_OR_RAISE(auto source_schema,
                           query_state.resolve_schema(query.from()));
+    auto table_res = this->get_table(source_schema);
+    if (!table_res.ok()) {
+      log_error("failed to get table 'from' {}", query.from().toString());
+      return table_res.status();
+    }
     ARROW_ASSIGN_OR_RAISE(auto source_table, this->get_table(source_schema));
     ARROW_RETURN_NOT_OK(query_state.update_table(source_table, query.from()));
   }
