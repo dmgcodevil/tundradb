@@ -16,7 +16,13 @@ propertyAssignment: IDENTIFIER EQ value;
 value: STRING_LITERAL | INTEGER_LITERAL | FLOAT_LITERAL; // Add more value types
 
 // --- Edge Creation ---
-createEdgeStatement: K_CREATE K_EDGE IDENTIFIER K_FROM nodeLocator K_TO nodeLocator (K_WITH LPAREN propertyList RPAREN)? SEMI;
+createEdgeStatement: K_CREATE (K_UNIQUE)? K_EDGE IDENTIFIER K_FROM nodeSelector K_TO nodeSelector (K_WITH LPAREN propertyList RPAREN)? SEMI;
+
+// Node selector supports both legacy ID syntax and new property-based syntax
+nodeSelector: 
+    nodeLocator                                    // Legacy: User(123)
+    | LPAREN IDENTIFIER LBRACE propertyList RBRACE RPAREN;  // New: (User{name="Alice"})
+
 nodeLocator: IDENTIFIER LPAREN INTEGER_LITERAL RPAREN; // e.g., User(123)
 
 // --- Match Statement ---
@@ -79,6 +85,7 @@ K_FULL: 'FULL';
 K_AND: 'AND';
 K_OR: 'OR';
 K_COMMIT: 'COMMIT';
+K_UNIQUE: 'UNIQUE';
 
 // --- Data Types for Schema ---
 T_STRING: 'STRING';
@@ -96,6 +103,8 @@ LPAREN: '(';
 RPAREN: ')';
 LBRACKET: '[';
 RBRACKET: ']';
+LBRACE: '{';
+RBRACE: '}';
 SEMI: ';';
 COMMA: ',';
 COLON: ':';

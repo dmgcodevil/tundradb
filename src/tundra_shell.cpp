@@ -316,24 +316,56 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
   antlrcpp::Any visitCreateEdgeStatement(
       tundraql::TundraQLParser::CreateEdgeStatementContext* ctx) override {
     std::string edge_type = ctx->IDENTIFIER()->getText();
-    spdlog::info("Creating edge of type: {}", edge_type);
+    bool is_unique = ctx->K_UNIQUE() != nullptr;
+    spdlog::info("Creating {} edge of type: {}", is_unique ? "UNIQUE" : "",
+                 edge_type);
 
-    // Extract source and target nodes
-    auto sourceNode = ctx->nodeLocator(0);
-    auto targetNode = ctx->nodeLocator(1);
+    // Extract source and target node selectors
+    auto sourceSelector = ctx->nodeSelector(0);
+    auto targetSelector = ctx->nodeSelector(1);
 
-    std::string source_type = sourceNode->IDENTIFIER()->getText();
-    int64_t source_id = std::stoll(sourceNode->INTEGER_LITERAL()->getText());
+    // Resolve source nodes
+    std::vector<int64_t> source_ids = resolveNodeSelector(sourceSelector);
+    std::vector<int64_t> target_ids = resolveNodeSelector(targetSelector);
 
-    std::string target_type = targetNode->IDENTIFIER()->getText();
-    int64_t target_id = std::stoll(targetNode->INTEGER_LITERAL()->getText());
+    // Handle UNIQUE constraint
+    if (is_unique) {
+      if (source_ids.size() != 1) {
+        throw std::runtime_error(
+            "UNIQUE constraint violated: " + std::to_string(source_ids.size()) +
+            " source nodes found, expected exactly 1");
+      }
+      if (target_ids.size() != 1) {
+        throw std::runtime_error(
+            "UNIQUE constraint violated: " + std::to_string(target_ids.size()) +
+            " target nodes found, expected exactly 1");
+      }
+    }
 
-    // Create edge between nodes
-    db.connect(source_id, edge_type, target_id).ValueOrDie();
+    // Create edges for all combinations
+    int edge_count = 0;
+    for (auto source_id : source_ids) {
+      for (auto target_id : target_ids) {
+        auto result = db.connect(source_id, edge_type, target_id);
+        if (!result.ok()) {
+          throw std::runtime_error("Failed to create edge: " +
+                                   result.status().ToString());
+        }
+        edge_count++;
+      }
+    }
 
-    *g_output_stream << "Created edge of type '" << edge_type << "' from "
-                     << source_type << "(" << source_id << ") to "
-                     << target_type << "(" << target_id << ")" << std::endl;
+    if (edge_count == 1) {
+      *g_output_stream << "Created edge of type '" << edge_type
+                       << "' from node(" << source_ids[0] << ") to node("
+                       << target_ids[0] << ")" << std::endl;
+    } else {
+      *g_output_stream << "Created " << edge_count << " edges of type '"
+                       << edge_type << "' (" << source_ids.size()
+                       << " sources × " << target_ids.size() << " targets)"
+                       << std::endl;
+    }
+
     return true;
   }
 
@@ -758,6 +790,106 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
     }
 
     return deleted_count;
+  }
+
+ private:
+  // Helper method to resolve node selector to list of node IDs
+  std::vector<int64_t> resolveNodeSelector(
+      tundraql::TundraQLParser::NodeSelectorContext* selector) {
+    std::vector<int64_t> node_ids;
+
+    if (selector->nodeLocator()) {
+      // Legacy syntax: User(123)
+      auto nodeLocator = selector->nodeLocator();
+      int64_t node_id = std::stoll(nodeLocator->INTEGER_LITERAL()->getText());
+      node_ids.push_back(node_id);
+
+    } else {
+      // Property-based syntax: (User{name="Alice", age=25})
+      std::string node_type = selector->IDENTIFIER()->getText();
+
+      // Extract properties
+      std::unordered_map<std::string, std::string> properties;
+      auto propList = selector->propertyList();
+      for (auto prop : propList->propertyAssignment()) {
+        std::string prop_name = prop->IDENTIFIER()->getText();
+        std::string prop_value = prop->value()->getText();
+
+        // Remove quotes from string literals
+        if (prop_value.size() >= 2 && prop_value.front() == '"' &&
+            prop_value.back() == '"') {
+          prop_value = prop_value.substr(1, prop_value.size() - 2);
+        }
+
+        properties[prop_name] = prop_value;
+      }
+
+      // Query nodes that match the properties
+      node_ids = findNodesByProperties(node_type, properties);
+    }
+
+    return node_ids;
+  }
+
+  // Helper method to find nodes by properties
+  std::vector<int64_t> findNodesByProperties(
+      const std::string& node_type,
+      const std::unordered_map<std::string, std::string>& properties) {
+    std::vector<int64_t> matching_ids;
+
+    try {
+      // Build a query to find matching nodes
+      auto query_builder = tundradb::Query::from("n:" + node_type);
+
+      // Add WHERE conditions for each property
+      for (const auto& [prop_name, prop_value] : properties) {
+        // Create a Value object from the string
+        tundradb::Value value(prop_value);
+        query_builder.where("n." + prop_name, tundradb::CompareOp::Eq, value);
+      }
+
+      auto query = query_builder.build();
+      auto result = db.query(query);
+
+      if (!result.ok()) {
+        throw std::runtime_error("Failed to query nodes: " +
+                                 result.status().ToString());
+      }
+
+      auto result_table = result.ValueOrDie()->table();
+
+      // Extract IDs from the result table
+      if (result_table->num_rows() > 0) {
+        auto id_column_result = result_table->GetColumnByName("n.id");
+        if (id_column_result != nullptr) {
+          for (int64_t row = 0; row < result_table->num_rows(); row++) {
+            // Handle chunked arrays
+            int64_t chunk_index = 0;
+            int64_t offset_in_chunk = row;
+
+            // Find the correct chunk
+            while (chunk_index < id_column_result->num_chunks() &&
+                   offset_in_chunk >=
+                       id_column_result->chunk(chunk_index)->length()) {
+              offset_in_chunk -= id_column_result->chunk(chunk_index)->length();
+              chunk_index++;
+            }
+
+            if (chunk_index < id_column_result->num_chunks()) {
+              auto chunk = std::static_pointer_cast<arrow::Int64Array>(
+                  id_column_result->chunk(chunk_index));
+              matching_ids.push_back(chunk->Value(offset_in_chunk));
+            }
+          }
+        }
+      }
+
+    } catch (const std::exception& e) {
+      throw std::runtime_error("Error finding nodes by properties: " +
+                               std::string(e.what()));
+    }
+
+    return matching_ids;
   }
 };
 

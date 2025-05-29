@@ -1,6 +1,6 @@
 # TundraDB - Graph Database Query Language Guide
 
-TundraDB is a high-performance graph database with a custom query language called TundraQL. This guide demonstrates the basic usage patterns with examples.
+TundraDB is a high-performance graph database with a custom query language called TundraQL. This guide demonstrates the full feature set with practical examples.
 
 ## Building TundraDB from Source
 
@@ -42,530 +42,383 @@ Required dependencies:
 ## Getting Started
 
 1. Launch the TundraDB shell:
-   ```
+   ```bash
    ./build_release/tundra_shell
    ```
    or if using the portable version:
-   ```
+   ```bash
    ./tundra_shell_launcher.sh
    ```
 
-2. Create your schemas and data as shown below, then start querying!
+2. **Script Execution**: Run TundraQL script files:
+   ```bash
+   # Execute a script and keep shell open
+   ./tundra_shell --script my_script.sql
+   
+   # Execute script and exit (batch mode)
+   ./tundra_shell --script my_script.sql --detach
+   
+   # Execute with unique database and output file
+   ./tundra_shell --script my_script.sql --unique-db --output results.txt
+   ```
 
-## Data Model Examples
+3. Create your schemas and data as shown below, then start querying!
 
-### Defining Schemas
+## Data Model
 
-First, define the structure of your node types:
+### Schema Definition
+
+Define the structure of your node types using supported data types:
 
 ```sql
--- Define a User schema with name and age
-CREATE SCHEMA User (name: STRING, age: INT64);
+-- User schema with STRING and INT64 types
+CREATE SCHEMA User (name: STRING, age: INT64, department: STRING);
 
--- Define a Company schema with name and size
-CREATE SCHEMA Company (name: STRING, size: INT64);
+-- Company schema 
+CREATE SCHEMA Company (name: STRING, industry: STRING, size: INT64);
+
+-- Project schema
+CREATE SCHEMA Project (name: STRING, budget: INT64, status: STRING);
 ```
 
-### Creating Nodes
+**Supported Data Types:**
+- `STRING`: Text values (e.g., "Alice", "TechCorp")
+- `INT64`: Integer values (e.g., 25, 1000)
 
-Once schemas are defined, you can create nodes:
+**Note**: An `id` field of type `INT64` is automatically added to every schema.
+
+### Node Creation
+
+Create nodes with the defined schemas:
 
 ```sql
 -- Create User nodes
-CREATE NODE User (name="Alex", age=25);  -- ID = 0
-CREATE NODE User (name="Bob", age=31);   -- ID = 1
-CREATE NODE User (name="Jeff", age=33);  -- ID = 2
-CREATE NODE User (name="Sam", age=21);   -- ID = 3
-CREATE NODE User (name="Matt", age=40);  -- ID = 4
+CREATE NODE User (name="Alice", age=25, department="Engineering") RETURN id;  -- ID = 0
+CREATE NODE User (name="Bob", age=30, department="Engineering") RETURN id;    -- ID = 1
+CREATE NODE User (name="Charlie", age=35, department="Marketing") RETURN id;  -- ID = 2
+CREATE NODE User (name="David", age=40, department="Engineering") RETURN id;  -- ID = 3
 
 -- Create Company nodes
-CREATE NODE Company (name="Google", size=3000);  -- ID = 5
-CREATE NODE Company (name="IBM", size=1000);     -- ID = 6
-CREATE NODE Company (name="AWS", size=2000);     -- ID = 7
+CREATE NODE Company (name="TechCorp", industry="Technology", size=500) RETURN id;  -- ID = 4
+CREATE NODE Company (name="FinanceInc", industry="Finance", size=300) RETURN id;   -- ID = 5
+
+-- Create Project nodes
+CREATE NODE Project (name="WebApp", budget=100000, status="Active") RETURN id;     -- ID = 6
+CREATE NODE Project (name="MobileApp", budget=150000, status="Active") RETURN id;  -- ID = 7
 ```
 
-**Important Note**: Node IDs are unique across all node types and start at 0. The IDs shown above assume you're creating nodes in exactly this order.
+**Important**: Node IDs are unique across all node types and start at 0.
 
-### Creating Relationships
+### Edge Creation
 
-Create relationships between nodes using their IDs:
+TundraDB offers multiple ways to create edges between nodes:
+
+#### 1. Legacy ID-Based Syntax
 
 ```sql
--- Create WORKS_AT relationships (using the correct IDs)
-CREATE EDGE WORKS_AT FROM User(0) TO Company(5);  -- Alex works at Google
-CREATE EDGE WORKS_AT FROM User(1) TO Company(6);  -- Bob works at IBM
-CREATE EDGE WORKS_AT FROM User(2) TO Company(7);  -- Jeff works at AWS
-CREATE EDGE WORKS_AT FROM User(3) TO Company(7);  -- Sam works at AWS
-CREATE EDGE WORKS_AT FROM User(4) TO Company(5);  -- Matt works at Google
+-- Create edges using node IDs
+CREATE EDGE WORKS_AT FROM User(0) TO Company(4);  -- Alice works at TechCorp
+CREATE EDGE WORKS_AT FROM User(1) TO Company(4);  -- Bob works at TechCorp
+CREATE EDGE WORKS_AT FROM User(2) TO Company(5);  -- Charlie works at FinanceInc
 
--- Create FRIEND relationships between users
-CREATE EDGE FRIEND FROM User(0) TO User(1);  -- Alex is friends with Bob
-CREATE EDGE FRIEND FROM User(0) TO User(2);  -- Alex is friends with Jeff
-CREATE EDGE FRIEND FROM User(1) TO User(4);  -- Bob is friends with Matt
+-- Create friendship relationships
+CREATE EDGE FRIEND FROM User(0) TO User(1);  -- Alice is friends with Bob
 ```
 
-### Commiting changes
+#### 2. 🆕 Property-Based Node Selection
 
-To store data on disk:
+Select nodes by their properties instead of IDs:
+
+```sql
+-- Single edge with UNIQUE constraint (fails if multiple matches)
+CREATE UNIQUE EDGE WORKS_AT FROM (User{name="Alice"}) TO (Company{name="TechCorp"});
+
+-- Single edge with UNIQUE constraint using multiple properties
+CREATE UNIQUE EDGE ASSIGNED_TO FROM (User{name="Bob", department="Engineering"}) 
+                                  TO (Project{name="WebApp"});
+```
+
+#### 3. 🆕 Batch Edge Creation
+
+Create multiple edges when properties match multiple nodes:
+
+```sql
+-- Create edges from ALL Engineering users to TechCorp
+CREATE EDGE WORKS_AT FROM (User{department="Engineering"}) TO (Company{name="TechCorp"});
+-- Result: Creates 3 edges (Alice, Bob, David → TechCorp)
+
+-- Create edges from ALL Active projects to specific users
+CREATE EDGE ASSIGNED_TO FROM (User{name="Alice"}) TO (Project{status="Active"});
+-- Result: Creates 2 edges (Alice → WebApp, Alice → MobileApp)
+```
+
+**Edge Creation Summary:**
+- **Legacy syntax**: `User(0)` - Select by ID
+- **UNIQUE edges**: Fail if property selector matches multiple nodes
+- **Batch edges**: Create edges to ALL matching nodes
+- **Property matching**: Use `{property=value}` syntax for selection
+
+### Committing Changes
+
+Store data persistently:
 
 ```sql
 COMMIT;
 ```
 
-## Query Examples
+## Query Language
 
 ### Basic Node Queries
 
-Query all users:
-
 ```sql
+-- Query all users
 MATCH (u:User);
-```
 
-Query all companies:
+-- Query with specific fields
+MATCH (u:User) SELECT u.name, u.age;
 
-```sql
+-- Query all companies
 MATCH (c:Company);
 ```
 
-Query with specific fields:
+### WHERE Clauses
+
+Filter data using various operators:
 
 ```sql
-MATCH (u:User) SELECT u.name, u.age;
+-- Equality operators
+MATCH (u:User) WHERE u.name = "Alice";
+MATCH (u:User) WHERE u.age != 30;
+
+-- Comparison operators  
+MATCH (u:User) WHERE u.age > 30;
+MATCH (u:User) WHERE u.age < 35;
+
+-- String and numeric filtering
+MATCH (c:Company) WHERE c.industry = "Technology";
+MATCH (p:Project) WHERE p.budget > 100000;
 ```
 
 ### Relationship Queries
 
-Find users who work at companies:
+#### Basic Traversals
 
 ```sql
+-- Find users who work at companies
 MATCH (u:User)-[:WORKS_AT]->(c:Company);
+
+-- Find users assigned to projects
+MATCH (u:User)-[:ASSIGNED_TO]->(p:Project);
+
+-- Find friendships
+MATCH (u:User)-[:FRIEND]->(f:User);
 ```
 
-Find users who work at Google:
+#### Combined Queries
 
 ```sql
+-- Find users at specific companies
 MATCH (u:User)-[:WORKS_AT]->(c:Company) 
-WHERE c.name = "Google";
-```
+WHERE c.name = "TechCorp";
 
-Find users over 30 who work at AWS:
-
-```sql
+-- Find users over 30 who work at tech companies
 MATCH (u:User)-[:WORKS_AT]->(c:Company) 
-WHERE u.age > 30 AND c.name = "AWS";
-```
+WHERE u.age > 30 AND c.industry = "Technology";
 
-### Advanced Queries
-
-
-Find friends who work at the same company:
-
-```sql
-MATCH (u1:User)-[:FRIEND]->(u2:User),  (u1)-[:WORKS_AT]->(c:Company), (u2)-[:WORKS_AT]->(c);
-```
-
-Find friends and their companies they work for
-
-```sql
-MATCH (u:User)-[:FRIEND INNER]->(f:User), (f)-[:WORKS_AT INNER]->(c:Company);
-```
-
-Find the average age of users at each company:
-
-```sql
-MATCH (u:User)-[:WORKS_AT]->(c:Company)
-SELECT c.name, AVG(u.age);
+-- Find friends who work at the same company
+MATCH (u1:User)-[:FRIEND]->(u2:User), 
+      (u1)-[:WORKS_AT]->(c:Company), 
+      (u2)-[:WORKS_AT]->(c);
 ```
 
 ### Join Types
 
-TundraQL supports different join types:
+TundraQL supports SQL-style joins for relationship queries:
 
 ```sql
--- INNER join (default) - only returns users who work at companies
+-- INNER join (default) - only matched relationships
 MATCH (u:User)-[:WORKS_AT INNER]->(c:Company);
 
--- LEFT join - returns all users, even those without companies
+-- LEFT join - all users, even those without companies
 MATCH (u:User)-[:WORKS_AT LEFT]->(c:Company);
 
--- RIGHT join - returns all companies, even those without users
+-- RIGHT join - all companies, even those without users  
 MATCH (u:User)-[:WORKS_AT RIGHT]->(c:Company);
 
--- FULL join - returns all users and companies
+-- FULL join - all users and companies
 MATCH (u:User)-[:WORKS_AT FULL]->(c:Company);
+```
+
+#### Join Examples
+
+Given this data setup:
+```sql
+-- Users: Alice(0), Bob(1), Charlie(2), David(3)
+-- Companies: TechCorp(4), FinanceInc(5) 
+-- Edges: Alice→TechCorp, Bob→TechCorp
+```
+
+**INNER JOIN** returns only matched relationships:
+```
+| u.id | u.name  | c.id | c.name     |
+|------|---------|------|------------|
+|  0   | "Alice" |  4   | "TechCorp" |
+|  1   | "Bob"   |  4   | "TechCorp" |
+```
+
+**LEFT JOIN** includes all users:
+```
+| u.id | u.name    | c.id | c.name     |
+|------|-----------|------|------------|
+|  0   | "Alice"   |  4   | "TechCorp" |
+|  1   | "Bob"     |  4   | "TechCorp" |
+|  2   | "Charlie" | null | null       |
+|  3   | "David"   | null | null       |
+```
+
+**FULL JOIN** includes all users and companies:
+```
+| u.id | u.name    | c.id | c.name      |
+|------|-----------|------|-------------|
+|  0   | "Alice"   |  4   | "TechCorp"  |
+|  1   | "Bob"     |  4   | "TechCorp"  |
+|  2   | "Charlie" | null | null        |
+|  3   | "David"   | null | null        |
+| null | null      |  5   | "FinanceInc"|
+```
+
+## 🆕 DELETE Operations
+
+TundraDB supports flexible DELETE operations for both nodes and relationships:
+
+### Delete by ID
+
+```sql
+-- Delete specific nodes by ID
+DELETE User(0);     -- Delete Alice
+DELETE Company(4);  -- Delete TechCorp
+
+-- Delete relationships by ID  
+DELETE EDGE WORKS_AT FROM User(1) TO Company(4);
+```
+
+### Delete by Pattern
+
+```sql
+-- Delete all nodes of a type
+DELETE (u:User);
+DELETE (c:Company);
+
+-- Delete specific nodes by pattern
+DELETE (u:User{name="Alice"});
+DELETE (c:Company{industry="Technology"});
+```
+
+### Delete with WHERE Clauses
+
+```sql
+-- Delete users over a certain age
+DELETE (u:User) WHERE u.age > 35;
+
+-- Delete companies with small size
+DELETE (c:Company) WHERE c.size < 100;
+
+-- Delete projects with specific status
+DELETE (p:Project) WHERE p.status = "Cancelled";
+```
+
+### Delete Relationships
+
+```sql
+-- Delete all edges of a specific type
+DELETE EDGE WORKS_AT;
+
+-- Delete edges with pattern matching
+DELETE EDGE WORKS_AT FROM (User{department="Marketing"}) TO (Company{});
+
+-- Delete edges with WHERE clauses
+DELETE EDGE ASSIGNED_TO FROM (User{}) TO (Project{}) WHERE Project.status = "Complete";
 ```
 
 ## Complete Example Session
 
-Here's a complete example session:
+Here's a comprehensive example showing TundraDB's full capabilities:
 
 ```sql
--- Create schemas
-CREATE SCHEMA User (name: STRING, age: INT64);
-CREATE SCHEMA Company (name: STRING, size: INT64);
+-- 1. Create schemas
+CREATE SCHEMA User (name: STRING, age: INT64, department: STRING);
+CREATE SCHEMA Company (name: STRING, industry: STRING, size: INT64);
+CREATE SCHEMA Project (name: STRING, budget: INT64, status: STRING);
 
--- Create users
-CREATE NODE User (name="Alex", age=25);  -- ID = 0
-CREATE NODE User (name="Bob", age=31);   -- ID = 1
-CREATE NODE User (name="Jeff", age=33);  -- ID = 2
+-- 2. Create nodes
+CREATE NODE User (name="Alice", age=25, department="Engineering") RETURN id;
+CREATE NODE User (name="Bob", age=30, department="Engineering") RETURN id;
+CREATE NODE User (name="Charlie", age=35, department="Marketing") RETURN id;
 
--- Create companies
-CREATE NODE Company (name="Google", size=3000);  -- ID = 3
-CREATE NODE Company (name="IBM", size=1000);     -- ID = 4
+CREATE NODE Company (name="TechCorp", industry="Technology", size=500) RETURN id;
+CREATE NODE Company (name="FinanceInc", industry="Finance", size=300) RETURN id;
 
--- Create relationships
+CREATE NODE Project (name="WebApp", budget=100000, status="Active") RETURN id;
+CREATE NODE Project (name="MobileApp", budget=150000, status="Complete") RETURN id;
+
+-- 3. Create relationships using multiple syntaxes
+-- Legacy ID-based
 CREATE EDGE WORKS_AT FROM User(0) TO Company(3);
-CREATE EDGE WORKS_AT FROM User(1) TO Company(4);
-CREATE EDGE WORKS_AT FROM User(2) TO Company(3);
 
--- Query users at Google
+-- Property-based with UNIQUE constraint
+CREATE UNIQUE EDGE WORKS_AT FROM (User{name="Bob"}) TO (Company{name="TechCorp"});
+
+-- Batch edge creation  
+CREATE EDGE ASSIGNED_TO FROM (User{department="Engineering"}) TO (Project{status="Active"});
+
+-- 4. Query examples
+-- Basic traversal
+MATCH (u:User)-[:WORKS_AT]->(c:Company);
+
+-- Complex filtering
 MATCH (u:User)-[:WORKS_AT]->(c:Company) 
-WHERE c.name = "Google"
+WHERE u.age > 25 AND c.industry = "Technology"
 SELECT u.name, u.age, c.name;
+
+-- JOIN examples
+MATCH (u:User)-[:WORKS_AT LEFT]->(c:Company);
+
+-- 5. Cleanup operations
+-- Delete completed projects
+DELETE (p:Project) WHERE p.status = "Complete";
+
+-- Delete marketing employees
+DELETE (u:User) WHERE u.department = "Marketing";
+
+-- Commit changes
+COMMIT;
 ```
 
-This query would return Alex and Jeff, who both work at Google. 
+## Features Summary
 
-### Testing
+✅ **Schema Management**: Define typed node structures  
+✅ **Node Operations**: Create, query, and delete nodes  
+✅ **Advanced Edge Creation**: ID-based, property-based, and batch creation  
+✅ **Flexible Queries**: Pattern matching, WHERE clauses, complex traversals  
+✅ **JOIN Support**: INNER, LEFT, RIGHT, and FULL joins  
+✅ **DELETE Operations**: By ID, pattern, or WHERE conditions  
+✅ **Script Execution**: Batch processing and automation  
+✅ **Data Persistence**: COMMIT changes to disk  
 
-Find users with friends (Inner,Left/Right/Join):
+## Command Line Options
 
-Input:
+```bash
+# Basic usage
+./tundra_shell
 
-```sql
-CREATE NODE User (name="Alex", age=25);  -- ID = 0
-CREATE NODE User (name="Bob", age=31);   -- ID = 1
-CREATE NODE User (name="Jeff", age=33);  -- ID = 2
-CREATE NODE User (name="Sam", age=21);   -- ID = 3
+# Script execution
+./tundra_shell --script file.sql                    # Execute script, keep shell open
+./tundra_shell -s file.sql --detach                 # Execute and exit
+./tundra_shell -s file.sql --unique-db              # Use timestamped database
+./tundra_shell -s file.sql --output results.txt     # Save output to file
 
-CREATE EDGE FRIEND FROM User(0) TO User(1);  -- Alex is friends with Bob
-CREATE EDGE FRIEND FROM User(0) TO User(2);  -- Alex is friends with Jeff
-
+# Combined options
+./tundra_shell -s file.sql -u -o results.txt --detach
 ```
 
-#### Test-1
-
-Query:
-
-```sql
-MATCH (u:User)-[:FRIEND INNER]->(f:User);
-```
-
-Result (✅ Correct):
-
-```
-+======+========+=======+======+========+=======+
-| u.id | u.name | u.age | f.id | f.name | f.age |
-+======+========+=======+======+========+=======+
-|  0   | "Alex" |  25   |  1   | "Bob"  |  31   |
-+------+--------+-------+------+--------+-------+
-|  0   | "Alex" |  25   |  2   | "Jeff" |  33   |
-+------+--------+-------+------+--------+-------+
-```
-
-✓ Correct - Shows only Alex's relationships with Bob and Jeff
-✓ Matches only exist where there's a FRIEND relationship
-
-#### Test-2
-
-Query:
-
-```sql
-MATCH (u:User)-[:FRIEND LEFT]->(f:User);
-```
-
-Result (✅  Correct):
-
-```
-+======+========+=======+======+========+=======+
-| u.id | u.name | u.age | f.id | f.name | f.age |
-+======+========+=======+======+========+=======+
-|  0   | "Alex" |  25   |  1   | "Bob"  |  31   |
-+------+--------+-------+------+--------+-------+
-|  0   | "Alex" |  25   |  2   | "Jeff" |  33   |
-+------+--------+-------+------+--------+-------+
-|  1   | "Bob"  |  31   | null |  null  | null  |
-+------+--------+-------+------+--------+-------+
-|  2   | "Jeff" |  33   | null |  null  | null  |
-+------+--------+-------+------+--------+-------+
-|  3   | "Sam"  |  21   | null |  null  | null  |
-+------+--------+-------+------+--------+-------+
-```
-
-✓ Correct - Shows all users on the left side
-✓ Bob, Jeff, and Sam have NULL values on the right because they don't have outgoing FRIEND relationships
-
-#### Test-3
-Query:
-
-```sql
-MATCH (u:User)-[:FRIEND RIGHT]->(f:User);
-```
-
-Result (✅ Correct):
-
-```
-+======+========+=======+======+========+=======+
-| u.id | u.name | u.age | f.id | f.name | f.age |
-+======+========+=======+======+========+=======+
-|  0   | "Alex" |  25   |  1   | "Bob"  |  31   |
-+------+--------+-------+------+--------+-------+
-|  0   | "Alex" |  25   |  2   | "Jeff" |  33   |
-+------+--------+-------+------+--------+-------+
-| null |  null  | null  |  3   | "Sam"  |  21   |
-+------+--------+-------+------+--------+-------+
-```
-
-✓ Correct - Shows all users on the right side
-✓ Sam has NULL values on the left because no one has a FRIEND relationship with Sam
-
-#### Test-4
-
-Query:
-
-```sql
-MATCH (u:User)-[:FRIEND FULL]->(f:User);
-```
-
-Result (✅ Fixed), [ticket](https://github.com/dmgcodevil/tundradb/issues/1)
-
-```
-+======+========+=======+======+========+=======+
-| u.id | u.name | u.age | f.id | f.name | f.age |
-+======+========+=======+======+========+=======+
-|  0   | "Alex" |  25   |  1   | "Bob"  |  31   |
-+------+--------+-------+------+--------+-------+
-|  0   | "Alex" |  25   |  2   | "Jeff" |  33   |
-+------+--------+-------+------+--------+-------+
-|  1   | "Bob"  |  31   | null |  null  | null  |
-+------+--------+-------+------+--------+-------+
-|  2   | "Jeff" |  33   | null |  null  | null  |
-+------+--------+-------+------+--------+-------+
-|  3   | "Sam"  |  21   | null |  null  | null  |
-+------+--------+-------+------+--------+-------+
-```
-
-The Result-4 for the FULL JOIN is not entirely correct.
-A FULL JOIN (FULL OUTER JOIN) should include:
-All matching rows (like INNER JOIN)
-All non-matching rows from the left table (like LEFT JOIN)
-All non-matching rows from the right table (like RIGHT JOIN)
-The current Result-4 shows:
-Alex's relationships with Bob and Jeff (matching rows)
-Bob, Jeff, and Sam with NULL values on the right (left-only rows)
-But it's missing: a row with Sam on the right side and NULL values on the left
-The complete correct result should include this additional row:
-
-```
-| null |  null  | null  |  3   | "Sam"  |  21   |
-```
-
-For a proper FULL JOIN, you need to combine all distinct records from both sides of the relationship, so Sam should appear both:
-As a left-side node with no matching right-side nodes
-As a right-side node with no matching left-side nodes
-
-#### Test-5:
-
-Add a new edge Bob -> Alex
-
-```sql
-CREATE EDGE FRIEND FROM User(1) TO User(0);
-```
-
-Query:
-
-```sql
-MATCH (u:User)-[:FRIEND INNER]->(f:User);
-```
-
-Result (✅ Correct):
-
-```sql
-+======+========+=======+======+========+=======+
-| u.id | u.name | u.age | f.id | f.name | f.age |
-+======+========+=======+======+========+=======+
-|  0   | "Alex" |  25   |  1   | "Bob"  |  31   |
-+------+--------+-------+------+--------+-------+
-|  0   | "Alex" |  25   |  2   | "Jeff" |  33   |
-+------+--------+-------+------+--------+-------+
-|  1   | "Bob"  |  31   |  0   | "Alex" |  25   |
-+------+--------+-------+------+--------+-------+
-```
-
-#### Test-6:
-
-Query:
-
-```sql
-MATCH (u:User)-[:FRIEND INNER]->(f:User) WHERE u.age > 30;
-```
-
-Result (✅ Fixed) [ticket](https://github.com/dmgcodevil/tundradb/issues/2)
-
-```
-+======+========+=======+======+========+=======+
-| u.id | u.name | u.age | f.id | f.name | f.age |
-+======+========+=======+======+========+=======+
-|  1   | "Bob"  |  31   |  0   | "Alex" |  25   |
-+------+--------+-------+------+--------+-------+
-
-```
-
-OR filter `f`
-
-```sql
-MATCH (u:User)-[:FRIEND INNER]->(f:User) WHERE f.age > 30;
-```
-
-Result:
-
-```sql
-+======+========+=======+======+========+=======+
-| u.id | u.name | u.age | f.id | f.name | f.age |
-+======+========+=======+======+========+=======+
-|  0   | "Alex" |  25   |  1   | "Bob"  |  31   |
-+------+--------+-------+------+--------+-------+
-```
-
-
-### Test suite User, Company
-
-Given:
-
-```
-+======+========+=======+======+========+=======+
-| u.id | u.name | u.age | f.id | f.name | f.age |
-+======+========+=======+======+========+=======+
-|  0   | "Alex" |  25   |  1   | "Bob"  |  31   |
-+------+--------+-------+------+--------+-------+
-|  0   | "Alex" |  25   |  2   | "Jeff" |  33   |
-+------+--------+-------+------+--------+-------+
-|  1   | "Bob"  |  31   | null |  null  | null  |
-+------+--------+-------+------+--------+-------+
-|  2   | "Jeff" |  33   | null |  null  | null  |
-+------+--------+-------+------+--------+-------+
-|  3   | "Sam"  |  21   | null |  null  | null  |
-+------+--------+-------+------+--------+-------+
-```
-
-Create Company schema:
-
-```sql
-CREATE SCHEMA Company (name: STRING, size: INT64);
-```
-
-Create companies:
-
-```sql
-CREATE NODE Company (name="Google", size=3000);  -- ID = 4
-CREATE NODE Company (name="IBM", size=1000);     -- ID = 5
-CREATE NODE Company (name="AWS", size=2000);     -- ID = 6
-```
-
-
-Create edges:
-
-```sql
-CREATE EDGE WORKS_AT FROM User(0) TO Company(4);  -- Alex works at Google
-CREATE EDGE WORKS_AT FROM User(1) TO Company(5);  -- Bob works at IBM
-```
-
-
-#### Test-1
-
-
-Query:
-
-```sql
-MATCH (u:User)-[:FRIEND INNER]->(f:User), (f)-[:WORKS_AT INNER]->(c:Company);
-```
-
-Result (✅ Fixed): [ticket](https://github.com/dmgcodevil/tundradb/issues/3)
-
-```
-+======+========+=======+======+========+=======+======+==========+========+
-| u.id | u.name | u.age | f.id | f.name | f.age | c.id |  c.name  | c.size |
-+======+========+=======+======+========+=======+======+==========+========+
-|  0   | "Alex" |  25   |  1   | "Bob"  |  31   |  3   |  "IBM"   |  1000  |
-+------+--------+-------+------+--------+-------+------+----------+--------+
-|  0   | "Alex" |  25   |  1   | "Bob"  |  31   |  4   | "Google" |  3000  |
-+------+--------+-------+------+--------+-------+------+----------+--------+
-|  1   | "Bob"  |  31   |  0   | "Alex" |  25   |  5   |  "IBM"   |  1000  |
-+------+--------+-------+------+--------+-------+------+----------+--------+
-```
-
-#### Test-2
-
-
-Giving:
-
-```
-+======+========+=======+======+========+=======+
-| u.id | u.name | u.age | f.id | f.name | f.age |
-+======+========+=======+======+========+=======+
-|  0   | "Alex" |  25   |  1   | "Bob"  |  31   |
-+------+--------+-------+------+--------+-------+
-|  0   | "Alex" |  25   |  2   | "Jeff" |  33   |
-+------+--------+-------+------+--------+-------+
-```
-
-```
-+======+========+=======+======+==========+========+
-| u.id | u.name | u.age | c.id |  c.name  | c.size |
-+======+========+=======+======+==========+========+
-|  0   | "Alex" |  25   |  3   | "Google" |  3000  |
-+------+--------+-------+------+----------+--------+
-|  1   | "Bob"  |  31   |  4   |  "IBM"   |  1000  |
-+------+--------+-------+------+----------+--------+
-|  2   | "Jeff" |  33   |  5   |  "AWS"   |  2000  |
-+------+--------+-------+------+----------+--------+
-```
-
-
-Query:
-
-```sql
-MATCH (u:User)-[:FRIEND INNER]->(f:User), (f)-[:WORKS_AT INNER]->(c:Company);
-```
-
-Result (✅ Correct):
-
-```
-+======+========+=======+======+========+=======+======+========+========+
-| u.id | u.name | u.age | f.id | f.name | f.age | c.id | c.name | c.size |
-+======+========+=======+======+========+=======+======+========+========+
-|  0   | "Alex" |  25   |  1   | "Bob"  |  31   |  4   | "IBM"  |  1000  |
-+------+--------+-------+------+--------+-------+------+--------+--------+
-|  0   | "Alex" |  25   |  2   | "Jeff" |  33   |  5   | "AWS"  |  2000  |
-+------+--------+-------+------+--------+-------+------+--------+--------+
-```
-
-#### Test-2
-
-For this test case we need to add a new user who works for the Google (as Alex)
-and hi also fried with alex
-
-
-```sql
-CREATE NODE User (name="Sam", age=21);  - id 6
-CREATE EDGE FRIEND FROM User(0) TO User(6);
-CREATE EDGE WORKS_AT FROM User(6) TO Company(3);
-```
-
-Query:
-
-```sql
-MATCH (u1:User)-[:FRIEND]->(u2:User),  (u1)-[:WORKS_AT]->(c:Company), (u2)-[:WORKS_AT]->(c);
-```
-
-Result (✅ Fixed): [ticket](https://github.com/dmgcodevil/tundradb/issues/4)
-
-```
-+======+========+=======+======+========+=======+======+==========+========+
-| u.id | u.name | u.age | f.id | f.name | f.age | c.id |  c.name  | c.size |
-+======+========+=======+======+========+=======+======+==========+========+
-|  0   | "Alex" |  25   |  2   | "Jeff" |  33   |  4   | "Google" |  3000  |
-+------+--------+-------+------+--------+-------+------+----------+--------+
-```
-
+TundraDB provides a powerful and intuitive graph database experience with modern query capabilities and flexible data manipulation features.
