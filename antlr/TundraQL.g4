@@ -1,7 +1,7 @@
 grammar TundraQL;
 
 // Entry point for parsing a full command
-statement: createSchemaStatement | createNodeStatement | createEdgeStatement | matchStatement | commitStatement EOF;
+statement: createSchemaStatement | createNodeStatement | createEdgeStatement | matchStatement | deleteStatement | commitStatement EOF;
 
 // --- Schema Definition ---
 createSchemaStatement: K_CREATE K_SCHEMA IDENTIFIER LPAREN schemaFieldList RPAREN SEMI;
@@ -24,6 +24,14 @@ matchStatement: K_MATCH patternList (K_WHERE whereClause)? (K_SELECT selectClaus
 
 // Updated to support multiple comma-separated patterns
 patternList: pathPattern (COMMA pathPattern)*;
+
+// --- Delete Statement ---
+deleteStatement: K_DELETE deleteTarget (K_WHERE whereClause)? SEMI;
+
+deleteTarget: 
+    nodeLocator                    // DELETE User(123);
+    | pathPattern                  // DELETE (u:User)-[:FRIEND]->(f:User);
+    | nodePattern;                 // DELETE (u:User);
 
 // --- Commit Statement ---
 commitStatement: K_COMMIT SEMI;
@@ -58,6 +66,7 @@ K_FROM: 'FROM';
 K_TO: 'TO';
 K_WITH: 'WITH';
 K_MATCH: 'MATCH';
+K_DELETE: 'DELETE';
 K_WHERE: 'WHERE';
 K_SELECT: 'SELECT';
 K_RETURN: 'RETURN';

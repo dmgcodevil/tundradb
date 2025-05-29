@@ -67,6 +67,32 @@ static arrow::Result<std::shared_ptr<arrow::Table>> FilterTableById(
   return filtered_table.table();
 }
 
+static arrow::Result<std::set<int64_t>> GetIdsFromTable(
+    std::shared_ptr<arrow::Table> table) {
+  log_debug("Extracting IDs from table with {} rows", table->num_rows());
+
+  auto id_idx = table->schema()->GetFieldIndex("id");
+  if (id_idx == -1) {
+    log_error("Table does not have an 'id' column");
+    return arrow::Status::Invalid("table does not have an 'id' column");
+  }
+
+  auto id_column = table->column(id_idx);
+  std::set<int64_t> result_ids;
+
+  for (int chunk_idx = 0; chunk_idx < id_column->num_chunks(); chunk_idx++) {
+    auto chunk = std::static_pointer_cast<arrow::Int64Array>(
+        id_column->chunk(chunk_idx));
+    log_debug("Processing chunk {} with {} rows", chunk_idx, chunk->length());
+    for (int i = 0; i < chunk->length(); i++) {
+      result_ids.insert(chunk->Value(i));
+    }
+  }
+
+  log_debug("Extracted {} unique IDs from table", result_ids.size());
+  return result_ids;
+}
+
 // Create a table from a schema and a list of nodes
 static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
     const std::shared_ptr<arrow::Schema>& schema,

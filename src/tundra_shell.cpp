@@ -9,7 +9,9 @@
 #include <spdlog/spdlog.h>
 
 // Standard libraries
+#include <chrono>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <memory>
 #include <sstream>
@@ -27,6 +29,79 @@
 #include "linenoise.h"
 #include "logger.hpp"
 #include "utils.hpp"
+
+// Tee stream class that outputs to both console and file
+class TeeStream : public std::ostream {
+ private:
+  class TeeBuffer : public std::streambuf {
+   private:
+    std::streambuf* console_buf;
+    std::streambuf* file_buf;
+
+   public:
+    TeeBuffer(std::streambuf* console, std::streambuf* file)
+        : console_buf(console), file_buf(file) {}
+
+    virtual int overflow(int c) override {
+      if (c == std::char_traits<char>::eof()) {
+        return !std::char_traits<char>::eof();
+      } else {
+        int const r1 = console_buf->sputc(c);
+        int const r2 = file_buf ? file_buf->sputc(c) : c;
+        return (r1 == std::char_traits<char>::eof() ||
+                r2 == std::char_traits<char>::eof())
+                   ? std::char_traits<char>::eof()
+                   : c;
+      }
+    }
+
+    virtual int sync() override {
+      int const r1 = console_buf->pubsync();
+      int const r2 = file_buf ? file_buf->pubsync() : 0;
+      return (r1 == 0 && r2 == 0) ? 0 : -1;
+    }
+  };
+
+  TeeBuffer tee_buffer;
+
+ public:
+  TeeStream(std::ostream& console, std::ostream* file)
+      : std::ostream(&tee_buffer),
+        tee_buffer(console.rdbuf(), file ? file->rdbuf() : nullptr) {}
+};
+
+// Global output stream for redirecting output
+std::ostream* g_output_stream = &std::cout;
+std::ofstream g_output_file;
+std::unique_ptr<TeeStream> g_tee_stream;
+
+// Function to set output stream
+void setOutputStream(const std::string& output_file) {
+  if (!output_file.empty()) {
+    g_output_file.open(output_file);
+    if (g_output_file.is_open()) {
+      g_tee_stream = std::make_unique<TeeStream>(std::cout, &g_output_file);
+      g_output_stream = g_tee_stream.get();
+      std::cout << "Output will be written to both console and file: "
+                << output_file << std::endl;
+    } else {
+      std::cerr << "Error: Could not open output file: " << output_file
+                << std::endl;
+      g_output_stream = &std::cout;
+    }
+  } else {
+    g_output_stream = &std::cout;
+  }
+}
+
+// Function to write result separator
+void writeResultSeparator(const std::string& query_type = "") {
+  *g_output_stream << "\n" << std::string(60, '=') << std::endl;
+  if (!query_type.empty()) {
+    *g_output_stream << "QUERY: " << query_type << std::endl;
+    *g_output_stream << std::string(60, '=') << std::endl;
+  }
+}
 
 // Function prototypes
 void printTableAsAscii(const std::shared_ptr<arrow::Table>& table);
@@ -76,7 +151,7 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
                                result.status().ToString());
     }
 
-    std::cout << "Created schema: " << schema_name << std::endl;
+    *g_output_stream << "Created schema: " << schema_name << std::endl;
     return true;
   }
 
@@ -233,7 +308,7 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
     }
 
     auto node = db.create_node(node_type, data).ValueOrDie();
-    std::cout << "Created node with ID: " << node->id << std::endl;
+    *g_output_stream << "Created node with ID: " << node->id << std::endl;
     return node->id;
   }
 
@@ -256,9 +331,9 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
     // Create edge between nodes
     db.connect(source_id, edge_type, target_id).ValueOrDie();
 
-    std::cout << "Created edge of type '" << edge_type << "' from "
-              << source_type << "(" << source_id << ") to " << target_type
-              << "(" << target_id << ")" << std::endl;
+    *g_output_stream << "Created edge of type '" << edge_type << "' from "
+                     << source_type << "(" << source_id << ") to "
+                     << target_type << "(" << target_id << ")" << std::endl;
     return true;
   }
 
@@ -320,7 +395,8 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
     auto result_table = result.ValueOrDie()->table();
 
     // Print results
-    std::cout << "\nQuery results:\n";
+    writeResultSeparator("MATCH");
+    *g_output_stream << "\nQuery results:\n";
     printTableAsAscii(result_table);
 
     return result_table;
@@ -586,9 +662,102 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
     }
 
     auto snapshot_id = result.ValueOrDie();
-    std::cout << "Created snapshot with ID: " << snapshot_id << std::endl;
+    *g_output_stream << "Created snapshot with ID: " << snapshot_id
+                     << std::endl;
 
     return snapshot_id;
+  }
+
+  // Handle DELETE statements
+  antlrcpp::Any visitDeleteStatement(
+      tundraql::TundraQLParser::DeleteStatementContext* ctx) override {
+    spdlog::info("Executing DELETE command");
+
+    auto deleteTarget = ctx->deleteTarget();
+    int deleted_count = 0;
+
+    // Handle different delete target types
+    if (deleteTarget->nodeLocator()) {
+      // DELETE User(123); - Delete by ID
+      auto nodeLocator = deleteTarget->nodeLocator();
+      std::string schema_name = nodeLocator->IDENTIFIER()->getText();
+      int64_t node_id = std::stoll(nodeLocator->INTEGER_LITERAL()->getText());
+
+      auto result = db.remove_node(schema_name, node_id);
+      if (result.ok()) {
+        deleted_count = 1;
+        *g_output_stream << "Deleted " << schema_name << "(" << node_id << ")"
+                         << std::endl;
+      } else {
+        *g_output_stream << "Failed to delete " << schema_name << "(" << node_id
+                         << "): " << result.status().ToString() << std::endl;
+      }
+    } else if (deleteTarget->nodePattern()) {
+      // DELETE (u:User); - Delete nodes by pattern
+      auto nodePattern = deleteTarget->nodePattern();
+      std::string alias = nodePattern->IDENTIFIER(0)->getText();
+      std::string schema_name;
+
+      if (nodePattern->IDENTIFIER().size() > 1) {
+        schema_name = nodePattern->IDENTIFIER(1)->getText();
+      } else {
+        schema_name = alias;
+      }
+
+      // Build a query to find matching nodes
+      auto query_builder = tundradb::Query::from(alias + ":" + schema_name);
+
+      // Process WHERE clause if present
+      if (ctx->whereClause()) {
+        processWhereClause(query_builder, ctx->whereClause());
+      }
+
+      // Execute the query to find nodes to delete
+      auto query = query_builder.build();
+      auto result = db.query(query);
+      if (!result.ok()) {
+        *g_output_stream << "Failed to find nodes to delete: "
+                         << result.status().ToString() << std::endl;
+        return 0;
+      }
+
+      auto result_table = result.ValueOrDie()->table();
+
+      // Get the ID column to find which nodes to delete
+      auto id_column = result_table->GetColumnByName("id");
+      if (!id_column) {
+        *g_output_stream << "No ID column found in query result" << std::endl;
+        return 0;
+      }
+
+      // Extract IDs and delete nodes
+      auto id_array =
+          std::static_pointer_cast<arrow::Int64Array>(id_column->chunk(0));
+      for (int64_t i = 0; i < id_array->length(); i++) {
+        if (!id_array->IsNull(i)) {
+          int64_t node_id = id_array->Value(i);
+          auto delete_result = db.remove_node(schema_name, node_id);
+          if (delete_result.ok()) {
+            deleted_count++;
+          }
+        }
+      }
+
+      *g_output_stream << "Deleted " << deleted_count << " " << schema_name
+                       << " nodes" << std::endl;
+    } else if (deleteTarget->pathPattern()) {
+      // DELETE (u:User)-[:FRIEND]->(f:User); - Delete relationships (and
+      // optionally nodes)
+      *g_output_stream << "Relationship deletion not yet implemented"
+                       << std::endl;
+      // TODO: Implement relationship deletion
+      // This would involve:
+      // 1. Finding matching relationships using the path pattern
+      // 2. Removing edges from the edge store
+      // 3. Optionally removing orphaned nodes
+    }
+
+    return deleted_count;
   }
 };
 
@@ -597,7 +766,7 @@ void printTableAsAscii(const std::shared_ptr<arrow::Table>& table) {
   // Basic ASCII table implementation
 
   if (!table || table->num_columns() == 0) {
-    std::cout << "Empty table" << std::endl;
+    *g_output_stream << "Empty table" << std::endl;
     return;
   }
 
@@ -621,73 +790,73 @@ void printTableAsAscii(const std::shared_ptr<arrow::Table>& table) {
   }
 
   // Print header separator
-  std::cout << "+";
+  *g_output_stream << "+";
   for (size_t i = 0; i < column_widths.size(); i++) {
-    std::cout << std::string(column_widths[i], '=');
+    *g_output_stream << std::string(column_widths[i], '=');
     if (i < column_widths.size() - 1) {
-      std::cout << "+";
+      *g_output_stream << "+";
     }
   }
-  std::cout << "+\n";
+  *g_output_stream << "+\n";
 
   // Print column names
-  std::cout << "|";
+  *g_output_stream << "|";
   for (size_t i = 0; i < column_names.size(); i++) {
     std::string name = column_names[i];
     size_t padding = column_widths[i] - name.length();
     size_t left_pad = padding / 2;
     size_t right_pad = padding - left_pad;
-    std::cout << std::string(left_pad, ' ') << name
-              << std::string(right_pad, ' ') << "|";
+    *g_output_stream << std::string(left_pad, ' ') << name
+                     << std::string(right_pad, ' ') << "|";
   }
-  std::cout << "\n";
+  *g_output_stream << "\n";
 
   // Print header/data separator
-  std::cout << "+";
+  *g_output_stream << "+";
   for (size_t i = 0; i < column_widths.size(); i++) {
-    std::cout << std::string(column_widths[i], '=');
+    *g_output_stream << std::string(column_widths[i], '=');
     if (i < column_widths.size() - 1) {
-      std::cout << "+";
+      *g_output_stream << "+";
     }
   }
-  std::cout << "+\n";
+  *g_output_stream << "+\n";
 
   // Print data rows
   for (int64_t row = 0; row < table->num_rows(); row++) {
-    std::cout << "|";
+    *g_output_stream << "|";
     for (int col = 0; col < table->num_columns(); col++) {
       std::string value =
           tundradb::stringifyArrowScalar(table->column(col), row);
       size_t padding = column_widths[col] - value.length();
       size_t left_pad = padding / 2;
       size_t right_pad = padding - left_pad;
-      std::cout << std::string(left_pad, ' ') << value
-                << std::string(right_pad, ' ') << "|";
+      *g_output_stream << std::string(left_pad, ' ') << value
+                       << std::string(right_pad, ' ') << "|";
     }
-    std::cout << "\n";
+    *g_output_stream << "\n";
 
     // Print row separator if not the last row
     if (row < table->num_rows() - 1) {
-      std::cout << "+";
+      *g_output_stream << "+";
       for (size_t i = 0; i < column_widths.size(); i++) {
-        std::cout << std::string(column_widths[i], '-');
+        *g_output_stream << std::string(column_widths[i], '-');
         if (i < column_widths.size() - 1) {
-          std::cout << "+";
+          *g_output_stream << "+";
         }
       }
-      std::cout << "+\n";
+      *g_output_stream << "+\n";
     }
   }
 
   // Print bottom separator
-  std::cout << "+";
+  *g_output_stream << "+";
   for (size_t i = 0; i < column_widths.size(); i++) {
-    std::cout << std::string(column_widths[i], '-');
+    *g_output_stream << std::string(column_widths[i], '-');
     if (i < column_widths.size() - 1) {
-      std::cout << "+";
+      *g_output_stream << "+";
     }
   }
-  std::cout << "+\n";
+  *g_output_stream << "+\n";
 }
 
 // Add a utility function to stringify Arrow values
@@ -757,6 +926,7 @@ static void completionCallback(const char* buf, linenoiseCompletions* lc) {
     // Empty buffer, show all top-level commands
     linenoiseAddCompletion(lc, "CREATE ");
     linenoiseAddCompletion(lc, "MATCH ");
+    linenoiseAddCompletion(lc, "DELETE ");
     linenoiseAddCompletion(lc, "COMMIT");
     return;
   }
@@ -766,6 +936,14 @@ static void completionCallback(const char* buf, linenoiseCompletions* lc) {
     linenoiseAddCompletion(lc, "CREATE SCHEMA ");
     linenoiseAddCompletion(lc, "CREATE NODE ");
     linenoiseAddCompletion(lc, "CREATE EDGE ");
+    return;
+  }
+
+  // Handle DELETE completion
+  if (strncasecmp(buf, "DELETE ", 7) == 0) {
+    linenoiseAddCompletion(lc, "DELETE (");
+    linenoiseAddCompletion(lc, "DELETE User(");
+    linenoiseAddCompletion(lc, "DELETE Company(");
     return;
   }
 
@@ -793,15 +971,119 @@ static char* hintsCallback(const char* buf, int* color, int* bold) {
   if (strcmp(buf, "MATCH ") == 0) {
     return const_cast<char*>("(node1)-[rel]->(node2)");
   }
+  if (strcmp(buf, "DELETE ") == 0) {
+    return const_cast<char*>("(u:User) WHERE ... | User(123)");
+  }
+  if (strcmp(buf, "DELETE (") == 0) {
+    return const_cast<char*>("u:User) WHERE u.age > 30");
+  }
 
   // More hints can be added here
   return NULL;
+}
+
+// Function to execute a single TundraQL statement
+bool executeStatement(const std::string& statement_text,
+                      tundradb::Database& db) {
+  try {
+    // Parse the input
+    antlr4::ANTLRInputStream input_stream(statement_text);
+    tundraql::TundraQLLexer lexer(&input_stream);
+    antlr4::CommonTokenStream tokens(&lexer);
+    tundraql::TundraQLParser parser(&tokens);
+
+    auto statement = parser.statement();
+
+    if (parser.getNumberOfSyntaxErrors() > 0) {
+      std::cerr << "Syntax error in statement: " << statement_text << std::endl;
+      return false;
+    }
+
+    // Visit the parse tree
+    TundraQLVisitorImpl visitor(db);
+    visitor.visit(statement);
+    return true;
+
+  } catch (const std::exception& e) {
+    std::cerr << "Error executing statement '" << statement_text
+              << "': " << e.what() << std::endl;
+    return false;
+  }
+}
+
+// Function to execute a script file
+bool executeScriptFile(const std::string& script_path, tundradb::Database& db) {
+  std::ifstream file(script_path);
+  if (!file.is_open()) {
+    std::cerr << "Error: Could not open script file: " << script_path
+              << std::endl;
+    return false;
+  }
+
+  *g_output_stream << "Executing script: " << script_path << std::endl;
+
+  std::string line;
+  std::string accumulated_statement;
+  int line_number = 0;
+  int statements_executed = 0;
+  int statements_failed = 0;
+
+  while (std::getline(file, line)) {
+    line_number++;
+
+    // Skip empty lines and comments
+    std::string trimmed_line = line;
+    trimmed_line.erase(0, trimmed_line.find_first_not_of(" \t\r\n"));
+    trimmed_line.erase(trimmed_line.find_last_not_of(" \t\r\n") + 1);
+
+    if (trimmed_line.empty() || trimmed_line.substr(0, 2) == "--") {
+      continue;
+    }
+
+    // Accumulate the statement
+    accumulated_statement += line + " ";
+
+    // Check if statement is complete (ends with semicolon)
+    if (trimmed_line.back() == ';') {
+      *g_output_stream << "Executing: " << accumulated_statement << std::endl;
+
+      if (executeStatement(accumulated_statement, db)) {
+        statements_executed++;
+      } else {
+        statements_failed++;
+        std::cerr << "Failed at line " << line_number << std::endl;
+      }
+
+      accumulated_statement.clear();
+    }
+  }
+
+  // Handle any remaining incomplete statement
+  if (!accumulated_statement.empty()) {
+    std::cerr << "Warning: Incomplete statement at end of file: "
+              << accumulated_statement << std::endl;
+  }
+
+  file.close();
+
+  *g_output_stream << "Script execution completed." << std::endl;
+  *g_output_stream << "Statements executed: " << statements_executed
+                   << std::endl;
+  if (statements_failed > 0) {
+    *g_output_stream << "Statements failed: " << statements_failed << std::endl;
+  }
+
+  return statements_failed == 0;
 }
 
 int main(int argc, char* argv[]) {
   tundradb::Logger::getInstance().setLevel(tundradb::LogLevel::DEBUG);
   // Parse command-line arguments
   std::string db_path = "./test-db";
+  std::string script_file = "";
+  std::string output_file = "";
+  bool unique_db = false;
+  bool detach_mode = false;
 
   // Simple argument parsing
   for (int i = 1; i < argc; i++) {
@@ -813,14 +1095,60 @@ int main(int argc, char* argv[]) {
         std::cerr << "Error: --db-path requires a directory path\n";
         return 1;
       }
+    } else if (arg == "--script" || arg == "-s") {
+      if (i + 1 < argc) {
+        script_file = argv[++i];
+      } else {
+        std::cerr << "Error: --script requires a file path\n";
+        return 1;
+      }
+    } else if (arg == "--output" || arg == "-o") {
+      if (i + 1 < argc) {
+        output_file = argv[++i];
+      } else {
+        std::cerr << "Error: --output requires a file path\n";
+        return 1;
+      }
+    } else if (arg == "--unique-db" || arg == "--temp-db" || arg == "-u") {
+      unique_db = true;
+    } else if (arg == "--detach" || arg == "--batch") {
+      detach_mode = true;
     } else if (arg == "--help" || arg == "-h") {
-      std::cout << "Usage: tundra_shell [OPTIONS]\n"
-                << "Options:\n"
-                << "  -d, --db-path PATH   Set the database path (default: "
-                   "./test-db)\n"
-                << "  -h, --help           Show this help message\n";
+      std::cout
+          << "Usage: tundra_shell [OPTIONS]\n"
+          << "Options:\n"
+          << "  -d, --db-path PATH   Set the database path (default: "
+             "./test-db)\n"
+          << "  -s, --script FILE    Execute script file then keep shell open\n"
+          << "  -o, --output FILE    Write all output to specified file\n"
+          << "  -u, --unique-db      Append timestamp to database path for "
+             "unique DB\n"
+          << "      --temp-db        (alias for --unique-db)\n"
+          << "      --detach         Exit after script execution (batch mode)\n"
+          << "      --batch          (alias for --detach)\n"
+          << "  -h, --help           Show this help message\n";
       return 0;
+    } else {
+      std::cerr << "Error: Unknown argument: " << arg << "\n";
+      std::cerr << "Use --help for usage information\n";
+      return 1;
     }
+  }
+
+  // Create unique database path if requested
+  if (unique_db) {
+    auto now = std::chrono::system_clock::now();
+    auto time_t = std::chrono::system_clock::to_time_t(now);
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                  now.time_since_epoch()) %
+              1000;
+
+    std::ostringstream timestamp_stream;
+    timestamp_stream << std::put_time(std::localtime(&time_t), "%Y%m%d_%H%M%S");
+    timestamp_stream << "_" << std::setfill('0') << std::setw(3) << ms.count();
+
+    db_path = db_path + "_" + timestamp_stream.str();
+    std::cout << "Using unique database path: " << db_path << std::endl;
   }
 
   // Initialize database with the specified path
@@ -841,6 +1169,31 @@ int main(int argc, char* argv[]) {
   std::cout << "TundraDB Shell\n";
   std::cout << "Type 'exit' to quit\n";
   std::cout << "Database path: " << db_path << "\n";
+
+  // Set up output redirection if specified
+  setOutputStream(output_file);
+
+  // Execute script file if provided
+  if (!script_file.empty()) {
+    std::cout << "\n";
+    if (!executeScriptFile(script_file, db)) {
+      std::cerr << "Script execution failed, but continuing with interactive "
+                   "shell...\n";
+    }
+
+    // If detach mode is enabled, exit after script execution
+    if (detach_mode) {
+      if (g_output_file.is_open()) {
+        g_output_file.close();
+      }
+      g_tee_stream.reset();
+      std::cout << "Script execution completed. Exiting (detach mode).\n";
+      return 0;
+    }
+
+    std::cout << "\nScript execution completed. Entering interactive mode...\n";
+    std::cout << "Type 'exit' to quit\n\n";
+  }
 
   // Set up linenoise
   linenoiseSetCompletionCallback(completionCallback);
@@ -883,29 +1236,7 @@ int main(int argc, char* argv[]) {
 
     // Check if the query is complete (ends with semicolon)
     if (input.find(';') != std::string::npos) {
-      try {
-        // Parse the input
-        antlr4::ANTLRInputStream input_stream(input);
-        tundraql::TundraQLLexer lexer(&input_stream);
-        antlr4::CommonTokenStream tokens(&lexer);
-        tundraql::TundraQLParser parser(&tokens);
-
-        auto statement = parser.statement();
-
-        if (parser.getNumberOfSyntaxErrors() > 0) {
-          std::cerr << "Syntax error in input\n";
-          input.clear();
-          continue;
-        }
-
-        // Visit the parse tree
-        TundraQLVisitorImpl visitor(db);
-        visitor.visit(statement);
-
-      } catch (const std::exception& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
-      }
-
+      executeStatement(input, db);
       // Clear input for next command
       input.clear();
     } else {
@@ -913,6 +1244,12 @@ int main(int argc, char* argv[]) {
       input += " ";
     }
   }
+
+  // Clean up output file if it was opened
+  if (g_output_file.is_open()) {
+    g_output_file.close();
+  }
+  g_tee_stream.reset();
 
   return 0;
 }
