@@ -1397,6 +1397,10 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
     log_info("processing 'from' {}", query.from().toString());
     ARROW_ASSIGN_OR_RAISE(auto source_schema,
                           query_state.resolve_schema(query.from()));
+    if (!this->schema_registry->exists(source_schema)) {
+      log_error("schema '{}' doesn't exist", source_schema);
+      return arrow::Status::KeyError("schema doesn't exit: {}", source_schema);
+    }
     auto table_res = this->get_table(source_schema);
     if (!table_res.ok()) {
       log_error("failed to get table 'from' {}", query.from().toString());

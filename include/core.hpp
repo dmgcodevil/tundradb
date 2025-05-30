@@ -203,6 +203,7 @@ class Shard {
     nodes.erase(id);
     nodes_ids.erase(id);
     dirty = true;
+    updated = true;
     return node;
   }
 
@@ -730,6 +731,10 @@ class Database {
     return schema_registry;
   }
 
+  std::shared_ptr<MetadataManager> get_metadata_manager() {
+    return metadata_manager;
+  }
+
   arrow::Result<bool> initialize() {
     if (persistence_enabled) {
       auto storage_init = this->storage->initialize();
@@ -773,6 +778,10 @@ class Database {
 
   arrow::Result<bool> remove_node(const std::string &schema_name,
                                   int64_t node_id) {
+    auto res = node_manager->remove_node(node_id);
+    if (!res) {
+      return arrow::Status::Invalid("Failed to remove node");
+    }
     return shard_manager->remove_node(schema_name, node_id);
   }
 

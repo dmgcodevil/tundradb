@@ -1,6 +1,8 @@
 #include <arrow/api.h>
+#include <arrow/io/api.h>
 #include <arrow/json/api.h>
 #include <gtest/gtest.h>
+#include <parquet/arrow/reader.h>
 
 #include <filesystem>
 
@@ -24,7 +26,7 @@ class DatabaseTest : public ::testing::Test {
 
   void TearDown() override {
     // Clean up after tests
-    std::filesystem::remove_all(test_db_path);
+    // std::filesystem::remove_all(test_db_path);
   }
 
   // Helper method to create a database with persistence enabled
@@ -110,6 +112,108 @@ class DatabaseTest : public ::testing::Test {
     } else {
       // It's a relative path, so prepend the test_db_path
       return test_db_path + "/" + manifest_location;
+    }
+  }
+
+  // Helper function to read parquet file and return table
+  arrow::Result<std::shared_ptr<arrow::Table>> readParquetFile(
+      const std::string& file_path) {
+    // Open the parquet file
+    ARROW_ASSIGN_OR_RAISE(auto input_file,
+                          arrow::io::ReadableFile::Open(file_path));
+
+    // Create a parquet reader
+    std::unique_ptr<parquet::arrow::FileReader> reader;
+    ARROW_ASSIGN_OR_RAISE(
+        reader,
+        parquet::arrow::OpenFile(input_file, arrow::default_memory_pool()));
+
+    // Read the table
+    std::shared_ptr<arrow::Table> table;
+    ARROW_RETURN_NOT_OK(reader->ReadTable(&table));
+
+    return table;
+  }
+
+  // Helper function to validate data file contents
+  void validateDataFile(const std::string& manifest_path,
+                        const std::string& expected_schema_name,
+                        int expected_record_count,
+                        const std::vector<int64_t>& expected_user_ids) {
+    // 1. Read manifest
+    auto manifest_json =
+        read_json_file<nlohmann::json>(manifest_path).ValueOrDie();
+
+    // 2. Find the shard for the expected schema
+    std::string data_file_path;
+    bool found_shard = false;
+
+    for (const auto& shard : manifest_json["shards"]) {
+      std::string schema_name = shard["schema_name"];
+      if (schema_name == expected_schema_name) {
+        data_file_path = shard["data_file"];
+        found_shard = true;
+
+        // Validate record count in manifest
+        int64_t record_count = shard["record_count"];
+        EXPECT_EQ(record_count, expected_record_count)
+            << "Record count mismatch in manifest for " << expected_schema_name;
+        break;
+      }
+    }
+
+    ASSERT_TRUE(found_shard)
+        << "Could not find shard for schema " << expected_schema_name;
+    ASSERT_FALSE(data_file_path.empty()) << "Data file path is empty";
+
+    // 3. Handle data file path correctly
+    std::string full_data_file_path = data_file_path;
+
+    // If the path is not absolute, check if it's already relative to current
+    // directory
+    if (!std::filesystem::path(data_file_path).is_absolute()) {
+      // First, try the path as-is (might be relative to current working
+      // directory)
+      if (!std::filesystem::exists(data_file_path)) {
+        // If that doesn't work, try prepending test_db_path
+        full_data_file_path = test_db_path + "/" + data_file_path;
+      }
+    }
+
+    // 4. Verify file exists
+    ASSERT_TRUE(std::filesystem::exists(full_data_file_path))
+        << "Data file does not exist: " << full_data_file_path;
+
+    // 5. Read parquet file and validate contents
+    auto table_result = readParquetFile(full_data_file_path);
+    ASSERT_TRUE(table_result.ok())
+        << "Failed to read parquet file: " << table_result.status().ToString();
+
+    auto table = table_result.ValueOrDie();
+
+    // 6. Validate number of rows
+    EXPECT_EQ(table->num_rows(), expected_record_count)
+        << "Actual row count in parquet file doesn't match expected";
+
+    // 7. Validate specific user IDs if provided
+    if (!expected_user_ids.empty()) {
+      auto id_column = table->GetColumnByName("id");
+      ASSERT_NE(id_column, nullptr) << "Could not find 'id' column in table";
+
+      std::set<int64_t> actual_ids;
+      for (int chunk_idx = 0; chunk_idx < id_column->num_chunks();
+           chunk_idx++) {
+        auto chunk = std::static_pointer_cast<arrow::Int64Array>(
+            id_column->chunk(chunk_idx));
+        for (int64_t i = 0; i < chunk->length(); i++) {
+          actual_ids.insert(chunk->Value(i));
+        }
+      }
+
+      std::set<int64_t> expected_ids_set(expected_user_ids.begin(),
+                                         expected_user_ids.end());
+      EXPECT_EQ(actual_ids, expected_ids_set)
+          << "User IDs in parquet file don't match expected IDs";
     }
   }
 
@@ -559,6 +663,58 @@ TEST_F(DatabaseTest, VerifyUpdatedFlag) {
     EXPECT_NE(manifest_json1["shards"][0]["data_file"],
               manifest_json2["shards"][0]["data_file"]);
   }
+}
+
+TEST_F(DatabaseTest, DeleteNode) {
+  // Create a database
+  auto db = createDatabase();
+  db->initialize().ValueOrDie();
+
+  // Setup user schema
+  setupUserSchema(*db);
+
+  // Create users
+  auto users = createUsers(*db, 2);
+
+  // Get the shard index and id for later verification
+  auto shard_ranges = db->get_shard_ranges("users").ValueOrDie();
+  ASSERT_GE(shard_ranges.size(), 1);
+  int64_t shard_id = 0;  // First shard ID
+
+  // Get the shard_manager directly to check shard flags
+  auto shard_manager = db->get_shard_manager();
+
+  // Verify the shard is marked as updated after node creation
+  auto is_clean = shard_manager->is_shard_clean("users", 0).ValueOrDie();
+  EXPECT_FALSE(is_clean)
+      << "Shard should be marked as updated after node creation";
+
+  // Create a snapshot (should reset updated flags)
+  auto snapshot = db->create_snapshot().ValueOrDie();
+
+  // Verify shard is now marked as not updated
+  is_clean = shard_manager->is_shard_clean("users", 0).ValueOrDie();
+  EXPECT_TRUE(is_clean) << "Shard should be marked as clean after snapshot";
+
+  // Delete a node and verify updated flag
+  db->remove_node("users", 1).ValueOrDie();
+  is_clean = shard_manager->is_shard_clean("users", 0).ValueOrDie();
+  EXPECT_FALSE(is_clean)
+      << "Shard should be marked as updated after node deletion";
+
+  // Create another snapshot
+  auto snapshot2 = db->create_snapshot().ValueOrDie();
+
+  // Verify shard is clean again
+  is_clean = shard_manager->is_shard_clean("users", 0).ValueOrDie();
+  EXPECT_TRUE(is_clean)
+      << "Shard should be marked as clean after second snapshot";
+
+  // Validate data file contents
+  validateDataFile(getManifestPath(test_db_path, snapshot.manifest_location),
+                   "users", 2, {0, 1});
+  validateDataFile(getManifestPath(test_db_path, snapshot2.manifest_location),
+                   "users", 1, {0});
 }
 
 int main(int argc, char** argv) {
