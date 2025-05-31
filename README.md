@@ -287,22 +287,77 @@ Given this data setup:
 | null | null      |  5   | "FinanceInc"|
 ```
 
+## 🆕 SHOW Operations
+
+TundraDB provides powerful commands to inspect and monitor your graph data:
+
+### Show Edge Types
+
+Display all edge types in the database with their counts:
+
+```sql
+SHOW EDGE TYPES;
+```
+
+**Example Output:**
+```
+| type      | count |
+|-----------|-------|
+| WORKS_AT  | 3     |
+| FRIEND    | 2     |
+| ASSIGNED_TO| 1     |
+
+Total: 3 edge types
+```
+
+### Show Edges of Specific Type
+
+View all edges of a particular type with their details:
+
+```sql
+-- Show all WORKS_AT edges
+SHOW EDGES WORKS_AT;
+
+-- Show all FRIEND edges  
+SHOW EDGES FRIEND;
+
+-- Show all ASSIGNED_TO edges
+SHOW EDGES ASSIGNED_TO;
+```
+
+**Example Output:**
+```
+Edges of type 'WORKS_AT':
+| id | source_id | target_id | created_ts    |
+|----|-----------|-----------|---------------|
+| 0  | 0         | 4         | 1748733662618 |
+| 1  | 1         | 4         | 1748733662618 |
+| 2  | 2         | 5         | 1748733662618 |
+
+Total: 3 edges
+```
+
+**Show Operations Use Cases:**
+- **Data Exploration**: Understand your graph structure
+- **Debugging**: Verify edge creation and deletion
+- **Monitoring**: Track edge counts and relationships
+- **Documentation**: Generate data summaries
+
 ## 🆕 DELETE Operations
 
 TundraDB supports flexible DELETE operations for both nodes and relationships:
 
-### Delete by ID
+### Delete Nodes
+
+#### Delete by ID
 
 ```sql
 -- Delete specific nodes by ID
 DELETE User(0);     -- Delete Alice
 DELETE Company(4);  -- Delete TechCorp
-
--- Delete relationships by ID  
-DELETE EDGE WORKS_AT FROM User(1) TO Company(4);
 ```
 
-### Delete by Pattern
+#### Delete by Pattern
 
 ```sql
 -- Delete all nodes of a type
@@ -310,11 +365,11 @@ DELETE (u:User);
 DELETE (c:Company);
 
 -- Delete specific nodes by pattern
-DELETE (u:User{name="Alice"});
-DELETE (c:Company{industry="Technology"});
+DELETE (u:User) WHERE u.name = "Alice";
+DELETE (c:Company) WHERE c.industry = "Technology";
 ```
 
-### Delete with WHERE Clauses
+#### Delete with WHERE Clauses
 
 ```sql
 -- Delete users over a certain age
@@ -327,18 +382,101 @@ DELETE (c:Company) WHERE c.size < 100;
 DELETE (p:Project) WHERE p.status = "Cancelled";
 ```
 
-### Delete Relationships
+### 🆕 Delete Edges
+
+TundraDB provides comprehensive edge deletion capabilities with multiple patterns:
+
+#### Delete All Edges of a Type
 
 ```sql
--- Delete all edges of a specific type
+-- Delete all WORKS_AT edges
 DELETE EDGE WORKS_AT;
 
--- Delete edges with pattern matching
-DELETE EDGE WORKS_AT FROM (User{department="Marketing"}) TO (Company{});
+-- Delete all FRIEND edges
+DELETE EDGE FRIEND;
 
--- Delete edges with WHERE clauses
-DELETE EDGE ASSIGNED_TO FROM (User{}) TO (Project{}) WHERE Project.status = "Complete";
+-- Delete all ASSIGNED_TO edges
+DELETE EDGE ASSIGNED_TO;
 ```
+
+#### Delete Outgoing Edges from Specific Nodes
+
+```sql
+-- Delete all WORKS_AT edges from User(1)
+DELETE EDGE WORKS_AT FROM User(1);
+
+-- Delete all FRIEND edges from specific users
+DELETE EDGE FRIEND FROM User(0);
+
+-- Using property-based selection
+DELETE EDGE WORKS_AT FROM (User{name="Alice"});
+DELETE EDGE ASSIGNED_TO FROM (User{department="Marketing"});
+```
+
+#### Delete Incoming Edges to Specific Nodes
+
+```sql
+-- Delete all WORKS_AT edges to Company(4)
+DELETE EDGE WORKS_AT TO Company(4);
+
+-- Delete all ASSIGNED_TO edges to specific projects
+DELETE EDGE ASSIGNED_TO TO Project(6);
+
+-- Using property-based selection
+DELETE EDGE WORKS_AT TO (Company{name="TechCorp"});
+DELETE EDGE ASSIGNED_TO TO (Project{status="Complete"});
+```
+
+#### Delete Specific Edges Between Nodes
+
+```sql
+-- Delete specific edge between two nodes (by ID)
+DELETE EDGE WORKS_AT FROM User(0) TO Company(4);
+DELETE EDGE FRIEND FROM User(0) TO User(1);
+
+-- Using property-based selection for source and target
+DELETE EDGE WORKS_AT FROM (User{name="Alice"}) TO (Company{name="TechCorp"});
+DELETE EDGE ASSIGNED_TO FROM (User{department="Engineering"}) TO (Project{name="WebApp"});
+
+-- Mixed ID and property selection
+DELETE EDGE WORKS_AT FROM User(1) TO (Company{industry="Technology"});
+```
+
+#### Edge Deletion Examples
+
+Given this data setup:
+```sql
+-- Edges: 
+-- WORKS_AT: Alice→TechCorp, Bob→TechCorp, Charlie→FinanceInc
+-- FRIEND: Alice→Bob, Bob→Charlie, Alice→Charlie
+-- ASSIGNED_TO: Alice→WebApp, Bob→MobileApp
+```
+
+**Delete Pattern Examples:**
+
+```sql
+-- Delete all outgoing FRIEND edges from Alice
+DELETE EDGE FRIEND FROM User(0);
+-- Result: Removes Alice→Bob and Alice→Charlie (2 edges deleted)
+
+-- Delete all incoming WORKS_AT edges to TechCorp  
+DELETE EDGE WORKS_AT TO Company(4);
+-- Result: Removes Alice→TechCorp and Bob→TechCorp (2 edges deleted)
+
+-- Delete specific friendship
+DELETE EDGE FRIEND FROM User(0) TO User(1);  
+-- Result: Removes Alice→Bob (1 edge deleted)
+
+-- Delete all ASSIGNED_TO edges
+DELETE EDGE ASSIGNED_TO;
+-- Result: Removes all project assignments (2 edges deleted)
+```
+
+**Edge Deletion Use Cases:**
+- **Relationship Cleanup**: Remove outdated or invalid connections
+- **User Management**: Delete all relationships when removing users
+- **Data Maintenance**: Clean up specific relationship types
+- **Testing**: Reset relationship data between test runs
 
 ## Complete Example Session
 
@@ -383,6 +521,43 @@ SELECT u.name, u.age, c.name;
 -- JOIN examples
 MATCH (u:User)-[:WORKS_AT LEFT]->(c:Company);
 
+-- 4. Inspect your data
+-- Show all edge types and their counts
+SHOW EDGE TYPES;
+
+-- View specific edge relationships
+SHOW EDGES WORKS_AT;
+SHOW EDGES ASSIGNED_TO;
+
+-- 5. Query examples
+-- Basic traversal
+MATCH (u:User)-[:WORKS_AT]->(c:Company);
+
+-- Complex filtering
+MATCH (u:User)-[:WORKS_AT]->(c:Company) 
+WHERE u.age > 25 AND c.industry = "Technology"
+SELECT u.name, u.age, c.name;
+
+-- JOIN examples
+MATCH (u:User)-[:WORKS_AT LEFT]->(c:Company);
+
+-- 6. Advanced edge deletion operations
+-- Delete specific edge between nodes
+DELETE EDGE WORKS_AT FROM User(0) TO Company(3);
+
+-- Delete all outgoing edges from a user
+DELETE EDGE ASSIGNED_TO FROM (User{name="Charlie"});
+
+-- Delete all incoming edges to specific companies
+DELETE EDGE WORKS_AT TO (Company{industry="Finance"});
+
+-- Delete all edges of a specific type
+DELETE EDGE FRIEND;
+
+-- Verify deletions
+SHOW EDGES FRIEND;  -- Should show "No edges found"
+SHOW EDGE TYPES;    -- Should show updated counts
+
 -- 5. Cleanup operations
 -- Delete completed projects
 DELETE (p:Project) WHERE p.status = "Complete";
@@ -401,9 +576,49 @@ COMMIT;
 ✅ **Advanced Edge Creation**: ID-based, property-based, and batch creation  
 ✅ **Flexible Queries**: Pattern matching, WHERE clauses, complex traversals  
 ✅ **JOIN Support**: INNER, LEFT, RIGHT, and FULL joins  
-✅ **DELETE Operations**: By ID, pattern, or WHERE conditions  
+✅ **SHOW Operations**: Inspect edge types and view specific edge relationships  
+✅ **Enhanced DELETE Operations**: Comprehensive node and edge deletion patterns  
 ✅ **Script Execution**: Batch processing and automation  
-✅ **Data Persistence**: COMMIT changes to disk  
+✅ **Data Persistence**: COMMIT changes to disk
+
+## Quick Command Reference
+
+### Schema & Node Operations
+```sql
+CREATE SCHEMA User (name: STRING, age: INT64);           -- Define schema
+CREATE NODE User (name="Alice", age=25) RETURN id;       -- Create node
+MATCH (u:User) WHERE u.age > 30;                        -- Query nodes
+DELETE User(0);                                          -- Delete by ID
+DELETE (u:User) WHERE u.age > 35;                       -- Delete by pattern
+```
+
+### Edge Operations
+```sql
+-- Create edges
+CREATE EDGE WORKS_AT FROM User(0) TO Company(3);                    -- By ID
+CREATE UNIQUE EDGE WORKS_AT FROM (User{name="Alice"}) TO (Company{name="TechCorp"}); -- By properties
+CREATE EDGE WORKS_AT FROM (User{dept="Engineering"}) TO (Company{}); -- Batch creation
+
+-- Query relationships
+MATCH (u:User)-[:WORKS_AT]->(c:Company);                -- Basic traversal
+MATCH (u:User)-[:WORKS_AT LEFT]->(c:Company);           -- With JOINs
+
+-- Show edge information
+SHOW EDGE TYPES;                                         -- List all edge types with counts
+SHOW EDGES WORKS_AT;                                     -- Show all edges of specific type
+
+-- Delete edges
+DELETE EDGE WORKS_AT;                                    -- Delete all edges of type
+DELETE EDGE WORKS_AT FROM User(1);                       -- Delete outgoing edges from node
+DELETE EDGE WORKS_AT TO Company(4);                      -- Delete incoming edges to node
+DELETE EDGE WORKS_AT FROM User(0) TO Company(3);         -- Delete specific edge
+DELETE EDGE WORKS_AT FROM (User{name="Alice"}) TO (Company{name="TechCorp"}); -- Using properties
+```
+
+### System Operations
+```sql
+COMMIT;                                                  -- Persist changes to disk
+```
 
 ## Command Line Options
 
