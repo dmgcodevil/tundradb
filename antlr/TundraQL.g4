@@ -1,7 +1,7 @@
 grammar TundraQL;
 
 // Entry point for parsing a full command
-statement: createSchemaStatement | createNodeStatement | createEdgeStatement | matchStatement | deleteStatement | commitStatement EOF;
+statement: createSchemaStatement | createNodeStatement | createEdgeStatement | matchStatement | deleteStatement | commitStatement | showStatement EOF;
 
 // --- Schema Definition ---
 createSchemaStatement: K_CREATE K_SCHEMA IDENTIFIER LPAREN schemaFieldList RPAREN SEMI;
@@ -41,6 +41,13 @@ deleteTarget:
 
 // --- Commit Statement ---
 commitStatement: K_COMMIT SEMI;
+
+// --- Show Statement ---
+showStatement: K_SHOW showTarget SEMI;
+
+showTarget:
+    K_EDGES IDENTIFIER          // SHOW EDGES edge_type
+    | K_EDGE K_TYPES;           // SHOW EDGE TYPES
 
 pathPattern: nodePattern (edgePattern nodePattern)*;
 
@@ -86,6 +93,9 @@ K_AND: 'AND';
 K_OR: 'OR';
 K_COMMIT: 'COMMIT';
 K_UNIQUE: 'UNIQUE';
+K_SHOW: 'SHOW';
+K_EDGES: 'EDGES';
+K_TYPES: 'TYPES';
 
 // --- Data Types for Schema ---
 T_STRING: 'STRING';

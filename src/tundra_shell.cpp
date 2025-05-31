@@ -792,6 +792,103 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
     return deleted_count;
   }
 
+  // Handle SHOW statements
+  antlrcpp::Any visitShowStatement(
+      tundraql::TundraQLParser::ShowStatementContext* ctx) override {
+    spdlog::info("Executing SHOW statement");
+
+    auto showTarget = ctx->showTarget();
+
+    if (showTarget->K_EDGES() && showTarget->IDENTIFIER()) {
+      // SHOW EDGES edge_type
+      std::string edge_type = showTarget->IDENTIFIER()->getText();
+      spdlog::info("Showing edges of type: {}", edge_type);
+
+      try {
+        auto edge_store = db.get_edge_store();
+        auto table_result = edge_store->get_table(edge_type);
+
+        if (!table_result.ok()) {
+          *g_output_stream << "Error: " << table_result.status().ToString()
+                           << std::endl;
+          return false;
+        }
+
+        auto table = table_result.ValueOrDie();
+        *g_output_stream << "Edges of type '" << edge_type << "':" << std::endl;
+
+        if (table->num_rows() == 0) {
+          *g_output_stream << "No edges found of type '" << edge_type << "'"
+                           << std::endl;
+        } else {
+          // Print table header
+          *g_output_stream << "| id | source_id | target_id | created_ts |"
+                           << std::endl;
+          *g_output_stream << "|----|-----------|-----------|------------|"
+                           << std::endl;
+
+          // Print table rows
+          for (int64_t i = 0; i < table->num_rows(); i++) {
+            auto id_array = std::static_pointer_cast<arrow::Int64Array>(
+                table->column(0)->chunk(0));
+            auto source_id_array = std::static_pointer_cast<arrow::Int64Array>(
+                table->column(1)->chunk(0));
+            auto target_id_array = std::static_pointer_cast<arrow::Int64Array>(
+                table->column(2)->chunk(0));
+            auto created_ts_array = std::static_pointer_cast<arrow::Int64Array>(
+                table->column(3)->chunk(0));
+
+            *g_output_stream << "| " << id_array->Value(i) << " | "
+                             << source_id_array->Value(i) << " | "
+                             << target_id_array->Value(i) << " | "
+                             << created_ts_array->Value(i) << " |" << std::endl;
+          }
+
+          *g_output_stream << std::endl
+                           << "Total: " << table->num_rows() << " edges"
+                           << std::endl;
+        }
+      } catch (const std::exception& e) {
+        *g_output_stream << "Error showing edges: " << e.what() << std::endl;
+        return false;
+      }
+
+    } else if (showTarget->K_EDGE() && showTarget->K_TYPES()) {
+      // SHOW EDGE TYPES
+      spdlog::info("Showing all edge types");
+
+      try {
+        auto edge_store = db.get_edge_store();
+        auto edge_types = edge_store->get_edge_types();
+
+        *g_output_stream << "Edge types:" << std::endl;
+
+        if (edge_types.empty()) {
+          *g_output_stream << "No edge types found" << std::endl;
+        } else {
+          *g_output_stream << "| type | count |" << std::endl;
+          *g_output_stream << "|------|-------|" << std::endl;
+
+          for (const auto& edge_type : edge_types) {
+            int64_t count = edge_store->get_count_by_type(edge_type);
+            *g_output_stream << "| " << edge_type << " | " << count << " |"
+                             << std::endl;
+          }
+
+          *g_output_stream << std::endl
+                           << "Total: " << edge_types.size() << " edge types"
+                           << std::endl;
+        }
+      } catch (const std::exception& e) {
+        *g_output_stream << "Error showing edge types: " << e.what()
+                         << std::endl;
+        return false;
+      }
+    }
+
+    return true;
+  }
+
  private:
   // Helper method to resolve node selector to list of node IDs
   std::vector<int64_t> resolveNodeSelector(
@@ -1059,6 +1156,7 @@ static void completionCallback(const char* buf, linenoiseCompletions* lc) {
     linenoiseAddCompletion(lc, "CREATE ");
     linenoiseAddCompletion(lc, "MATCH ");
     linenoiseAddCompletion(lc, "DELETE ");
+    linenoiseAddCompletion(lc, "SHOW ");
     linenoiseAddCompletion(lc, "COMMIT");
     return;
   }
@@ -1076,6 +1174,13 @@ static void completionCallback(const char* buf, linenoiseCompletions* lc) {
     linenoiseAddCompletion(lc, "DELETE (");
     linenoiseAddCompletion(lc, "DELETE User(");
     linenoiseAddCompletion(lc, "DELETE Company(");
+    return;
+  }
+
+  // Handle SHOW completion
+  if (strncasecmp(buf, "SHOW ", 5) == 0) {
+    linenoiseAddCompletion(lc, "SHOW EDGES ");
+    linenoiseAddCompletion(lc, "SHOW EDGE TYPES");
     return;
   }
 
@@ -1108,6 +1213,12 @@ static char* hintsCallback(const char* buf, int* color, int* bold) {
   }
   if (strcmp(buf, "DELETE (") == 0) {
     return const_cast<char*>("u:User) WHERE u.age > 30");
+  }
+  if (strcmp(buf, "SHOW ") == 0) {
+    return const_cast<char*>("EDGES edge_type | EDGE TYPES");
+  }
+  if (strcmp(buf, "SHOW EDGES ") == 0) {
+    return const_cast<char*>("edge_type_name");
   }
 
   // More hints can be added here

@@ -287,12 +287,6 @@ arrow::Result<Snapshot> SnapshotManager::commit() {
   this->metadata.snapshots.push_back(new_snapshot);
 
   this->metadata.current_snapshot_index = this->metadata.snapshots.size() - 1;
-
-  // Save the updated metadata
-  std::string metadata_location =
-      this->metadata_manager->write_metadata(this->metadata).ValueOrDie();
-  log_info("Saved metadata to: " + metadata_location);
-
   log_info("Updating schemas");
   std::vector<SchemaMetadata> schemas;
   for (const auto &name : this->schema_registry_->get_schema_names()) {
@@ -301,6 +295,10 @@ arrow::Result<Snapshot> SnapshotManager::commit() {
   }
   log_info("schemas count {}", schemas.size());
   this->metadata.schemas = schemas;
+  // Save the updated metadata
+  std::string metadata_location =
+      this->metadata_manager->write_metadata(this->metadata).ValueOrDie();
+  log_info("Saved metadata to: " + metadata_location);
 
   // Update database info to point to the new metadata location
   DatabaseInfo db_info;

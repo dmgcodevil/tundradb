@@ -796,6 +796,10 @@ class Database {
     return true;
   }
 
+  arrow::Result<bool> remove_edge(int64_t edge_id) {
+    return edge_store->remove(edge_id);
+  }
+
   arrow::Result<bool> compact(const std::string &schema_name) {
     return shard_manager->compact(schema_name);
   }
