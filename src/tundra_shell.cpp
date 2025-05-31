@@ -787,6 +787,116 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
       // 1. Finding matching relationships using the path pattern
       // 2. Removing edges from the edge store
       // 3. Optionally removing orphaned nodes
+    } else if (deleteTarget->edgeDeleteTarget()) {
+      // DELETE EDGE edge_type [FROM node] [TO node]; - Delete edges by pattern
+      auto edgeDeleteTarget = deleteTarget->edgeDeleteTarget();
+      std::string edge_type = edgeDeleteTarget->IDENTIFIER()->getText();
+
+      spdlog::info("Deleting edges of type: {}", edge_type);
+
+      try {
+        auto edge_store = db.get_edge_store();
+        std::vector<int64_t> edges_to_delete;
+
+        // Parse FROM and TO selectors if present
+        std::vector<int64_t> from_node_ids;
+        std::vector<int64_t> to_node_ids;
+        bool has_from = false;
+        bool has_to = false;
+
+        // Check for FROM clause using nodeSelector
+        auto node_selectors = edgeDeleteTarget->nodeSelector();
+
+        // Check if we have FROM keyword
+        has_from = edgeDeleteTarget->K_FROM() != nullptr;
+        has_to = edgeDeleteTarget->K_TO() != nullptr;
+
+        if (has_from && !has_to) {
+          // DELETE EDGE edge_type FROM node;
+          from_node_ids = resolveNodeSelector(node_selectors[0]);
+        } else if (!has_from && has_to) {
+          // DELETE EDGE edge_type TO node;
+          to_node_ids = resolveNodeSelector(node_selectors[0]);
+        } else if (has_from && has_to) {
+          // DELETE EDGE edge_type FROM node TO node;
+          from_node_ids = resolveNodeSelector(node_selectors[0]);
+          to_node_ids = resolveNodeSelector(node_selectors[1]);
+        }
+
+        if (!has_from && !has_to) {
+          // DELETE EDGE edge_type; - Delete all edges of this type
+          auto all_edges_result = edge_store->get_by_type(edge_type);
+          if (all_edges_result.ok()) {
+            for (const auto& edge : all_edges_result.ValueOrDie()) {
+              edges_to_delete.push_back(edge->get_id());
+            }
+          }
+        } else if (has_from && !has_to) {
+          // DELETE EDGE edge_type FROM node; - Delete all outgoing edges of
+          // this type from specified nodes
+          for (auto from_id : from_node_ids) {
+            auto outgoing_edges_result =
+                edge_store->get_outgoing_edges(from_id, edge_type);
+            if (outgoing_edges_result.ok()) {
+              for (const auto& edge : outgoing_edges_result.ValueOrDie()) {
+                edges_to_delete.push_back(edge->get_id());
+              }
+            }
+          }
+        } else if (!has_from && has_to) {
+          // DELETE EDGE edge_type TO node; - Delete all incoming edges of this
+          // type to specified nodes
+          for (auto to_id : to_node_ids) {
+            auto incoming_edges_result =
+                edge_store->get_incoming_edges(to_id, edge_type);
+            if (incoming_edges_result.ok()) {
+              for (const auto& edge : incoming_edges_result.ValueOrDie()) {
+                edges_to_delete.push_back(edge->get_id());
+              }
+            }
+          }
+        } else {
+          // DELETE EDGE edge_type FROM node TO node; - Delete specific edges
+          // between nodes
+          for (auto from_id : from_node_ids) {
+            auto outgoing_edges_result =
+                edge_store->get_outgoing_edges(from_id, edge_type);
+            if (outgoing_edges_result.ok()) {
+              for (const auto& edge : outgoing_edges_result.ValueOrDie()) {
+                // Check if this edge goes to any of the target nodes
+                for (auto to_id : to_node_ids) {
+                  if (edge->get_target_id() == to_id) {
+                    edges_to_delete.push_back(edge->get_id());
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        // Remove duplicates (in case same edge is found multiple ways)
+        std::sort(edges_to_delete.begin(), edges_to_delete.end());
+        edges_to_delete.erase(
+            std::unique(edges_to_delete.begin(), edges_to_delete.end()),
+            edges_to_delete.end());
+
+        // Delete all found edges
+        int successful_deletions = 0;
+        for (auto edge_id : edges_to_delete) {
+          auto remove_result = db.remove_edge(edge_id);
+          if (remove_result.ok() && remove_result.ValueOrDie()) {
+            successful_deletions++;
+          }
+        }
+
+        deleted_count = successful_deletions;
+        *g_output_stream << "Deleted " << deleted_count << " " << edge_type
+                         << " edges" << std::endl;
+
+      } catch (const std::exception& e) {
+        *g_output_stream << "Error deleting edges: " << e.what() << std::endl;
+        return false;
+      }
     }
 
     return deleted_count;
@@ -1174,6 +1284,16 @@ static void completionCallback(const char* buf, linenoiseCompletions* lc) {
     linenoiseAddCompletion(lc, "DELETE (");
     linenoiseAddCompletion(lc, "DELETE User(");
     linenoiseAddCompletion(lc, "DELETE Company(");
+    linenoiseAddCompletion(lc, "DELETE EDGE ");
+    return;
+  }
+
+  // Handle DELETE EDGE completion
+  if (strncasecmp(buf, "DELETE EDGE ", 12) == 0) {
+    linenoiseAddCompletion(lc, "DELETE EDGE WORKS_AT");
+    linenoiseAddCompletion(lc, "DELETE EDGE FRIEND");
+    linenoiseAddCompletion(lc, "DELETE EDGE WORKS_AT FROM ");
+    linenoiseAddCompletion(lc, "DELETE EDGE WORKS_AT TO ");
     return;
   }
 
@@ -1209,10 +1329,13 @@ static char* hintsCallback(const char* buf, int* color, int* bold) {
     return const_cast<char*>("(node1)-[rel]->(node2)");
   }
   if (strcmp(buf, "DELETE ") == 0) {
-    return const_cast<char*>("(u:User) WHERE ... | User(123)");
+    return const_cast<char*>("(u:User) WHERE ... | User(123) | EDGE edge_type");
   }
   if (strcmp(buf, "DELETE (") == 0) {
     return const_cast<char*>("u:User) WHERE u.age > 30");
+  }
+  if (strcmp(buf, "DELETE EDGE ") == 0) {
+    return const_cast<char*>("edge_type [FROM node] [TO node]");
   }
   if (strcmp(buf, "SHOW ") == 0) {
     return const_cast<char*>("EDGES edge_type | EDGE TYPES");

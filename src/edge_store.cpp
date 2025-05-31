@@ -86,6 +86,15 @@ arrow::Result<bool> EdgeStore::remove(int64_t edge_id) {
         }
       }
     }
+    {
+      typename tbb::concurrent_hash_map<std::string,
+                                        std::atomic<int64_t>>::accessor acc;
+      if (this->versions.insert(acc, edge->get_type())) {
+        acc->second.store(1);
+      } else {
+        acc->second.fetch_add(1);
+      }
+    }
     return true;
   }
   return false;
@@ -222,6 +231,39 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::generate_table(
     }
   }
 
+  // If no edges found, return an empty table with the correct schema
+  if (selected_edges.empty()) {
+    log_info("No edges found for type '" + edge_type +
+             "', returning empty table");
+
+    // Create schema
+    std::vector<std::shared_ptr<arrow::Field>> fields = {
+        arrow::field("id", arrow::int64()),
+        arrow::field("source_id", arrow::int64()),
+        arrow::field("target_id", arrow::int64()),
+        arrow::field("created_ts", arrow::int64())};
+    auto schema = arrow::schema(fields);
+
+    // Create empty arrays
+    std::shared_ptr<arrow::Array> empty_id_array;
+    std::shared_ptr<arrow::Array> empty_source_id_array;
+    std::shared_ptr<arrow::Array> empty_target_id_array;
+    std::shared_ptr<arrow::Array> empty_created_ts_array;
+
+    ARROW_ASSIGN_OR_RAISE(empty_id_array,
+                          arrow::MakeArrayOfNull(arrow::int64(), 0));
+    ARROW_ASSIGN_OR_RAISE(empty_source_id_array,
+                          arrow::MakeArrayOfNull(arrow::int64(), 0));
+    ARROW_ASSIGN_OR_RAISE(empty_target_id_array,
+                          arrow::MakeArrayOfNull(arrow::int64(), 0));
+    ARROW_ASSIGN_OR_RAISE(empty_created_ts_array,
+                          arrow::MakeArrayOfNull(arrow::int64(), 0));
+
+    return arrow::Table::Make(
+        schema, {empty_id_array, empty_source_id_array, empty_target_id_array,
+                 empty_created_ts_array});
+  }
+
   auto id_builder = arrow::Int64Builder();
   auto source_id_builder = arrow::Int64Builder();
   auto target_id_builder = arrow::Int64Builder();
@@ -298,7 +340,39 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::generate_table(
     created_ts_chunks.push_back(created_ts_array);
   }
 
-  // Create chunked arrays
+  // Create chunked arrays - add safety check for empty chunks
+  if (id_chunks.empty()) {
+    log_info("No chunks created for edge type '" + edge_type +
+             "', returning empty table");
+
+    // Create schema
+    std::vector<std::shared_ptr<arrow::Field>> fields = {
+        arrow::field("id", arrow::int64()),
+        arrow::field("source_id", arrow::int64()),
+        arrow::field("target_id", arrow::int64()),
+        arrow::field("created_ts", arrow::int64())};
+    auto schema = arrow::schema(fields);
+
+    // Create empty arrays
+    std::shared_ptr<arrow::Array> empty_id_array;
+    std::shared_ptr<arrow::Array> empty_source_id_array;
+    std::shared_ptr<arrow::Array> empty_target_id_array;
+    std::shared_ptr<arrow::Array> empty_created_ts_array;
+
+    ARROW_ASSIGN_OR_RAISE(empty_id_array,
+                          arrow::MakeArrayOfNull(arrow::int64(), 0));
+    ARROW_ASSIGN_OR_RAISE(empty_source_id_array,
+                          arrow::MakeArrayOfNull(arrow::int64(), 0));
+    ARROW_ASSIGN_OR_RAISE(empty_target_id_array,
+                          arrow::MakeArrayOfNull(arrow::int64(), 0));
+    ARROW_ASSIGN_OR_RAISE(empty_created_ts_array,
+                          arrow::MakeArrayOfNull(arrow::int64(), 0));
+
+    return arrow::Table::Make(
+        schema, {empty_id_array, empty_source_id_array, empty_target_id_array,
+                 empty_created_ts_array});
+  }
+
   auto id_chunked_array = std::make_shared<arrow::ChunkedArray>(id_chunks);
   auto source_id_chunked_array =
       std::make_shared<arrow::ChunkedArray>(source_id_chunks);

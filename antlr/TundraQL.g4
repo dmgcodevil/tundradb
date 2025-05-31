@@ -37,7 +37,15 @@ deleteStatement: K_DELETE deleteTarget (K_WHERE whereClause)? SEMI;
 deleteTarget: 
     nodeLocator                    // DELETE User(123);
     | pathPattern                  // DELETE (u:User)-[:FRIEND]->(f:User);
-    | nodePattern;                 // DELETE (u:User);
+    | nodePattern                  // DELETE (u:User);
+    | edgeDeleteTarget;            // DELETE EDGE edge_type FROM ... TO ...
+
+// Edge deletion patterns
+edgeDeleteTarget:
+    K_EDGE IDENTIFIER                                      // DELETE EDGE edge_type;
+    | K_EDGE IDENTIFIER K_FROM nodeSelector               // DELETE EDGE edge_type FROM node;
+    | K_EDGE IDENTIFIER K_TO nodeSelector                 // DELETE EDGE edge_type TO node;
+    | K_EDGE IDENTIFIER K_FROM nodeSelector K_TO nodeSelector;  // DELETE EDGE edge_type FROM node TO node;
 
 // --- Commit Statement ---
 commitStatement: K_COMMIT SEMI;
