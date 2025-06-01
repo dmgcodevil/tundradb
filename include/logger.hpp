@@ -36,6 +36,35 @@ class Logger {
     }
   }
 
+  LogLevel getLevel() {
+    switch (spdlog::get_level()) {
+      case spdlog::level::trace:
+        return LogLevel::INFO;
+        break;
+      case spdlog::level::debug:
+        return LogLevel::DEBUG;
+        break;
+      case spdlog::level::info:
+        return LogLevel::INFO;
+        break;
+      case spdlog::level::warn:
+        return LogLevel::WARN;
+        break;
+      case spdlog::level::err:
+        return LogLevel::ERROR;
+        break;
+      case spdlog::level::critical:
+        return LogLevel::ERROR;
+        break;
+      case spdlog::level::off:
+        return LogLevel::INFO;
+        break;
+      case spdlog::level::n_levels:
+        return LogLevel::INFO;
+        break;
+    }
+  }
+
   void setLogToFile(const std::string& filename) {
     try {
       auto file_sink =

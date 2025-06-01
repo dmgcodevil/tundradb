@@ -127,7 +127,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
 arrow::Result<std::shared_ptr<arrow::Table>> filter(
     std::shared_ptr<arrow::Table> table, const std::string& field_name,
     const CompareOp& op, const Value& value) {
-  log_info("Filtering table on field '{}' with {} operator", field_name,
+  log_debug("Filtering table on field '{}' with {} operator", field_name,
            static_cast<int>(op));
 
   // First check if the field exists
@@ -227,7 +227,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> filter(
   }
 
   auto result_table = table_result.ValueOrDie();
-  log_info("Filter completed: {} rows in, {} rows out", table->num_rows(),
+  log_debug("Filter completed: {} rows in, {} rows out", table->num_rows(),
            result_table->num_rows());
   return result_table;
 }
@@ -248,25 +248,25 @@ void debug_connections(
 
 void print_paths(
     const std::map<int64_t, std::vector<GraphConnection>>& connections) {
-  log_info("Printing all paths in connection graph:");
+  log_debug("Printing all paths in connection graph:");
 
   if (connections.empty()) {
-    log_info("  No connections found");
+    log_debug("  No connections found");
     return;
   }
 
   for (const auto& [source_id, conn_list] : connections) {
     if (conn_list.empty()) {
-      log_info("  Node {} has no outgoing connections", source_id);
+      log_debug("  Node {} has no outgoing connections", source_id);
       continue;
     }
 
     for (const auto& conn : conn_list) {
-      log_info("  {} -[{}]-> {}", source_id, conn.edge_type, conn.target_id);
+      log_debug("  {} -[{}]-> {}", source_id, conn.edge_type, conn.target_id);
     }
   }
 
-  log_info("Total of {} source nodes with connections", connections.size());
+  log_debug("Total of {} source nodes with connections", connections.size());
 }
 
 std::set<int64_t> get_roots(
@@ -434,7 +434,7 @@ struct QueryState {
 
 arrow::Result<std::shared_ptr<arrow::Schema>> build_denormalized_schema(
     const QueryState& query_state) {
-  log_info("Building schema for denormalized table");
+  log_debug("Building schema for denormalized table");
 
   std::set<std::string> processed_fields;
   std::vector<std::shared_ptr<arrow::Field>> fields;
@@ -916,7 +916,7 @@ struct RowNode {
     return os << node.toString();
   }
 
-  void print(bool recursive = true) const { std::cout << toString(recursive); }
+  void print(bool recursive = true) const { log_debug(toString(recursive)); }
 };
 
 struct QueueItem {
@@ -1015,7 +1015,7 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows_bfs(
           auto r = *item.row;
           r.path = item.path;
           r.id = row_id_counter++;
-          std::cout << "add row: " << r.ToString() << std::endl;
+          log_debug("add row: {}",r.ToString());
           result->push_back(r);
         }
 
@@ -1054,13 +1054,13 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows_bfs(
   RowNode tree;
   tree.path_segment = PathSegment{"root", -1};
   for (const auto& r : *result) {
-    std::cout << "bfs result: " << r.ToString() << std::endl;
+    log_debug( "bfs result: {}", r.ToString());
     tree.insert_row(r);
   }
   tree.print();
   auto merged = tree.merge_rows();
   for (const auto& row : merged) {
-    std::cout << "merge result: " << row.ToString() << std::endl;
+    log_debug("merge result: {}", row.ToString());
   }
   return std::make_shared<std::vector<Row>>(merged);
 }
@@ -1387,14 +1387,14 @@ std::shared_ptr<arrow::Table> apply_select(
 arrow::Result<std::shared_ptr<QueryResult>> Database::query(
     const Query& query) const {
   QueryState query_state;
-  log_info("Executing query starting from schema '{}'",
+  log_debug("Executing query starting from schema '{}'",
            query.from().toString());
   query_state.node_manager = this->node_manager;
   query_state.schema_registry = this->schema_registry;
   query_state.from = query.from();
 
   {
-    log_info("processing 'from' {}", query.from().toString());
+    log_debug("processing 'from' {}", query.from().toString());
     ARROW_ASSIGN_OR_RAISE(auto source_schema,
                           query_state.resolve_schema(query.from()));
     if (!this->schema_registry->exists(source_schema)) {
@@ -1410,13 +1410,13 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
     ARROW_RETURN_NOT_OK(query_state.update_table(source_table, query.from()));
   }
 
-  log_info("Processing {} query clauses", query.clauses().size());
+  log_debug("Processing {} query clauses", query.clauses().size());
   for (const auto& clause : query.clauses()) {
     switch (clause->type()) {
       // note: consecutive 'where' clauses should be combined into one
       case Clause::Type::WHERE: {
         auto where = std::static_pointer_cast<Where>(clause);
-        log_info("Processing WHERE clause on field '{}' with operator {}",
+        log_debug("Processing WHERE clause on field '{}' with operator {}",
                  where->field(), static_cast<int>(where->op()));
 
         std::unordered_map<std::string, std::set<int64_t>> new_front_ids;
@@ -1443,8 +1443,10 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
                     filtered_table_result.status().ToString());
           return filtered_table_result.status();
         }
-        log_info("filtered '{}' table ", variable);
-        print_table(filtered_table_result.ValueOrDie());
+        if (Logger::getInstance().getLevel() == LogLevel::DEBUG) {
+          log_debug("filtered '{}' table ", variable);
+          print_table(filtered_table_result.ValueOrDie());
+        }
         auto res = query_state.update_table(filtered_table_result.ValueOrDie(),
                                             SchemaRef::parse(variable));
         if (!res.ok()) {
@@ -1459,7 +1461,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
         ARROW_ASSIGN_OR_RAISE(auto target_schema,
                               query_state.resolve_schema(traverse->target()));
         query_state.traversals.push_back(*traverse);
-        log_info("Processing TRAVERSE {}-({})->{}",
+        log_debug("Processing TRAVERSE {}-({})->{}",
                  traverse->source().toString(), traverse->edge_type(),
                  traverse->target().toString());
         auto source = traverse->source();
@@ -1491,7 +1493,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
             if (node_result.ok()) {
               auto target_node = node_result.ValueOrDie();
               if (target_node->schema_name == target_schema) {
-                log_info("found edge {}:{} -[{}]-> {}:{}", source.value(),
+                log_debug("found edge {}:{} -[{}]-> {}:{}", source.value(),
                          source_id, traverse->edge_type(),
                          traverse->target().value(), target_node->id);
                 target_nodes.push_back(target_node);
@@ -1510,23 +1512,12 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
                   traverse->source(), source_id,      traverse->edge_type(), "",
                   traverse->target(), target_node->id};
 
-              /*
-
-              Connections (Outgoing) (3 source nodes):    - Source ID 0 (3
-            outgoing):        -> f:1 (via 'friend')
-                -> f:2 (via 'friend')
-                -> f:3 (via 'friend')
-            - Source ID 1 (1 outgoing):        -> c:6 (via 'works-at')
-            - Source ID 2 (1 outgoing):        -> l:5 (via 'likes')
-
-               */
-
               query_state.connections[traverse->source().value()][source_id]
                   .push_back(conn);
               query_state.incoming[target_node->id].push_back(conn);
             }
           } else {
-            log_info("no edge found from {}:{}", source.value(), source_id);
+            log_debug("no edge found from {}:{}", source.value(), source_id);
             unmatched_source_ids.insert(source_id);
           }
         }
@@ -1536,7 +1527,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
             log_debug("remove unmatched node={}:{}", source.value(), id);
             query_state.remove_node(id, source);
           }
-          log_info("rebuild table for schema {}:{}", source.value(),
+          log_debug("rebuild table for schema {}:{}", source.value(),
                    query_state.aliases[source.value()]);
           auto table_result =
               FilterTableById(query_state.tables[source.value()],
@@ -1567,8 +1558,8 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           }
 
           query_state.ids[traverse->target().value()] = intersect_ids;
-          log_info("intersect_ids count: {}", intersect_ids.size());
-          log_info("{} intersect_ids: {}", traverse->target().toString(),
+          log_debug("intersect_ids count: {}", intersect_ids.size());
+          log_debug("{} intersect_ids: {}", traverse->target().toString(),
                    join_container(intersect_ids));
         } else if (traverse->traverse_type() == TraverseType::Left) {
           query_state.ids[traverse->target().value()].insert(
@@ -1617,8 +1608,8 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
     }
   }
 
-  log_info("Query processing complete, building result");
-  log_info("Query state: {}", query_state.ToString());
+  log_debug("Query processing complete, building result");
+  log_debug("Query state: {}", query_state.ToString());
   auto result = std::make_shared<QueryResult>();
 
   auto output_schema_res = build_denormalized_schema(query_state);
@@ -1626,7 +1617,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
     return output_schema_res.status();
   }
   const auto output_schema = output_schema_res.ValueOrDie();
-  log_info("output_schema={}", output_schema->ToString());
+  log_debug("output_schema={}", output_schema->ToString());
 
   auto row_res =
       populate_rows(query_state, query_state.traversals, output_schema);
