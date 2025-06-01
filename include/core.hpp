@@ -435,8 +435,8 @@ class ShardManager {
     log_debug("inserting node id " + std::to_string(node->id));
     auto it = shards.find(node->schema_name);
     if (it == shards.end()) {
-      std::cout << " Create new shard entry for: " << node->schema_name
-                << std::endl;
+      // std::cout << " Create new shard entry for: " << node->schema_name
+      //           << std::endl;
       shards[node->schema_name] = std::vector<std::shared_ptr<Shard>>();
       create_new_shard(node);
       return true;
@@ -444,7 +444,8 @@ class ShardManager {
 
     auto &shard_list = it->second;
     if (shard_list.empty()) {
-      std::cout << "shard is empty schema: " << node->schema_name << std::endl;
+      // std::cout << "shard is empty schema: " << node->schema_name <<
+      // std::endl;
       create_new_shard(node);
       return true;
     }
@@ -463,8 +464,8 @@ class ShardManager {
       }
     }
 
-    std::cout << "no shard with space to insert node: " << node->id
-              << std::endl;
+    // std::cout << "no shard with space to insert node: " << node->id
+    //           << std::endl;
 
     // If no shard can directly add the node, try to find a shard that has space
     // and can be extended with this node ID

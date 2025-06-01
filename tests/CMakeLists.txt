@@ -104,6 +104,10 @@ add_executable(join_test
         join_test.cpp
 )
 
+# Add benchmark test
+add_executable(benchmark_test
+    benchmark_test.cpp
+)
 
 # Link against Arrow and GTest
 target_link_libraries(sharding_test
@@ -202,6 +206,18 @@ target_link_libraries(join_test
         TBB::tbb
 )
 
+# Link benchmark test with Google Benchmark and other dependencies
+target_link_libraries(benchmark_test
+    PRIVATE
+        core
+        Arrow::arrow_shared
+        Parquet::parquet_shared
+        benchmark::benchmark
+        GTest::GTest
+        GTest::Main
+        pthread
+        TBB::tbb
+)
 
 # Apply sanitizer flags to all test targets if enabled
 if(ENABLE_SANITIZERS)
