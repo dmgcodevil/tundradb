@@ -637,3 +637,35 @@ COMMIT;                                                  -- Persist changes to d
 ```
 
 TundraDB provides a powerful and intuitive graph database experience with modern query capabilities and flexible data manipulation features.
+
+## Benchmark
+
+```
+Run on (11 X 23.9999 MHz CPU s)
+CPU Caches:
+  L1 Data 64 KiB
+  L1 Instruction 128 KiB
+  L2 Unified 4096 KiB (x11)
+Load Average: 2.71, 2.88, 3.41
+-------------------------------------------------------------------------------------------------------
+Benchmark                                             Time             CPU   Iterations UserCounters...
+-------------------------------------------------------------------------------------------------------
+tundradb::benchmark::BM_NodeCreation/10             114 us          113 us         4981 bytes_per_second=5.38819Mi/s items_per_second=88.2801k/s
+tundradb::benchmark::BM_NodeCreation/100           1052 us         1051 us          675 bytes_per_second=5.8057Mi/s items_per_second=95.1207k/s
+tundradb::benchmark::BM_NodeCreation/1000         10320 us        10313 us           68 bytes_per_second=5.91852Mi/s items_per_second=96.969k/s
+tundradb::benchmark::BM_NodeCreation/10000       104181 us       104097 us            7 bytes_per_second=5.8633Mi/s items_per_second=96.0644k/s
+tundradb::benchmark::BM_FullScan/100               3493 us         3490 us          201 items_per_second=28.6512k/s
+tundradb::benchmark::BM_FullScan/1000             38136 us        38034 us           19 items_per_second=26.2921k/s
+tundradb::benchmark::BM_FullScan/10000           415585 us       415274 us            2 items_per_second=24.0805k/s
+tundradb::benchmark::BM_FullScan/100000         4273620 us      4266754 us            1 items_per_second=23.437k/s
+tundradb::benchmark::BM_SimpleJoin/100             6122 us         6117 us          114 items_per_second=16.3468k/s
+tundradb::benchmark::BM_SimpleJoin/1000           61735 us        61688 us           11 items_per_second=16.2107k/s
+tundradb::benchmark::BM_SimpleJoin/10000         663975 us       654214 us            1 items_per_second=15.2855k/s
+tundradb::benchmark::BM_ComplexJoin/100           12351 us        12341 us           57 items_per_second=8.10276k/s
+tundradb::benchmark::BM_ComplexJoin/1000         131668 us       131570 us            5 items_per_second=7.60053k/s
+tundradb::benchmark::BM_ComplexJoin/5000         696019 us       695514 us            1 items_per_second=7.18893k/s
+tundradb::benchmark::BM_FilteredQuery/100          1892 us         1890 us          371 items_per_second=52.9014k/s
+tundradb::benchmark::BM_FilteredQuery/1000        18054 us        18042 us           39 items_per_second=55.4269k/s
+tundradb::benchmark::BM_FilteredQuery/10000      208273 us       208133 us            3 items_per_second=48.0463k/s
+tundradb::benchmark::BM_FilteredQuery/100000    2233684 us      2231174 us            1 items_per_second=44.8195k/s
+```
