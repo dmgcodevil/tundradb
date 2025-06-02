@@ -1443,7 +1443,7 @@ bool executeScriptFile(const std::string& script_path, tundradb::Database& db) {
 }
 
 int main(int argc, char* argv[]) {
-  tundradb::Logger::getInstance().setLevel(tundradb::LogLevel::DEBUG);
+  tundradb::Logger::get_instance().set_level(tundradb::LogLevel::DEBUG);
   // Parse command-line arguments
   std::string db_path = "./test-db";
   std::string script_file = "";

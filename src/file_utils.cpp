@@ -8,7 +8,7 @@ namespace tundradb {
 arrow::Result<bool> write_to_file(const std::string& file_path,
                                   const std::string& content) {
   try {
-    std::filesystem::path path(file_path);
+    const std::filesystem::path path(file_path);
     std::filesystem::create_directories(path.parent_path());
 
     std::ofstream file(file_path);

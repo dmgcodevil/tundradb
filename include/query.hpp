@@ -21,12 +21,12 @@ struct SchemaRef {
  private:
   std::string schema_;
   std::string value_;
-  bool declaration;
+  bool declaration_;
 
  public:
   [[nodiscard]] std::string schema() const { return schema_; }
   [[nodiscard]] std::string value() const { return value_; }
-  [[nodiscard]] bool is_declaration() const { return declaration; }
+  [[nodiscard]] bool is_declaration() const { return declaration_; }
 
   static SchemaRef parse(const std::string& s) {
     SchemaRef r;
@@ -34,18 +34,18 @@ struct SchemaRef {
     if (pos == std::string::npos) {
       r.schema_ = s;
       r.value_ = s;
-      r.declaration = false;
+      r.declaration_ = false;
     } else {
       r.value_ = s.substr(0, pos);
       r.schema_ = s.substr(pos + 1);
-      r.declaration = true;
+      r.declaration_ = true;
     }
     return r;
   }
 
   [[nodiscard]] std::string toString() const {
     std::stringstream ss;
-    if (declaration) {
+    if (declaration_) {
       ss << value_;
       ss << ":";
     }
@@ -100,7 +100,7 @@ class Clause {
 
   // Potential common functionality or type identification
   enum class Type { WHERE, TRAVERSE, PROJECT, ORDER_BY, LIMIT, SELECT };
-  virtual Type type() const = 0;
+  [[nodiscard]] virtual Type type() const = 0;
 };
 
 class Where : public Clause {
@@ -113,7 +113,7 @@ class Where : public Clause {
   Where(std::string field, CompareOp op, Value value)
       : field_(std::move(field)), op_(op), value_(std::move(value)) {}
 
-  Type type() const override { return Type::WHERE; }
+  [[nodiscard]] Type type() const override { return Type::WHERE; }
 
   [[nodiscard]] const std::string& field() const { return field_; }
   [[nodiscard]] CompareOp op() const { return op_; }
@@ -122,7 +122,7 @@ class Where : public Clause {
 
 enum class TraverseType { Inner, Left, Right, Full };
 
-class Traverse : public Clause {
+class Traverse final : public Clause {
  private:
   SchemaRef source_;
   std::string edge_type_;
@@ -137,7 +137,7 @@ class Traverse : public Clause {
         target_(std::move(target)),
         traverse_type_(traverse_type) {}
 
-  Type type() const override { return Type::TRAVERSE; }
+  [[nodiscard]] Type type() const override { return Type::TRAVERSE; }
 
   [[nodiscard]] const SchemaRef& source() const { return source_; }
   [[nodiscard]] const std::string& edge_type() const { return edge_type_; }
@@ -145,13 +145,14 @@ class Traverse : public Clause {
   [[nodiscard]] TraverseType traverse_type() const { return traverse_type_; }
 };
 
-struct Select : public Clause {
+struct Select final : Clause {
   std::vector<std::string> fields_;
 
  public:
-  Select(std::vector<std::string> fields) : fields_(std::move(fields)) {}
+  explicit Select(std::vector<std::string> fields)
+      : fields_(std::move(fields)) {}
 
-  Type type() const override { return Type::SELECT; }
+  [[nodiscard]] Type type() const override { return Type::SELECT; }
 
   [[nodiscard]] const std::vector<std::string>& fields() const {
     return fields_;
@@ -173,8 +174,8 @@ class Query {
 
  public:
   class Builder;
-  const SchemaRef& from() const { return from_; }
-  const std::vector<std::shared_ptr<Clause>>& clauses() const {
+  [[nodiscard]] const SchemaRef& from() const { return from_; }
+  [[nodiscard]] const std::vector<std::shared_ptr<Clause>>& clauses() const {
     return clauses_;
   }
   [[nodiscard]] const std::shared_ptr<Select>& select() const {
@@ -182,7 +183,7 @@ class Query {
   }
 
   // Builder creation
-  static Builder from(std::string schema) { return Builder(std::move(schema)); }
+  static Builder from(const std::string& schema) { return Builder(schema); }
 
   // Builder class
   class Builder {
@@ -192,7 +193,8 @@ class Query {
     std::shared_ptr<Select> select_;
 
    public:
-    explicit Builder(std::string schema) : from_(SchemaRef::parse(schema)) {}
+    explicit Builder(const std::string& schema)
+        : from_(SchemaRef::parse(schema)) {}
 
     Builder& where(std::string field, CompareOp op, Value value) {
       clauses_.push_back(
@@ -200,8 +202,8 @@ class Query {
       return *this;
     }
 
-    Builder& traverse(std::string source, std::string edge_type,
-                      std::string target,
+    Builder& traverse(const std::string& source, std::string edge_type,
+                      const std::string& target,
                       TraverseType traverse_type = TraverseType::Inner) {
       clauses_.push_back(std::make_shared<Traverse>(
           std::move(SchemaRef::parse(source)), std::move(edge_type),
@@ -216,17 +218,13 @@ class Query {
 
     // Additional builder methods for other clause types
 
-    Query build() {
-      return Query(from_, std::move(clauses_), std::move(select_));
-    }
+    Query build() { return {from_, std::move(clauses_), std::move(select_)}; }
   };
 };
 
 // Result handling
 class QueryResult {
  public:
-  // Get a vector of matching nodes
-
   [[nodiscard]] std::shared_ptr<arrow::Table> table() const { return table_; }
   void set_table(const std::shared_ptr<arrow::Table>& table) { table_ = table; }
 

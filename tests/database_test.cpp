@@ -21,7 +21,7 @@ class DatabaseTest : public ::testing::Test {
     std::filesystem::remove_all(test_db_path);
 
     // Set up logger
-    Logger::getInstance().setLevel(LogLevel::DEBUG);
+    Logger::get_instance().set_level(LogLevel::DEBUG);
   }
 
   void TearDown() override {

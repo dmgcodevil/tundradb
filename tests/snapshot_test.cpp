@@ -224,7 +224,7 @@ TEST_F(DatabaseSnapshotTest, SnapshotWithAdditionalData) {
 
 int main(int argc, char** argv) {
   // Initialize logger
-  tundradb::Logger::getInstance().setLevel(tundradb::LogLevel::INFO);
+  tundradb::Logger::get_instance().set_level(tundradb::LogLevel::INFO);
 
   // Optional: set log to file for test output
   // tundradb::Logger::getInstance().setLogToFile("snapshot_test.log");

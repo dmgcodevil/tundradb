@@ -19,10 +19,8 @@ class TableInfo {
   };
   ChunkInfo get_chunk_info(int column_index, int64_t row_index) const;
 
-  // Get the number of columns
   int num_columns() const { return chunk_boundaries_.size(); }
 
-  // Get the number of rows
   int64_t num_rows() const { return num_rows_; }
 
  private:

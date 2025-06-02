@@ -1,11 +1,8 @@
 #ifndef TYPES_HPP
 #define TYPES_HPP
 
-#include <memory>
 #include <string>
-#include <unordered_map>
 #include <variant>
-#include <vector>
 
 namespace tundradb {
 
@@ -34,9 +31,11 @@ class Value {
   }
 
   // Helpers for common types
-  int64_t as_int64() const { return get<int64_t>(); }
-  const std::string& as_string() const { return get<std::string>(); }
-  bool as_bool() const { return get<bool>(); }
+  [[nodiscard]] int64_t as_int64() const { return get<int64_t>(); }
+  [[nodiscard]] const std::string& as_string() const {
+    return get<std::string>();
+  }
+  [[nodiscard]] bool as_bool() const { return get<bool>(); }
 
  private:
   ValueType type_;

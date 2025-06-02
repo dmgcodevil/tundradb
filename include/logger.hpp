@@ -14,12 +14,12 @@ enum class LogLevel { DEBUG, INFO, WARN, ERROR };
 
 class Logger {
  public:
-  static Logger& getInstance() {
+  static Logger& get_instance() {
     static Logger instance;
     return instance;
   }
 
-  void setLevel(LogLevel level) {
+  void set_level(LogLevel level) {
     switch (level) {
       case LogLevel::DEBUG:
         spdlog::set_level(spdlog::level::debug);
@@ -36,7 +36,7 @@ class Logger {
     }
   }
 
-  LogLevel getLevel() {
+  LogLevel get_level() {
     switch (spdlog::get_level()) {
       case spdlog::level::trace:
         return LogLevel::INFO;
@@ -65,7 +65,7 @@ class Logger {
     }
   }
 
-  void setLogToFile(const std::string& filename) {
+  void set_log_to_file(const std::string& filename) {
     try {
       auto file_sink =
           std::make_shared<spdlog::sinks::basic_file_sink_mt>(filename, true);
@@ -174,72 +174,72 @@ class Logger {
 // Context-aware convenience functions with format string support
 template <typename... Args>
 inline void log_debug(spdlog::format_string_t<Args...> fmt, Args&&... args) {
-  Logger::getInstance().debug(fmt, std::forward<Args>(args)...);
+  Logger::get_instance().debug(fmt, std::forward<Args>(args)...);
 }
 
 template <typename... Args>
 inline void log_info(spdlog::format_string_t<Args...> fmt, Args&&... args) {
-  Logger::getInstance().info(fmt, std::forward<Args>(args)...);
+  Logger::get_instance().info(fmt, std::forward<Args>(args)...);
 }
 
 template <typename... Args>
 inline void log_warn(spdlog::format_string_t<Args...> fmt, Args&&... args) {
-  Logger::getInstance().warn(fmt, std::forward<Args>(args)...);
+  Logger::get_instance().warn(fmt, std::forward<Args>(args)...);
 }
 
 template <typename... Args>
 inline void log_error(spdlog::format_string_t<Args...> fmt, Args&&... args) {
-  Logger::getInstance().error(fmt, std::forward<Args>(args)...);
+  Logger::get_instance().error(fmt, std::forward<Args>(args)...);
 }
 
 // With explicit source location
 template <typename... Args>
 inline void log_debug(const std::source_location& location,
                       spdlog::format_string_t<Args...> fmt, Args&&... args) {
-  Logger::getInstance().debug(location, fmt, std::forward<Args>(args)...);
+  Logger::get_instance().debug(location, fmt, std::forward<Args>(args)...);
 }
 
 template <typename... Args>
 inline void log_info(const std::source_location& location,
                      spdlog::format_string_t<Args...> fmt, Args&&... args) {
-  Logger::getInstance().info(location, fmt, std::forward<Args>(args)...);
+  Logger::get_instance().info(location, fmt, std::forward<Args>(args)...);
 }
 
 template <typename... Args>
 inline void log_warn(const std::source_location& location,
                      spdlog::format_string_t<Args...> fmt, Args&&... args) {
-  Logger::getInstance().warn(location, fmt, std::forward<Args>(args)...);
+  Logger::get_instance().warn(location, fmt, std::forward<Args>(args)...);
 }
 
 template <typename... Args>
 inline void log_error(const std::source_location& location,
                       spdlog::format_string_t<Args...> fmt, Args&&... args) {
-  Logger::getInstance().error(location, fmt, std::forward<Args>(args)...);
+  Logger::get_instance().error(location, fmt, std::forward<Args>(args)...);
 }
 
 // Backward compatibility with string-only logging
 inline void log_debug(
     const std::string& message,
     const std::source_location& location = std::source_location::current()) {
-  Logger::getInstance().debug(message, location);
+  Logger::get_instance().debug(message, location);
 }
 
 inline void log_info(
     const std::string& message,
     const std::source_location& location = std::source_location::current()) {
-  Logger::getInstance().info(message, location);
+  Logger::get_instance().info(message, location);
 }
 
 inline void log_warn(
     const std::string& message,
     const std::source_location& location = std::source_location::current()) {
-  Logger::getInstance().warn(message, location);
+  Logger::get_instance().warn(message, location);
 }
 
 inline void log_error(
     const std::string& message,
     const std::source_location& location = std::source_location::current()) {
-  Logger::getInstance().error(message, location);
+  Logger::get_instance().error(message, location);
 }
 
 // Contextual logger that can be used to add operation context

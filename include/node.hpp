@@ -62,16 +62,17 @@ struct BaseOperation {
   int64_t node_id;  // The node identifier to apply the operation to
   std::vector<std::string> field_name;  // Name of the field to update
 
-  BaseOperation(int64_t id, const std::vector<std::string> &field)
+  BaseOperation(const int64_t id, const std::vector<std::string> &field)
       : node_id(id), field_name(field) {}
 
   virtual arrow::Result<bool> apply(const std::shared_ptr<arrow::Array> &array,
                                     int64_t row_index) const = 0;
 
-  virtual OperationType op_type() const = 0;
+  [[nodiscard]] virtual OperationType op_type() const = 0;
 
-  virtual bool should_replace_array() const { return false; }
-  virtual std::shared_ptr<arrow::Array> get_replacement_array() const {
+  [[nodiscard]] virtual bool should_replace_array() const { return false; }
+  [[nodiscard]] virtual std::shared_ptr<arrow::Array> get_replacement_array()
+      const {
     return nullptr;
   }
 
@@ -79,25 +80,25 @@ struct BaseOperation {
 };
 
 // Set operation - assigns a new value to a field
-struct SetOperation : public BaseOperation {
+struct SetOperation final : public BaseOperation {
   std::shared_ptr<arrow::Array> value;  // The new value to set
 
-  SetOperation(int64_t id, const std::vector<std::string> &field,
+  SetOperation(const int64_t id, const std::vector<std::string> &field,
                const std::shared_ptr<arrow::Array> &v)
       : BaseOperation(id, field), value(v) {}
 
-  ~SetOperation() {
+  ~SetOperation() override {
     // Ensure the value is properly cleaned up
     value.reset();
   }
 
   arrow::Result<bool> apply(const std::shared_ptr<arrow::Array> &array,
-                            int64_t row_index) const override {
+                            const int64_t row_index) const override {
     // Make a copy of the array data to avoid modifying the original
-    auto array_data = array->data()->Copy();
+    const auto array_data = array->data()->Copy();
     switch (array->type_id()) {
       case arrow::Type::INT64: {
-        auto raw_values = array_data->GetMutableValues<int64_t>(1);
+        const auto raw_values = array_data->GetMutableValues<int64_t>(1);
         raw_values[row_index] =
             std::static_pointer_cast<arrow::Int64Array>(value)->Value(0);
         return {true};
@@ -107,13 +108,16 @@ struct SetOperation : public BaseOperation {
     }
   }
 
-  OperationType op_type() const override { return OperationType::SET; }
+  [[nodiscard]] OperationType op_type() const override {
+    return OperationType::SET;
+  }
 
-  bool should_replace_array() const override {
+  [[nodiscard]] bool should_replace_array() const override {
     return value->type_id() == arrow::Type::STRING;
   }
 
-  std::shared_ptr<arrow::Array> get_replacement_array() const override {
+  [[nodiscard]] std::shared_ptr<arrow::Array> get_replacement_array()
+      const override {
     return value;
   }
 };
@@ -130,9 +134,9 @@ class Node {
   explicit Node(const int64_t id, std::string schema_name,
                 std::unordered_map<std::string, std::shared_ptr<arrow::Array>>
                     initial_data)
-      : id(id),
-        schema_name(std::move(schema_name)),
-        data_(std::move(initial_data)) {}
+      : data_(std::move(initial_data)),
+        id(id),
+        schema_name(std::move(schema_name)) {}
 
   ~Node() {
     // Clear the data map to ensure proper cleanup of Arrow arrays
@@ -146,7 +150,7 @@ class Node {
 
   arrow::Result<std::shared_ptr<arrow::Array>> get_field(
       const std::string &field_name) const {
-    auto it = data_.find(field_name);
+    const auto it = data_.find(field_name);
     if (it == data_.end()) {
       return arrow::Status::KeyError("Field not found: ", field_name);
     }
@@ -164,7 +168,7 @@ class Node {
       return arrow::Status::Invalid("Field name vector is empty");
     }
 
-    auto it = data_.find(update->field_name[0]);
+    const auto it = data_.find(update->field_name[0]);
     if (it == data_.end()) {
       return arrow::Status::KeyError("Field not found: ",
                                      update->field_name[0]);
@@ -181,7 +185,7 @@ class NodeManager {
  public:
   NodeManager() = default;
 
-  arrow::Result<std::shared_ptr<Node>> get_node(int64_t id) {
+  arrow::Result<std::shared_ptr<Node>> get_node(const int64_t id) {
     return nodes[id];
   }
 
@@ -191,24 +195,25 @@ class NodeManager {
     return true;
   }
 
-  bool remove_node(int64_t id) { return nodes.erase(id) > 0; }
+  bool remove_node(const int64_t id) { return nodes.erase(id) > 0; }
 
   arrow::Result<std::shared_ptr<Node>> create_node(
       const std::string &schema_name,
-      std::unordered_map<std::string, std::shared_ptr<arrow::Array>> &data,
+      const std::unordered_map<std::string, std::shared_ptr<arrow::Array>>
+          &data,
       std::shared_ptr<SchemaRegistry> schema_registry) {
     if (schema_name.empty()) {
       return arrow::Status::Invalid("Schema name cannot be empty");
     }
 
-    ARROW_ASSIGN_OR_RAISE(auto schema, schema_registry->get(schema_name));
+    ARROW_ASSIGN_OR_RAISE(const auto schema, schema_registry->get(schema_name));
     if (data.contains("id")) {
       return arrow::Status::Invalid("'id' column is auto generated");
     }
 
     std::unordered_map<std::string, std::shared_ptr<arrow::Array>>
         normalized_data;
-    for (auto field : schema->fields()) {
+    for (const auto &field : schema->fields()) {
       if (field->name() != "id" && !field->nullable() &&
           (!data.contains(field->name()) ||
            data.find(field->name())->second->IsNull(0))) {
@@ -219,7 +224,7 @@ class NodeManager {
         normalized_data[field->name()] =
             create_null_array(field->type()).ValueOrDie();
       } else {
-        auto array = data.find(field->name())->second;
+        const auto array = data.find(field->name())->second;
         if (!array->type()->Equals(field->type())) {
           return arrow::Status::Invalid("Type mismatch for field '",
                                         field->name(), "'. Expected ",
@@ -237,7 +242,7 @@ class NodeManager {
     return node;
   }
 
-  void set_id_counter(int64_t value) { id_counter.store(value); }
+  void set_id_counter(const int64_t value) { id_counter.store(value); }
   int64_t get_id_counter() const { return id_counter.load(); }
 
  private:

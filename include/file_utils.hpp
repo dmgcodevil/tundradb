@@ -25,23 +25,16 @@ bool file_exists(const std::string& file_path);
 template <typename T>
 arrow::Result<T> read_json_file(const std::string& file_path) {
   try {
-    // Check if file exists
     if (!std::filesystem::exists(file_path)) {
       return arrow::Status::IOError("File does not exist: ", file_path);
     }
-
-    // Open file for reading
     std::ifstream file(file_path);
     if (!file.is_open()) {
       return arrow::Status::IOError("Failed to open file for reading: ",
                                     file_path);
     }
-
-    // Parse JSON
     nlohmann::json j = nlohmann::json::parse(file);
     file.close();
-
-    // Convert JSON to type T
     T value = j.get<T>();
     return value;
   } catch (const std::exception& e) {
@@ -54,7 +47,6 @@ template <typename T>
 arrow::Result<bool> write_json_file(const T& object,
                                     const std::string& file_path) {
   try {
-    // Ensure parent directory exists
     std::filesystem::path path(file_path);
     if (!path.parent_path().empty()) {
       std::error_code ec;
@@ -65,19 +57,13 @@ arrow::Result<bool> write_json_file(const T& object,
             ec.message());
       }
     }
-
-    // Open file for writing
     std::ofstream file(file_path);
     if (!file.is_open()) {
       return arrow::Status::IOError("Failed to open file for writing: ",
                                     file_path);
     }
-
-    // Serialize object to JSON and write to file
-    nlohmann::json j = object;
-    file << j.dump(4);  // Pretty-print with 4-space indentation
-
-    // Explicitly flush and close
+    const nlohmann::json j = object;
+    file << j.dump(4);
     file.flush();
     if (file.fail()) {
       return arrow::Status::IOError("Failed to flush file data: ", file_path);

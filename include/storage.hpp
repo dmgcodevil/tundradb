@@ -12,30 +12,29 @@
 
 namespace tundradb {
 
-// Forward declarations
 class SchemaRegistry;
 class Shard;
 
 class Storage {
  private:
-  std::string data_directory;
-  std::shared_ptr<SchemaRegistry> schema_registry;
-  std::string metadata_dir;
-  std::string data_dir;
-  DatabaseConfig config;
+  std::string data_directory_;
+  std::shared_ptr<SchemaRegistry> schema_registry_;
+  std::string metadata_dir_;
+  std::string data_dir_;
+  DatabaseConfig config_;
 
  public:
   explicit Storage(std::string data_dir,
                    std::shared_ptr<SchemaRegistry> schema_registry,
-                   const DatabaseConfig& config = DatabaseConfig());
+                   DatabaseConfig config = DatabaseConfig());
 
   arrow::Result<bool> initialize();
 
-  arrow::Result<std::string> write_table(
+  [[nodiscard]] arrow::Result<std::string> write_table(
       const std::shared_ptr<arrow::Table>& table, int64_t chunk_size,
       const std::string& prefix_path = "") const;
 
-  arrow::Result<std::string> write_shard(
+  [[nodiscard]] arrow::Result<std::string> write_shard(
       const std::shared_ptr<Shard>& shard) const;
 
   arrow::Result<std::shared_ptr<Shard>> read_shard(

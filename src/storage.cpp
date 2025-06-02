@@ -13,6 +13,7 @@
 #include <random>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "../libs/json/json.hpp"
@@ -24,15 +25,15 @@ namespace tundradb {
 
 Storage::Storage(std::string data_dir,
                  std::shared_ptr<SchemaRegistry> schema_registry,
-                 const DatabaseConfig& config)
-    : data_directory(std::move(data_dir)),
-      schema_registry(std::move(schema_registry)),
-      config(config) {}
+                 DatabaseConfig config)
+    : data_directory_(std::move(data_dir)),
+      schema_registry_(std::move(schema_registry)),
+      config_(std::move(config)) {}
 
 arrow::Result<bool> Storage::initialize() {
   try {
     std::cout << "Initializing storage" << std::endl;
-    std::filesystem::create_directories(data_directory);
+    std::filesystem::create_directories(data_directory_);
     return true;
   } catch (const std::filesystem::filesystem_error& e) {
     return arrow::Status::IOError("Failed to create data directory: ",
@@ -47,7 +48,7 @@ arrow::Result<std::string> Storage::write_table(
   uuid_generate(uuid);
   char uuid_str[37];
   uuid_unparse_lower(uuid, uuid_str);
-  auto folder = data_directory;
+  auto folder = data_directory_;
   if (!prefix_path.empty()) {
     folder = folder + "/" + prefix_path;
   }
@@ -63,10 +64,10 @@ arrow::Result<std::string> Storage::write_table(
   log_debug("writing a table to parquet. path=" + file_path);
   ARROW_ASSIGN_OR_RAISE(auto output_file,
                         arrow::io::FileOutputStream::Open(file_path));
-  auto write_options = parquet::ArrowWriterProperties::Builder().build();
-  auto parquet_props = parquet::WriterProperties::Builder()
-                           .compression(parquet::Compression::SNAPPY)
-                           ->build();
+  const auto write_options = parquet::ArrowWriterProperties::Builder().build();
+  const auto parquet_props = parquet::WriterProperties::Builder()
+                                 .compression(parquet::Compression::SNAPPY)
+                                 ->build();
 
   ARROW_RETURN_NOT_OK(parquet::arrow::WriteTable(
       *table, arrow::default_memory_pool(), output_file, chunk_size,
@@ -101,10 +102,10 @@ arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(
   // Create a new shard with metadata properties
   auto shard = std::make_shared<Shard>(
       shard_metadata.id, shard_metadata.index,
-      this->config
+      this->config_
           .get_shard_capacity(),  // Use configured capacity, not record count
       shard_metadata.min_id, shard_metadata.max_id, shard_metadata.chunk_size,
-      shard_metadata.schema_name, this->schema_registry);
+      shard_metadata.schema_name, this->schema_registry_);
 
   TableInfo table_info(table);
 
@@ -127,8 +128,9 @@ arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(
       switch (chunk->type_id()) {
         case arrow::Type::INT64: {
           arrow::Int64Builder builder;
-          auto typed_chunk = std::static_pointer_cast<arrow::Int64Array>(chunk);
-          if (typed_chunk->IsNull(chunk_loc.offset_in_chunk)) {
+          if (auto typed_chunk =
+                  std::static_pointer_cast<arrow::Int64Array>(chunk);
+              typed_chunk->IsNull(chunk_loc.offset_in_chunk)) {
             ARROW_RETURN_NOT_OK(builder.AppendNull());
           } else {
             ARROW_RETURN_NOT_OK(
@@ -174,7 +176,7 @@ arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(
 
 arrow::Result<std::vector<Edge>> Storage::read_edges(
     const EdgeMetadata& edge_metadata) const {
-  ARROW_ASSIGN_OR_RAISE(auto input_file,
+  ARROW_ASSIGN_OR_RAISE(const auto input_file,
                         arrow::io::ReadableFile::Open(edge_metadata.data_file));
   std::unique_ptr<parquet::arrow::FileReader> reader;
   ARROW_ASSIGN_OR_RAISE(reader, parquet::arrow::OpenFile(
@@ -199,24 +201,24 @@ arrow::Result<std::vector<Edge>> Storage::read_edges(
   const int created_ts_col_idx = 3;
 
   for (int64_t row_idx = 0; row_idx < table->num_rows(); ++row_idx) {
-    auto id_chunk_info = table_info.get_chunk_info(id_col_idx, row_idx);
-    auto source_id_chunk_info =
+    const auto id_chunk_info = table_info.get_chunk_info(id_col_idx, row_idx);
+    const auto source_id_chunk_info =
         table_info.get_chunk_info(source_id_col_idx, row_idx);
-    auto target_id_chunk_info =
+    const auto target_id_chunk_info =
         table_info.get_chunk_info(target_id_col_idx, row_idx);
-    auto created_ts_chunk_info =
+    const auto created_ts_chunk_info =
         table_info.get_chunk_info(created_ts_col_idx, row_idx);
 
     // Get chunks
-    auto id_chunk = std::static_pointer_cast<arrow::Int64Array>(
+    const auto id_chunk = std::static_pointer_cast<arrow::Int64Array>(
         table->column(id_col_idx)->chunk(id_chunk_info.chunk_index));
-    auto source_id_chunk = std::static_pointer_cast<arrow::Int64Array>(
+    const auto source_id_chunk = std::static_pointer_cast<arrow::Int64Array>(
         table->column(source_id_col_idx)
             ->chunk(source_id_chunk_info.chunk_index));
-    auto target_id_chunk = std::static_pointer_cast<arrow::Int64Array>(
+    const auto target_id_chunk = std::static_pointer_cast<arrow::Int64Array>(
         table->column(target_id_col_idx)
             ->chunk(target_id_chunk_info.chunk_index));
-    auto created_ts_chunk = std::static_pointer_cast<arrow::Int64Array>(
+    const auto created_ts_chunk = std::static_pointer_cast<arrow::Int64Array>(
         table->column(created_ts_col_idx)
             ->chunk(created_ts_chunk_info.chunk_index));
 

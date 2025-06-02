@@ -38,7 +38,7 @@ TableInfo::ChunkInfo TableInfo::get_chunk_info(int column_index,
   }
 
   const auto& boundaries = chunk_boundaries_[column_index];
-  auto it = std::upper_bound(boundaries.begin(), boundaries.end(), row_index);
+  auto it = std::ranges::upper_bound(boundaries, row_index);
   int chunk_index = std::distance(boundaries.begin(), it) - 1;
 
   return ChunkInfo{chunk_index, row_index - boundaries[chunk_index]};

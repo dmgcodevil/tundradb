@@ -1926,6 +1926,6 @@ TEST(JoinTest, FullJoinFriendRelationship) {
 
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
-  Logger::getInstance().setLevel(LogLevel::DEBUG);
+  Logger::get_instance().set_level(LogLevel::DEBUG);
   return RUN_ALL_TESTS();
 }

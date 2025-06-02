@@ -339,7 +339,7 @@ struct QueryState {
   arrow::Result<bool> update_table(std::shared_ptr<arrow::Table> table,
                                    const SchemaRef& schema_ref) {
     this->tables[schema_ref.value()] = table;
-    auto ids_result = GetIdsFromTable(table);
+    auto ids_result = get_ids_from_table(table);
     if (!ids_result.ok()) {
       log_error("Failed to get IDs from table: {}", schema_ref.value());
       return ids_result.status();
@@ -1389,15 +1389,15 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
   QueryState query_state;
   log_debug("Executing query starting from schema '{}'",
             query.from().toString());
-  query_state.node_manager = this->node_manager;
-  query_state.schema_registry = this->schema_registry;
+  query_state.node_manager = this->node_manager_;
+  query_state.schema_registry = this->schema_registry_;
   query_state.from = query.from();
 
   {
     log_debug("processing 'from' {}", query.from().toString());
     ARROW_ASSIGN_OR_RAISE(auto source_schema,
                           query_state.resolve_schema(query.from()));
-    if (!this->schema_registry->exists(source_schema)) {
+    if (!this->schema_registry_->exists(source_schema)) {
       log_error("schema '{}' doesn't exist", source_schema);
       return arrow::Status::KeyError("schema doesn't exit: {}", source_schema);
     }
@@ -1443,7 +1443,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
                     filtered_table_result.status().ToString());
           return filtered_table_result.status();
         }
-        if (Logger::getInstance().getLevel() == LogLevel::DEBUG) {
+        if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
           log_debug("filtered '{}' table ", variable);
           print_table(filtered_table_result.ValueOrDie());
         }
@@ -1481,7 +1481,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
         std::set<int64_t> unmatched_source_ids;
         for (auto source_id : query_state.ids[source.value()]) {
           auto outgoing_edges =
-              edge_store->get_outgoing_edges(source_id, traverse->edge_type())
+              edge_store_->get_outgoing_edges(source_id, traverse->edge_type())
                   .ValueOrDie();  // todo check result
           log_debug("Node {} has {} outgoing edges of type '{}'", source_id,
                     outgoing_edges.size(), traverse->edge_type());
@@ -1489,7 +1489,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           std::vector<std::shared_ptr<Node>> target_nodes;
           for (auto edge : outgoing_edges) {
             auto target_id = edge->get_target_id();
-            auto node_result = node_manager->get_node(target_id);
+            auto node_result = node_manager_->get_node(target_id);
             if (node_result.ok()) {
               auto target_node = node_result.ValueOrDie();
               if (target_node->schema_name == target_schema) {
@@ -1530,8 +1530,8 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           log_debug("rebuild table for schema {}:{}", source.value(),
                     query_state.aliases[source.value()]);
           auto table_result =
-              FilterTableById(query_state.tables[source.value()],
-                              query_state.ids[source.value()]);
+              filter_table_by_id(query_state.tables[source.value()],
+                                 query_state.ids[source.value()]);
           if (!table_result.ok()) {
             return table_result.status();
           }
@@ -1566,7 +1566,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
               matched_target_ids.begin(), matched_target_ids.end());
         } else {  // Right, Full remove nodes with incoming connections
           auto target_ids =
-              GetIdsFromTable(get_table(target_schema).ValueOrDie())
+              get_ids_from_table(get_table(target_schema).ValueOrDie())
                   .ValueOrDie();
           log_debug(
               "traverse type: '{}', matched_source_ids=[{}], "
@@ -1582,13 +1582,13 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
 
         std::vector<std::shared_ptr<Node>> neighbors;
         for (auto id : query_state.ids[traverse->target().value()]) {
-          auto node_res = node_manager->get_node(id);
+          auto node_res = node_manager_->get_node(id);
           if (node_res.ok()) {
             neighbors.push_back(node_res.ValueOrDie());
           }
         }
         auto target_table_schema =
-            schema_registry->get(target_schema).ValueOrDie();
+            schema_registry_->get(target_schema).ValueOrDie();
         auto table_result =
             create_table_from_nodes(target_table_schema, neighbors);
         if (!table_result.ok()) {

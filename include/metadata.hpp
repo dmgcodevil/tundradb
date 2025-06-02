@@ -90,7 +90,7 @@ inline arrow::Result<FieldMetadata> ArrowFieldToMetadata(
  * @return arrow::Result<std::shared_ptr<arrow::Field>> The resulting Arrow
  * field
  */
-inline arrow::Result<std::shared_ptr<arrow::Field>> MetadataToArrowField(
+inline arrow::Result<std::shared_ptr<arrow::Field>> metadata_to_arrow_field(
     const FieldMetadata &metadata) {
   std::shared_ptr<arrow::DataType> type;
 
@@ -121,7 +121,7 @@ inline arrow::Result<std::shared_ptr<arrow::Field>> MetadataToArrowField(
  * @param schema The Arrow schema to convert
  * @return arrow::Result<SchemaMetadata> The resulting schema metadata
  */
-inline arrow::Result<SchemaMetadata> ArrowSchemaToMetadata(
+inline arrow::Result<SchemaMetadata> arrow_schema_to_metadata(
     const std::string &schema_name,
     const std::shared_ptr<arrow::Schema> &schema) {
   SchemaMetadata result;
@@ -143,12 +143,12 @@ inline arrow::Result<SchemaMetadata> ArrowSchemaToMetadata(
  * @return arrow::Result<std::shared_ptr<arrow::Schema>> The resulting Arrow
  * schema
  */
-inline arrow::Result<std::shared_ptr<arrow::Schema>> MetadataToArrowSchema(
+inline arrow::Result<std::shared_ptr<arrow::Schema>> metadata_to_arrow_schema(
     const SchemaMetadata &metadata) {
   std::vector<std::shared_ptr<arrow::Field>> fields;
 
   for (const auto &field_metadata : metadata.fields) {
-    ARROW_ASSIGN_OR_RAISE(auto field, MetadataToArrowField(field_metadata));
+    ARROW_ASSIGN_OR_RAISE(auto field, metadata_to_arrow_field(field_metadata));
     fields.push_back(field);
   }
 

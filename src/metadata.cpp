@@ -38,8 +38,8 @@ arrow::Result<bool> MetadataManager::initialize() {
       }
     }
 
-    std::string metadata_subdir = metadata_dir + "/metadata";
-    if (!std::filesystem::exists(metadata_subdir)) {
+    if (const std::string metadata_subdir = metadata_dir + "/metadata";
+        !std::filesystem::exists(metadata_subdir)) {
       log_info("Creating metadata subdirectory: " + metadata_subdir);
       if (!std::filesystem::create_directory(metadata_subdir)) {
         return arrow::Status::IOError(
@@ -62,8 +62,8 @@ arrow::Result<std::string> MetadataManager::write_manifest(
   try {
     std::string manifest_path =
         metadata_dir + "/manifests/" + manifest.id + ".manifest.json";
-    auto result = write_json_file(manifest, manifest_path);
-    if (!result.ok()) {
+    if (const auto result = write_json_file(manifest, manifest_path);
+        !result.ok()) {
       return result.status();
     }
     return manifest_path;
@@ -76,10 +76,9 @@ arrow::Result<std::string> MetadataManager::write_manifest(
 arrow::Result<Manifest> MetadataManager::read_manifest(const std::string &id) {
   log_info("Reading manifest: " + id);
   try {
-    std::string manifest_path =
+    const std::string manifest_path =
         metadata_dir + "/manifests/" + id + ".manifest.json";
-    std::ifstream file(manifest_path);
-    if (!file.is_open()) {
+    if (const std::ifstream file(manifest_path); !file.is_open()) {
       return arrow::Status::IOError("Failed to open manifest file: " +
                                     manifest_path);
     }
@@ -96,12 +95,12 @@ arrow::Result<std::string> MetadataManager::write_metadata(
   log_info("Writing metadata");
   try {
     // Generate a unique filename for the metadata using timestamp
-    std::string metadata_id = std::to_string(now_millis());
+    const std::string metadata_id = std::to_string(now_millis());
     std::string metadata_path =
         metadata_dir + "/metadata/" + metadata_id + ".metadata.json";
 
-    auto result = write_json_file(metadata, metadata_path);
-    if (!result.ok()) {
+    if (const auto result = write_json_file(metadata, metadata_path);
+        !result.ok()) {
       return result.status();
     }
 
@@ -116,11 +115,9 @@ arrow::Result<Metadata> MetadataManager::read_metadata(
     const std::string &path) {
   log_info("Reading metadata from: " + path);
   try {
-    std::ifstream file(path);
-    if (!file.is_open()) {
+    if (const std::ifstream file(path); !file.is_open()) {
       return arrow::Status::IOError("Failed to open metadata file: " + path);
     }
-
     return read_json_file<Metadata>(path);
   } catch (const std::exception &e) {
     log_error("Failed to read metadata: " + std::string(e.what()));
@@ -133,8 +130,8 @@ arrow::Result<std::string> MetadataManager::write_db_info(
   log_info("Writing database info");
   try {
     std::string db_info_path = metadata_dir + "/db_info.json";
-    auto result = write_json_file(db_info, db_info_path);
-    if (!result.ok()) {
+    if (const auto result = write_json_file(db_info, db_info_path);
+        !result.ok()) {
       return result.status();
     }
     return db_info_path;
@@ -147,7 +144,7 @@ arrow::Result<std::string> MetadataManager::write_db_info(
 arrow::Result<DatabaseInfo> MetadataManager::read_db_info() {
   log_info("Reading database info");
   try {
-    std::string db_info_path = metadata_dir + "/db_info.json";
+    const std::string db_info_path = metadata_dir + "/db_info.json";
 
     // For a new database, it's ok if the file doesn't exist
     if (!std::filesystem::exists(db_info_path)) {
@@ -156,8 +153,7 @@ arrow::Result<DatabaseInfo> MetadataManager::read_db_info() {
       return DatabaseInfo{};  // Return empty database info for a new database
     }
 
-    std::ifstream file(db_info_path);
-    if (!file.is_open()) {
+    if (const std::ifstream file(db_info_path); !file.is_open()) {
       // If the file exists but can't be opened, that's a critical error
       return arrow::Status::IOError(
           "Failed to open existing database info file: " + db_info_path);
@@ -182,8 +178,8 @@ arrow::Result<Metadata> MetadataManager::load_current_metadata() {
       return db_info_result.status();
     }
 
-    const DatabaseInfo &db_info = db_info_result.ValueOrDie();
-    if (db_info.metadata_location.empty()) {
+    const auto &[metadata_location, timestamp_ms] = db_info_result.ValueOrDie();
+    if (metadata_location.empty()) {
       log_info(
           "No metadata location in database info - starting with fresh "
           "metadata");
@@ -191,7 +187,7 @@ arrow::Result<Metadata> MetadataManager::load_current_metadata() {
     }
 
     // Read metadata from the location specified in database info
-    auto metadata_result = read_metadata(db_info.metadata_location);
+    auto metadata_result = read_metadata(metadata_location);
     if (!metadata_result.ok()) {
       // This is a critical error - if we have a metadata location, we should be
       // able to read it

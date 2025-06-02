@@ -3,6 +3,7 @@
 
 #include <arrow/api.h>
 
+#include <ranges>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -10,15 +11,15 @@
 namespace tundradb {
 class SchemaRegistry {
  private:
-  std::unordered_map<std::string, std::shared_ptr<arrow::Schema>> schemas;
+  std::unordered_map<std::string, std::shared_ptr<arrow::Schema>> schemas_;
 
  public:
   SchemaRegistry() = default;
 
-  std::shared_ptr<arrow::Schema> PrependIdField(
+  static std::shared_ptr<arrow::Schema> prepend_id_field(
       const std::shared_ptr<arrow::Schema> &original_schema) {
     // Create the ID field (typically an int64)
-    auto id_field = arrow::field("id", arrow::int64());
+    const auto id_field = arrow::field("id", arrow::int64());
 
     // Get all existing fields
     std::vector<std::shared_ptr<arrow::Field>> fields;
@@ -32,47 +33,42 @@ class SchemaRegistry {
       fields.push_back(field);
     }
 
-    // Create new schema with ID as first field
     return arrow::schema(fields);
   }
 
-  // Add a schema with the given name
   arrow::Result<bool> create(const std::string &name,
                              std::shared_ptr<arrow::Schema> schema) {
-    auto normalized_schema = PrependIdField(schema);
+    auto normalized_schema = prepend_id_field(schema);
     log_debug("add schema '{}': {}", name, normalized_schema->ToString());
-    schemas.insert(std::make_pair(name, normalized_schema));
+    schemas_.insert(std::make_pair(name, normalized_schema));
     return {true};
   }
 
   arrow::Result<bool> add(const std::string &name,
                           std::shared_ptr<arrow::Schema> schema) {
     log_debug("add schema '{}': {}", name, schema->ToString());
-    schemas.insert(std::make_pair(name, schema));
+    schemas_.insert(std::make_pair(name, schema));
     return {true};
   }
 
-  // Get a schema by name, returning an error if not found
   arrow::Result<std::shared_ptr<arrow::Schema>> get(
       const std::string &name) const {
-    auto it = schemas.find(name);
-    if (it == schemas.end()) {
+    const auto it = schemas_.find(name);
+    if (it == schemas_.end()) {
       return arrow::Status::KeyError("Schema not found: ", name);
     }
     return it->second;
   }
 
-  // Check if a schema exists
   [[nodiscard]] bool exists(const std::string &name) const {
-    return schemas.find(name) != schemas.end();
+    return schemas_.contains(name);
   }
 
-  // Get all schema names
   [[nodiscard]] std::vector<std::string> get_schema_names() const {
     std::vector<std::string> names;
-    names.reserve(schemas.size());
-    for (const auto &schema_pair : schemas) {
-      names.push_back(schema_pair.first);
+    names.reserve(schemas_.size());
+    for (const auto &key : schemas_ | std::views::keys) {
+      names.push_back(key);
     }
     return names;
   }

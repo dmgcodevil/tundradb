@@ -6,7 +6,7 @@ namespace tundradb {
 arrow::Result<std::shared_ptr<Edge>> EdgeStore::create_edge(
     int64_t source_id, const std::string& type, int64_t target_id,
     std::unordered_map<std::string, std::shared_ptr<arrow::Array>> properties) {
-  int64_t id = edge_id_counter.fetch_add(1, std::memory_order_acq_rel);
+  int64_t id = edge_id_counter_.fetch_add(1, std::memory_order_acq_rel);
   return std::make_shared<Edge>(id, source_id, target_id, type, properties,
                                 now_millis());
 }
@@ -19,35 +19,35 @@ arrow::Result<bool> EdgeStore::add(std::shared_ptr<Edge> edge) {
       return arrow::Status::KeyError("Edge already exists with id=" +
                                      std::to_string(edge->get_id()));
     }
-    edge_ids.insert(edge->get_id());
+    edge_ids_.insert(edge->get_id());
     acc->second = edge;
   }
 
   {
     typename tbb::concurrent_hash_map<std::string,
                                       ConcurrentSet<int64_t>>::accessor acc;
-    this->edges_by_type.insert(acc, edge->get_type());
+    this->edges_by_type_.insert(acc, edge->get_type());
     acc->second.insert(edge->get_id());
   }
 
   {
     typename tbb::concurrent_hash_map<int64_t, ConcurrentSet<int64_t>>::accessor
         acc;
-    this->outgoing_edges.insert(acc, edge->get_source_id());
+    this->outgoing_edges_.insert(acc, edge->get_source_id());
     acc->second.insert(edge->get_id());
   }
 
   {
     typename tbb::concurrent_hash_map<int64_t, ConcurrentSet<int64_t>>::accessor
         acc;
-    this->incoming_edges.insert(acc, edge->get_target_id());
+    this->incoming_edges_.insert(acc, edge->get_target_id());
     acc->second.insert(edge->get_id());
   }
 
   {
     typename tbb::concurrent_hash_map<std::string,
                                       std::atomic<int64_t>>::accessor acc;
-    if (this->versions.insert(acc, edge->get_type())) {
+    if (this->versions_.insert(acc, edge->get_type())) {
       acc->second.store(1);
     } else {
       acc->second.fetch_add(1);
@@ -67,21 +67,21 @@ arrow::Result<bool> EdgeStore::remove(int64_t edge_id) {
       {
         typename tbb::concurrent_hash_map<
             std::string, ConcurrentSet<int64_t>>::accessor edges_by_type_acc;
-        if (edges_by_type.find(edges_by_type_acc, edge->get_type())) {
+        if (edges_by_type_.find(edges_by_type_acc, edge->get_type())) {
           edges_by_type_acc->second.remove(edge->get_id());
         }
       }
       {
         typename tbb::concurrent_hash_map<
             int64_t, ConcurrentSet<int64_t>>::accessor outgoing_edges_acc;
-        if (outgoing_edges.find(outgoing_edges_acc, edge->get_source_id())) {
+        if (outgoing_edges_.find(outgoing_edges_acc, edge->get_source_id())) {
           outgoing_edges_acc->second.remove(edge->get_id());
         }
       }
       {
         typename tbb::concurrent_hash_map<
             int64_t, ConcurrentSet<int64_t>>::accessor incoming_edges_acc;
-        if (incoming_edges.find(incoming_edges_acc, edge->get_target_id())) {
+        if (incoming_edges_.find(incoming_edges_acc, edge->get_target_id())) {
           incoming_edges_acc->second.remove(edge->get_id());
         }
       }
@@ -89,7 +89,7 @@ arrow::Result<bool> EdgeStore::remove(int64_t edge_id) {
     {
       typename tbb::concurrent_hash_map<std::string,
                                         std::atomic<int64_t>>::accessor acc;
-      if (this->versions.insert(acc, edge->get_type())) {
+      if (this->versions_.insert(acc, edge->get_type())) {
         acc->second.store(1);
       } else {
         acc->second.fetch_add(1);
@@ -128,7 +128,7 @@ arrow::Result<std::vector<std::shared_ptr<Edge>>> EdgeStore::get_outgoing_edges(
     int64_t id, const std::string& type) const {
   typename tbb::concurrent_hash_map<int64_t,
                                     ConcurrentSet<int64_t>>::const_accessor acc;
-  if (!outgoing_edges.find(acc, id)) {
+  if (!outgoing_edges_.find(acc, id)) {
     return std::vector<std::shared_ptr<Edge>>();
   }
 
@@ -153,7 +153,7 @@ arrow::Result<std::vector<std::shared_ptr<Edge>>> EdgeStore::get_incoming_edges(
     int64_t id, const std::string& type) const {
   typename tbb::concurrent_hash_map<int64_t,
                                     ConcurrentSet<int64_t>>::const_accessor acc;
-  if (!incoming_edges.find(acc, id)) {
+  if (!incoming_edges_.find(acc, id)) {
     return std::vector<std::shared_ptr<Edge>>();
   }
 
@@ -178,7 +178,7 @@ arrow::Result<std::vector<std::shared_ptr<Edge>>> EdgeStore::get_by_type(
     const std::string& type) const {
   typename tbb::concurrent_hash_map<std::string,
                                     ConcurrentSet<int64_t>>::const_accessor acc;
-  if (!edges_by_type.find(acc, type)) {
+  if (!edges_by_type_.find(acc, type)) {
     return std::vector<std::shared_ptr<Edge>>();
   }
 
@@ -200,7 +200,7 @@ arrow::Result<int64_t> EdgeStore::get_version(
     const std::string& edge_type) const {
   typename tbb::concurrent_hash_map<std::string,
                                     std::atomic<int64_t>>::const_accessor acc;
-  if (versions.find(acc, edge_type)) {
+  if (versions_.find(acc, edge_type)) {
     return acc->second.load(std::memory_order_acquire);
   }
   return arrow::Status::KeyError("No version found for edge type: " +
@@ -211,7 +211,7 @@ std::set<std::string> EdgeStore::get_edge_types() const {
   std::set<std::string> result;
   typename tbb::concurrent_hash_map<std::string,
                                     ConcurrentSet<int64_t>>::const_iterator it;
-  for (it = edges_by_type.begin(); it != edges_by_type.end(); ++it) {
+  for (it = edges_by_type_.begin(); it != edges_by_type_.end(); ++it) {
     result.insert(it->first);
   }
   return result;
@@ -222,11 +222,11 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::generate_table(
   log_info("Generating table for edge type: '" + edge_type + "'");
   std::vector<std::shared_ptr<Edge>> selected_edges;
   if (edge_type.empty()) {
-    selected_edges = get(*edge_ids.get_all());
+    selected_edges = get(*edge_ids_.get_all());
   } else {
     typename tbb::concurrent_hash_map<
         std::string, ConcurrentSet<int64_t>>::const_accessor acc;
-    if (edges_by_type.find(acc, edge_type)) {
+    if (edges_by_type_.find(acc, edge_type)) {
       selected_edges = get(*acc->second.get_all());
     }
   }
@@ -403,7 +403,7 @@ arrow::Result<int64_t> EdgeStore::get_version_snapshot(
     const std::string& edge_type) const {
   typename tbb::concurrent_hash_map<std::string,
                                     std::atomic<int64_t>>::const_accessor acc;
-  if (versions.find(acc, edge_type)) {
+  if (versions_.find(acc, edge_type)) {
     return acc->second.load(std::memory_order_acquire);
   }
   return arrow::Status::KeyError("versions does have edge=" + edge_type);
@@ -414,7 +414,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::get_table(
   const int MAX_RETRIES = 5;
   int retry_count = 0;
 
-  if (edges_by_type.empty() || edges_by_type.count(edge_type) == 0) {
+  if (edges_by_type_.empty() || edges_by_type_.count(edge_type) == 0) {
     return arrow::Status::KeyError("edge type doesn't exists");
   }
 
@@ -423,7 +423,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::get_table(
     {
       typename tbb::concurrent_hash_map<
           std::string, std::shared_ptr<TableCache>>::const_accessor tables_acc;
-      if (tables.find(tables_acc, edge_type)) {
+      if (tables_.find(tables_acc, edge_type)) {
         auto latest_version_res = get_version_snapshot(edge_type);
         if (!latest_version_res.ok()) {
           return latest_version_res.status();
@@ -451,7 +451,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::get_table(
     typename tbb::concurrent_hash_map<
         std::string, std::shared_ptr<TableCache>>::accessor tables_acc;
 
-    if (tables.find(tables_acc, edge_type)) {
+    if (tables_.find(tables_acc, edge_type)) {
       // Entry exists, check if we need to update it
       auto latest_version_res = get_version_snapshot(edge_type);
       if (!latest_version_res.ok()) {
@@ -483,7 +483,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::get_table(
         // Current version is already up-to-date, return it
         return tables_acc->second->table;
       }
-    } else if (tables.insert(tables_acc, edge_type)) {
+    } else if (tables_.insert(tables_acc, edge_type)) {
       auto table_cache = std::make_shared<TableCache>();
 
       tables_acc->second = table_cache;

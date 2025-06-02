@@ -1,7 +1,6 @@
 #ifndef CONFIG_HPP
 #define CONFIG_HPP
 
-#include <cstddef>
 #include <string>
 
 namespace tundradb {
@@ -15,7 +14,6 @@ constexpr size_t MANAGER_MEMORY_POOL_SIZE = 100 * 1024 * 1024;    // 100 MB
 constexpr size_t DATABASE_MEMORY_POOL_SIZE = 1024 * 1024 * 1024;  // 1 GB
 }  // namespace defaults
 
-// Configuration parameters for the database
 class DatabaseConfig {
  private:
   // Maximum number of nodes per shard
@@ -35,10 +33,8 @@ class DatabaseConfig {
 
   std::string db_path = "";
 
-  // Whether persistence is enabled
   bool persistence_enabled = true;
 
-  // Allow DatabaseConfigBuilder to modify private fields
   friend class DatabaseConfigBuilder;
 
  public:
@@ -55,7 +51,6 @@ class DatabaseConfig {
   bool is_persistence_enabled() const { return persistence_enabled; }
 };
 
-// Builder class for DatabaseConfig
 class DatabaseConfigBuilder {
  private:
   DatabaseConfig config;
@@ -98,7 +93,6 @@ class DatabaseConfigBuilder {
     return *this;
   }
 
-  // Helper for setting all memory sizes with a single scale factor
   DatabaseConfigBuilder &with_memory_scale_factor(double factor) {
     config.shard_memory_pool_size =
         static_cast<size_t>(defaults::SHARD_MEMORY_POOL_SIZE * factor);
@@ -112,7 +106,6 @@ class DatabaseConfigBuilder {
   [[nodiscard]] DatabaseConfig build() const { return config; }
 };
 
-// Helper function to create a config builder
 inline DatabaseConfigBuilder make_config() { return {}; }
 
 }  // namespace tundradb
