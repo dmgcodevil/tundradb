@@ -192,7 +192,7 @@ arrow::Result<std::vector<Edge>> Storage::read_edges(
         "edges row count from metadata doesn't match the actual table size");
   }
 
-  TableInfo table_info(table);
+  const TableInfo table_info(table);
 
   // Get column indices
   const int id_col_idx = 0;

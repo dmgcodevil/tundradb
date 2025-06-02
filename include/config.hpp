@@ -58,27 +58,27 @@ class DatabaseConfigBuilder {
  public:
   DatabaseConfigBuilder() = default;
 
-  DatabaseConfigBuilder &with_shard_capacity(size_t capacity) {
+  DatabaseConfigBuilder &with_shard_capacity(const size_t capacity) {
     config.shard_capacity = capacity;
     return *this;
   }
 
-  DatabaseConfigBuilder &with_chunk_size(size_t size) {
+  DatabaseConfigBuilder &with_chunk_size(const size_t size) {
     config.chunk_size = size;
     return *this;
   }
 
-  DatabaseConfigBuilder &with_shard_memory_pool_size(size_t size) {
+  DatabaseConfigBuilder &with_shard_memory_pool_size(const size_t size) {
     config.shard_memory_pool_size = size;
     return *this;
   }
 
-  DatabaseConfigBuilder &with_manager_memory_pool_size(size_t size) {
+  DatabaseConfigBuilder &with_manager_memory_pool_size(const size_t size) {
     config.manager_memory_pool_size = size;
     return *this;
   }
 
-  DatabaseConfigBuilder &with_database_memory_pool_size(size_t size) {
+  DatabaseConfigBuilder &with_database_memory_pool_size(const size_t size) {
     config.database_memory_pool_size = size;
     return *this;
   }
@@ -88,12 +88,12 @@ class DatabaseConfigBuilder {
     return *this;
   }
 
-  DatabaseConfigBuilder &with_persistence_enabled(bool enabled) {
+  DatabaseConfigBuilder &with_persistence_enabled(const bool enabled) {
     config.persistence_enabled = enabled;
     return *this;
   }
 
-  DatabaseConfigBuilder &with_memory_scale_factor(double factor) {
+  DatabaseConfigBuilder &with_memory_scale_factor(const double factor) {
     config.shard_memory_pool_size =
         static_cast<size_t>(defaults::SHARD_MEMORY_POOL_SIZE * factor);
     config.manager_memory_pool_size =

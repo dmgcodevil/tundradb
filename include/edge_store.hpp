@@ -107,7 +107,7 @@ class EdgeStore {
   bool empty() const { return edges.empty(); }
 
   // todo temporary solution, add initialize instead
-  void set_id_seq(int64_t v) {
+  void set_id_seq(const int64_t v) {
     edge_id_counter_.store(v, std::memory_order_relaxed);
   }
 };

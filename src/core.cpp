@@ -591,9 +591,8 @@ struct Row {
   }
 
   // returns new Row which is result of merging this row and other
-  Row merge(const Row& other) const {
-    Row merged;
-    merged = *this;
+  [[nodiscard]] Row merge(const Row& other) const {
+    Row merged = *this;
     for (const auto& [name, value] : other.cells) {
       if (!merged.has_value(name)) {
         merged.cells[name] = value;
@@ -602,7 +601,7 @@ struct Row {
     return merged;
   }
 
-  std::string ToString() const {
+  [[nodiscard]] std::string ToString() const {
     std::stringstream ss;
     ss << "Row{";
     ss << "path='" << join_schema_path(path) << "', ";
@@ -689,7 +688,6 @@ struct RowNode {
   PathSegment path_segment;
   std::vector<std::unique_ptr<RowNode>> children;
 
-  // Default constructor
   RowNode() : depth(0) {}
 
   RowNode(std::optional<Row> r, int d,
@@ -788,7 +786,7 @@ struct RowNode {
 
           // Check for conflicts - same schema name but different IDs
           for (const auto& [schema, id1] : schema_ids_r1) {
-            if (schema_ids_r2.count(schema) > 0 &&
+            if (schema_ids_r2.contains(schema) &&
                 schema_ids_r2[schema] != id1) {
               // Found a conflict - same schema but different IDs
               log_debug(
@@ -929,7 +927,7 @@ struct QueueItem {
   std::vector<PathSegment> path;
 
   QueueItem(int64_t id, const SchemaRef& schema, int l, std::shared_ptr<Row> r)
-      : node_id(id), schema_ref(schema), level(l), row(r) {
+      : node_id(id), schema_ref(schema), level(l), row(std::move(r)) {
     path_visited_nodes.insert(schema_ref.value() + ":" + std::to_string(id));
     path.push_back(PathSegment{schema.value(), id});
   }
@@ -972,7 +970,7 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows_bfs(
       std::make_shared<Row>(create_empty_row_from_schema(output_schema));
 
   std::queue<QueueItem> queue;
-  queue.push(QueueItem(node_id, start_schema, 0, initial_row));
+  queue.emplace(node_id, start_schema, 0, initial_row);
 
   while (!queue.empty()) {
     auto size = queue.size();
@@ -1103,11 +1101,10 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows(
     // Update join type for the target schema
     schema_join_types[traverse.target().value()] = traverse.traverse_type();
 
-    // Add target schema to ordered list if not already present
-    if (std::find_if(ordered_schemas.begin(), ordered_schemas.end(),
-                     [&](const SchemaRef& sr) {
-                       return sr.value() == traverse.target().value();
-                     }) == ordered_schemas.end()) {
+    // Add target schema to the ordered list if not already present
+    if (std::ranges::find_if(ordered_schemas, [&](const SchemaRef& sr) {
+          return sr.value() == traverse.target().value();
+        }) == ordered_schemas.end()) {
       ordered_schemas.push_back(traverse.target());
     }
   }
@@ -1158,7 +1155,7 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows(
       }
 
       // Add the rows from BFS to our result
-      auto res_value = res.ValueOrDie();
+      const auto& res_value = res.ValueOrDie();
       rows->insert(rows->end(), std::make_move_iterator(res_value->begin()),
                    std::make_move_iterator(res_value->end()));
 
@@ -1233,7 +1230,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_rows(
     // Get all field names from all rows to create a complete schema
     std::set<std::string> all_field_names;
     for (const auto& row : *rows) {
-      for (const auto& [field_name, _] : row.cells) {
+      for (const auto& field_name : row.cells | std::views::keys) {
         all_field_names.insert(field_name);
       }
     }
@@ -1247,8 +1244,8 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_rows(
       for (const auto& row : *rows) {
         auto it = row.cells.find(field_name);
         if (it != row.cells.end() && it->second) {
-          auto array_result = arrow::MakeArrayFromScalar(*(it->second), 1);
-          if (array_result.ok()) {
+          if (auto array_result = arrow::MakeArrayFromScalar(*(it->second), 1);
+              array_result.ok()) {
             field_type = array_result.ValueOrDie()->type();
             break;
           }
@@ -1369,7 +1366,7 @@ std::shared_ptr<arrow::Table> apply_select(
   // Convert set to vector and sort for consistent column order
   std::vector<int> column_indices(columns_to_keep.begin(),
                                   columns_to_keep.end());
-  std::sort(column_indices.begin(), column_indices.end());
+  std::ranges::sort(column_indices);
 
   // Create a result with selected columns
   arrow::Result<std::shared_ptr<arrow::Table>> result =
@@ -1574,9 +1571,8 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
               traverse->target().value(), join_container(matched_source_ids),
               join_container(target_ids));
           std::set<int64_t> result;
-          std::set_difference(
-              target_ids.begin(), target_ids.end(), matched_source_ids.begin(),
-              matched_source_ids.end(), std::inserter(result, result.begin()));
+          std::ranges::set_difference(target_ids, matched_source_ids,
+                                      std::inserter(result, result.begin()));
           query_state.ids[traverse->target().value()] = result;
         }
 

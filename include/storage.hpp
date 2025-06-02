@@ -40,7 +40,7 @@ class Storage {
   arrow::Result<std::shared_ptr<Shard>> read_shard(
       const ShardMetadata& shard_metadata);
 
-  arrow::Result<std::vector<Edge>> read_edges(
+  [[nodiscard]] arrow::Result<std::vector<Edge>> read_edges(
       const EdgeMetadata& edge_metadata) const;
 };
 

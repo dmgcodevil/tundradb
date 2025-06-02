@@ -111,18 +111,18 @@ class Shard {
 
   // Constructor that uses DatabaseConfig
   Shard(int64_t id, int64_t index, const DatabaseConfig &config, int64_t min_id,
-        int64_t max_id, const std::string &schema_name,
+        int64_t max_id, std::string schema_name,
         std::shared_ptr<SchemaRegistry> schema_registry)
-      : id(id),
-        index(index),
-        capacity(config.get_shard_capacity()),
-        min_id(min_id),
-        max_id(max_id),
-        chunk_size(config.get_chunk_size()),
-        memory_pool_(config.get_shard_memory_pool_size()),
+      : memory_pool_(config.get_shard_memory_pool_size()),
         nodes_(&memory_pool_),
         schema_registry_(std::move(schema_registry)),
-        schema_name(schema_name) {}
+        id(id),
+        index(index),
+        min_id(min_id),
+        max_id(max_id),
+        capacity(config.get_shard_capacity()),
+        chunk_size(config.get_chunk_size()),
+        schema_name(std::move(schema_name)) {}
 
   ~Shard() {
     // Clear the nodes map first to release node resources
@@ -268,7 +268,7 @@ class Shard {
   std::vector<std::shared_ptr<Node>> get_nodes() const {
     std::vector<std::shared_ptr<Node>> result;
     result.reserve(nodes_.size());
-    for (const auto &[_, node] : nodes_) {
+    for (const auto &node : nodes_ | std::views::values) {
       result.push_back(node);
     }
     return result;

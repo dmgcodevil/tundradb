@@ -17,11 +17,12 @@ class TableInfo {
     int chunk_index;
     int64_t offset_in_chunk;
   };
-  ChunkInfo get_chunk_info(int column_index, int64_t row_index) const;
+  [[nodiscard]] ChunkInfo get_chunk_info(int column_index,
+                                         int64_t row_index) const;
 
   int num_columns() const { return chunk_boundaries_.size(); }
 
-  int64_t num_rows() const { return num_rows_; }
+  [[nodiscard]] int64_t num_rows() const { return num_rows_; }
 
  private:
   // Pre-calculated chunk boundaries for each column

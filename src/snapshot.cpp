@@ -80,11 +80,11 @@ arrow::Result<bool> SnapshotManager::initialize() {
 
       // Sort shards by index for each schema to ensure consistent ordering
       // during restoration
-      for (auto &[_, v] : grouped_shards) {
-        std::sort(v.begin(), v.end(),
-                  [](const ShardMetadata &a, const ShardMetadata &b) {
-                    return a.index < b.index;
-                  });
+      for (auto &v : grouped_shards | std::views::values) {
+        std::ranges::sort(v,
+                          [](const ShardMetadata &a, const ShardMetadata &b) {
+                            return a.index < b.index;
+                          });
       }
 
       log_info("Grouped shards: " + std::to_string(grouped_shards.size()));
