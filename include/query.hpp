@@ -2,10 +2,12 @@
 #define QUERY_HPP
 
 #include <arrow/api.h>
+#include <arrow/compute/api.h>
 #include <arrow/result.h>
 
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -369,6 +371,247 @@ struct Select final : Clause {
   }
 };
 
+// Forward declaration for recursive structure
+class WhereExpression;
+
+enum class LogicalOp {
+  AND,
+  OR
+};
+
+// Base interface for WHERE conditions (simple or compound)
+class WhereCondition {
+public:
+  virtual ~WhereCondition() = default;
+  virtual arrow::Result<bool> matches(const std::shared_ptr<Node>& node) const = 0;
+  virtual std::string toString() const = 0;
+  virtual void set_inlined(bool inlined) = 0;
+  virtual bool inlined() const = 0;
+};
+
+// Wrapper for simple WHERE clause
+class SimpleWhereCondition : public WhereCondition {
+private:
+  std::shared_ptr<Where> where_;
+
+public:
+  explicit SimpleWhereCondition(std::shared_ptr<Where> where) : where_(std::move(where)) {}
+  
+  arrow::Result<bool> matches(const std::shared_ptr<Node>& node) const override {
+    return where_->matches(node);
+  }
+  
+  std::string toString() const override {
+    return where_->toString();
+  }
+  
+  void set_inlined(bool inlined) override {
+    where_->set_inlined(inlined);
+  }
+  
+  bool inlined() const override {
+    return where_->inlined();
+  }
+  
+  std::shared_ptr<Where> get_where() const { return where_; }
+};
+
+// Compound WHERE expression as a binary tree
+class WhereExpression : public Clause, public WhereCondition {
+private:
+  std::shared_ptr<WhereCondition> left_;
+  std::optional<LogicalOp> op_;
+  std::shared_ptr<WhereCondition> right_;
+  bool inlined_ = false;
+
+public:
+  // Single condition constructor
+  WhereExpression(std::string field, CompareOp op, Value value) {
+    left_ = std::make_shared<SimpleWhereCondition>(
+        std::make_shared<Where>(std::move(field), op, std::move(value)));
+  }
+  
+  // Binary expression constructor
+  WhereExpression(std::shared_ptr<WhereCondition> left, LogicalOp op, 
+                  std::shared_ptr<WhereCondition> right)
+      : left_(std::move(left)), op_(op), right_(std::move(right)) {}
+
+  [[nodiscard]] Type type() const override { return Type::WHERE; }
+  
+  // Factory methods for building expressions
+  static std::shared_ptr<WhereExpression> simple(std::string field, CompareOp op, Value value) {
+    return std::make_shared<WhereExpression>(std::move(field), op, std::move(value));
+  }
+  
+  static std::shared_ptr<WhereExpression> and_expr(
+      std::shared_ptr<WhereCondition> left, std::shared_ptr<WhereCondition> right) {
+    return std::make_shared<WhereExpression>(std::move(left), LogicalOp::AND, std::move(right));
+  }
+  
+  static std::shared_ptr<WhereExpression> or_expr(
+      std::shared_ptr<WhereCondition> left, std::shared_ptr<WhereCondition> right) {
+    return std::make_shared<WhereExpression>(std::move(left), LogicalOp::OR, std::move(right));
+  }
+
+  // Tree evaluation with proper precedence
+  arrow::Result<bool> matches(const std::shared_ptr<Node>& node) const override {
+    if (!left_) {
+      return arrow::Status::Invalid("WhereExpression has no left condition");
+    }
+    
+    auto left_result = left_->matches(node);
+    if (!left_result.ok()) {
+      return left_result.status();
+    }
+    
+    // Single condition
+    if (!op_ || !right_) {
+      return left_result;
+    }
+    
+    auto right_result = right_->matches(node);
+    if (!right_result.ok()) {
+      return right_result.status();
+    }
+    
+    bool left_val = left_result.ValueOrDie();
+    bool right_val = right_result.ValueOrDie();
+    
+    switch (op_.value()) {
+      case LogicalOp::AND:
+        return left_val && right_val;
+      case LogicalOp::OR:
+        return left_val || right_val;
+    }
+    
+    return arrow::Status::Invalid("Unknown logical operator");
+  }
+  
+  // Collect all WHERE clauses for a specific variable (for inline optimization)
+  std::vector<std::shared_ptr<Where>> get_conditions_for_variable(const std::string& variable) const {
+    std::vector<std::shared_ptr<Where>> result;
+    collect_conditions_for_variable(variable, result);
+    return result;
+  }
+  
+  // Extract the first variable name found in this expression tree
+  std::string extract_first_variable() const {
+    if (auto simple = std::dynamic_pointer_cast<SimpleWhereCondition>(left_)) {
+      auto where = simple->get_where();
+      size_t pos = where->field().find('.');
+      if (pos != std::string::npos) {
+        return where->field().substr(0, pos);
+      }
+    } else if (auto compound = std::dynamic_pointer_cast<WhereExpression>(left_)) {
+      auto var = compound->extract_first_variable();
+      if (!var.empty()) return var;
+    }
+    
+    if (right_) {
+      if (auto simple = std::dynamic_pointer_cast<SimpleWhereCondition>(right_)) {
+        auto where = simple->get_where();
+        size_t pos = where->field().find('.');
+        if (pos != std::string::npos) {
+          return where->field().substr(0, pos);
+        }
+      } else if (auto compound = std::dynamic_pointer_cast<WhereExpression>(right_)) {
+        auto var = compound->extract_first_variable();
+        if (!var.empty()) return var;
+      }
+    }
+    
+    return "";
+  }
+  
+  void set_inlined(bool inlined) override {
+    inlined_ = inlined;
+    if (left_) left_->set_inlined(inlined);
+    if (right_) right_->set_inlined(inlined);
+  }
+  
+  bool inlined() const override {
+    return inlined_;
+  }
+  
+  std::string toString() const override {
+    if (!left_) {
+      return "WHERE (empty)";
+    }
+    
+    if (!op_ || !right_) {
+      // Single condition - remove "WHERE " prefix if it exists
+      std::string left_str = left_->toString();
+      if (left_str.substr(0, 6) == "WHERE ") {
+        return left_str;
+      } else {
+        return "WHERE " + left_str;
+      }
+    }
+    
+    // Binary expression
+    std::string left_str = left_->toString();
+    std::string right_str = right_->toString();
+    
+    // Remove "WHERE " prefixes from nested expressions
+    if (left_str.substr(0, 6) == "WHERE ") {
+      left_str = left_str.substr(6);
+    }
+    if (right_str.substr(0, 6) == "WHERE ") {
+      right_str = right_str.substr(6);
+    }
+    
+    std::string op_str = (op_.value() == LogicalOp::AND) ? " AND " : " OR ";
+    
+    std::string result = "WHERE (" + left_str + ")" + op_str + "(" + right_str + ")";
+    
+    if (inlined_) {
+      result += " (inlined)";
+    }
+    
+    return result;
+  }
+  
+  friend std::ostream& operator<<(std::ostream& os, const WhereExpression& where_expr) {
+    os << where_expr.toString();
+    return os;
+  }
+
+  // Convert this expression tree to Arrow compute expression
+  arrow::compute::Expression to_arrow_expression() const;
+
+private:
+  void collect_conditions_for_variable(const std::string& variable, 
+                                       std::vector<std::shared_ptr<Where>>& result) const {
+    if (auto simple = std::dynamic_pointer_cast<SimpleWhereCondition>(left_)) {
+      auto where = simple->get_where();
+      size_t dot_pos = where->field().find('.');
+      if (dot_pos != std::string::npos) {
+        std::string var = where->field().substr(0, dot_pos);
+        if (var == variable) {
+          result.push_back(where);
+        }
+      }
+    } else if (auto compound = std::dynamic_pointer_cast<WhereExpression>(left_)) {
+      compound->collect_conditions_for_variable(variable, result);
+    }
+    
+    if (right_) {
+      if (auto simple = std::dynamic_pointer_cast<SimpleWhereCondition>(right_)) {
+        auto where = simple->get_where();
+        size_t dot_pos = where->field().find('.');
+        if (dot_pos != std::string::npos) {
+          std::string var = where->field().substr(0, dot_pos);
+          if (var == variable) {
+            result.push_back(where);
+          }
+        }
+      } else if (auto compound = std::dynamic_pointer_cast<WhereExpression>(right_)) {
+        compound->collect_conditions_for_variable(variable, result);
+      }
+    }
+  }
+};
+
 class Query {
  private:
   SchemaRef from_;
@@ -431,6 +674,68 @@ class Query {
 
     Builder& inline_where() {
       inline_where_ = true;
+      return *this;
+    }
+
+    // New methods for compound WHERE expressions
+    Builder& where_expr(const WhereExpression& expr) {
+      clauses_.push_back(std::make_shared<WhereExpression>(expr));
+      return *this;
+    }
+    
+    // Fluent API methods that maintain the simple interface but create trees internally
+    Builder& and_where(const std::string& field, CompareOp op, const Value& value) {
+      if (clauses_.empty() || clauses_.back()->type() != Clause::Type::WHERE) {
+        throw std::runtime_error("and_where() can only be called after where()");
+      }
+      
+      // Get the last clause and combine it with the new condition using AND
+      auto last_clause = clauses_.back();
+      auto new_condition = WhereExpression::simple(field, op, value);
+      
+      if (auto where_expr = std::dynamic_pointer_cast<WhereExpression>(last_clause)) {
+        // Create a new tree: existing_expr AND new_condition
+        auto combined = WhereExpression::and_expr(where_expr, new_condition);
+        clauses_.back() = combined;
+      } else if (auto simple_where = std::dynamic_pointer_cast<Where>(last_clause)) {
+        // Convert simple Where to expression tree: simple_where AND new_condition
+        auto left_expr = std::make_shared<SimpleWhereCondition>(simple_where);
+        auto combined = WhereExpression::and_expr(left_expr, new_condition);
+        clauses_.back() = combined;
+      }
+      return *this;
+    }
+    
+    Builder& or_where(const std::string& field, CompareOp op, const Value& value) {
+      if (clauses_.empty() || clauses_.back()->type() != Clause::Type::WHERE) {
+        throw std::runtime_error("or_where() can only be called after where()");
+      }
+      
+      // Get the last clause and combine it with the new condition using OR
+      auto last_clause = clauses_.back();
+      auto new_condition = WhereExpression::simple(field, op, value);
+      
+      if (auto where_expr = std::dynamic_pointer_cast<WhereExpression>(last_clause)) {
+        // Create a new tree: existing_expr OR new_condition
+        auto combined = WhereExpression::or_expr(where_expr, new_condition);
+        clauses_.back() = combined;
+      } else if (auto simple_where = std::dynamic_pointer_cast<Where>(last_clause)) {
+        // Convert simple Where to expression tree: simple_where OR new_condition
+        auto left_expr = std::make_shared<SimpleWhereCondition>(simple_where);
+        auto combined = WhereExpression::or_expr(left_expr, new_condition);
+        clauses_.back() = combined;
+      }
+      return *this;
+    }
+
+    // Advanced API for explicit precedence control
+    Builder& where_and(std::shared_ptr<WhereCondition> left, std::shared_ptr<WhereCondition> right) {
+      clauses_.push_back(WhereExpression::and_expr(std::move(left), std::move(right)));
+      return *this;
+    }
+    
+    Builder& where_or(std::shared_ptr<WhereCondition> left, std::shared_ptr<WhereCondition> right) {
+      clauses_.push_back(WhereExpression::or_expr(std::move(left), std::move(right)));
       return *this;
     }
 

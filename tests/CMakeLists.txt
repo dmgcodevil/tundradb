@@ -112,6 +112,10 @@ add_executable(benchmark_test
 add_executable(where_pushdown_join_test
         where_pushdown_join_test.cpp)
 
+# Add WHERE expression test
+add_executable(where_expression_test
+        where_expression_test.cpp)
+
 # Link against Arrow and GTest
 target_link_libraries(sharding_test
     PRIVATE
@@ -234,6 +238,17 @@ target_link_libraries(where_pushdown_join_test
         TBB::tbb
 )
 
+target_link_libraries(where_expression_test
+        PRIVATE
+        core
+        Arrow::arrow_shared
+        Parquet::parquet_shared
+        GTest::GTest
+        GTest::Main
+        pthread
+        TBB::tbb
+)
+
 # Apply sanitizer flags to all test targets if enabled
 if(ENABLE_SANITIZERS)
     target_compile_options(sharding_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
@@ -259,6 +274,9 @@ if(ENABLE_SANITIZERS)
 
     target_compile_options(join_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
     target_link_options(join_test PRIVATE ${SANITIZER_LINK_FLAGS})
+    
+    target_compile_options(where_expression_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
+    target_link_options(where_expression_test PRIVATE ${SANITIZER_LINK_FLAGS})
 endif()
 
 # Simple test registration
@@ -271,6 +289,7 @@ add_test(NAME TableInfoTest COMMAND table_info_test)
 add_test(NAME SchemaUtilsTest COMMAND schema_utils_test)
 add_test(NAME DatabaseTest COMMAND database_test)
 add_test(NAME JoinTest COMMAND join_test)
+add_test(NAME WhereExpressionTest COMMAND where_expression_test)
 
 # Set TSan options for tests after they've been registered
 if(ENABLE_SANITIZERS AND SANITIZER_TYPE STREQUAL "thread" AND EXISTS ${TSAN_SUPPRESSIONS_FILE})
@@ -292,6 +311,7 @@ set_tests_properties(
         SchemaUtilsTest
         DatabaseTest
         JoinTest
+        WhereExpressionTest
         PROPERTIES
         ISOLATED TRUE  # This ensures tests run in isolation
 )
