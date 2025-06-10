@@ -109,6 +109,9 @@ add_executable(benchmark_test
     benchmark_test.cpp
 )
 
+add_executable(where_pushdown_join_test
+        where_pushdown_join_test.cpp)
+
 # Link against Arrow and GTest
 target_link_libraries(sharding_test
     PRIVATE
@@ -209,6 +212,18 @@ target_link_libraries(join_test
 # Link benchmark test with Google Benchmark and other dependencies
 target_link_libraries(benchmark_test
     PRIVATE
+        core
+        Arrow::arrow_shared
+        Parquet::parquet_shared
+        benchmark::benchmark
+        GTest::GTest
+        GTest::Main
+        pthread
+        TBB::tbb
+)
+
+target_link_libraries(where_pushdown_join_test
+        PRIVATE
         core
         Arrow::arrow_shared
         Parquet::parquet_shared

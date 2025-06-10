@@ -1408,13 +1408,15 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
   }
 
   log_debug("Processing {} query clauses", query.clauses().size());
-  for (const auto& clause : query.clauses()) {
+  for (auto i = 0; i < query.clauses().size(); ++i) {
+    auto clause = query.clauses()[i];
     switch (clause->type()) {
       // note: consecutive 'where' clauses should be combined into one
       case Clause::Type::WHERE: {
         auto where = std::static_pointer_cast<Where>(clause);
         log_debug("Processing WHERE clause on field '{}' with operator {}",
                   where->field(), static_cast<int>(where->op()));
+        if (where->inlined()) continue;
 
         std::unordered_map<std::string, std::set<int64_t>> new_front_ids;
         size_t pos = where->field().find('.');
@@ -1453,6 +1455,23 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
       }
       case Clause::Type::TRAVERSE: {
         auto traverse = std::static_pointer_cast<Traverse>(clause);
+        std::shared_ptr<Where> where;
+        if (query.inline_where()) {
+          for (auto j = i + 1; j < query.clauses().size(); ++j) {
+            if (query.clauses()[j]->type() == Clause::Type::WHERE) {
+              auto w = std::static_pointer_cast<Where>(query.clauses()[j]);
+              size_t pos = w->field().find('.');
+              auto variable = w->field().substr(0, pos);
+              if (variable == traverse->target().value()) {
+                log_debug("inline where: '{}'", w->toString());
+                where = w;
+                where->set_inlined(true);
+                break;
+              }
+            }
+          }
+        }
+
         ARROW_ASSIGN_OR_RAISE(auto source_schema,
                               query_state.resolve_schema(traverse->source()));
         ARROW_ASSIGN_OR_RAISE(auto target_schema,
@@ -1486,9 +1505,19 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           std::vector<std::shared_ptr<Node>> target_nodes;
           for (auto edge : outgoing_edges) {
             auto target_id = edge->get_target_id();
+            if (query_state.ids.contains(traverse->target().value()) &&
+                !query_state.ids.at(traverse->target().value())
+                     .contains(target_id)) {
+              continue;
+            }
             auto node_result = node_manager_->get_node(target_id);
             if (node_result.ok()) {
               auto target_node = node_result.ValueOrDie();
+              if (where != nullptr) {
+                if (!apply_where_to_node(where, target_node).ValueOrDie()) {
+                  continue;
+                }
+              }
               if (target_node->schema_name == target_schema) {
                 log_debug("found edge {}:{} -[{}]-> {}:{}", source.value(),
                           source_id, traverse->edge_type(),

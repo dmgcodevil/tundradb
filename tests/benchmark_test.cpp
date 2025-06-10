@@ -27,7 +27,6 @@ class BenchmarkFixture {
 
  public:
   BenchmarkFixture() : rng_(42) {
-    // Create unique database path for each test
     db_path_ = "benchmark_db_" + std::to_string(now_millis());
     auto config = make_config()
                       .with_db_path(db_path_)

@@ -16,7 +16,7 @@
 
 #include "logger.hpp"
 #include "node.hpp"
-#include "schema_utils.hpp"
+#include "query.hpp"
 
 namespace tundradb {
 static std::string generate_uuid() {
@@ -382,6 +382,157 @@ T ValueOrDieWithContext(
  */
 std::string stringifyArrowScalar(
     const std::shared_ptr<arrow::ChunkedArray>& column, int64_t row_idx);
+
+// Utility functions for extracting column values from Arrow tables
+template <typename T>
+arrow::Result<std::vector<T>> get_column_values(
+    const std::shared_ptr<arrow::Table>& table,
+    const std::string& column_name) {
+  auto column = table->GetColumnByName(column_name);
+  if (!column) {
+    return arrow::Status::Invalid("Column '", column_name, "' not found");
+  }
+
+  std::vector<T> values;
+  values.reserve(table->num_rows());
+
+  for (int chunk_idx = 0; chunk_idx < column->num_chunks(); ++chunk_idx) {
+    auto chunk = column->chunk(chunk_idx);
+
+    if constexpr (std::is_same_v<T, int64_t>) {
+      auto typed_array = std::static_pointer_cast<arrow::Int64Array>(chunk);
+      for (int64_t i = 0; i < typed_array->length(); ++i) {
+        if (!typed_array->IsNull(i)) {
+          values.push_back(typed_array->Value(i));
+        }
+      }
+    } else if constexpr (std::is_same_v<T, std::string>) {
+      auto typed_array = std::static_pointer_cast<arrow::StringArray>(chunk);
+      for (int64_t i = 0; i < typed_array->length(); ++i) {
+        if (!typed_array->IsNull(i)) {
+          values.push_back(typed_array->GetString(i));
+        }
+      }
+    } else if constexpr (std::is_same_v<T, double>) {
+      auto typed_array = std::static_pointer_cast<arrow::DoubleArray>(chunk);
+      for (int64_t i = 0; i < typed_array->length(); ++i) {
+        if (!typed_array->IsNull(i)) {
+          values.push_back(typed_array->Value(i));
+        }
+      }
+    } else if constexpr (std::is_same_v<T, bool>) {
+      auto typed_array = std::static_pointer_cast<arrow::BooleanArray>(chunk);
+      for (int64_t i = 0; i < typed_array->length(); ++i) {
+        if (!typed_array->IsNull(i)) {
+          values.push_back(typed_array->Value(i));
+        }
+      }
+    }
+  }
+
+  return values;
+}
+
+inline arrow::Result<std::shared_ptr<arrow::Array>> get_column_as_array(
+    const std::shared_ptr<arrow::Table>& table,
+    const std::string& column_name) {
+  auto column = table->GetColumnByName(column_name);
+  if (!column) {
+    return arrow::Status::Invalid("Column '", column_name, "' not found");
+  }
+
+  ARROW_ASSIGN_OR_RAISE(auto combined_array,
+                        arrow::Concatenate(column->chunks()));
+
+  return combined_array;
+}
+
+// Utility functions for getting first value from Arrow arrays
+template <typename T>
+arrow::Result<T> get_first_value_from_array(
+    const std::shared_ptr<arrow::Array>& array) {
+  if (!array || array->length() == 0) {
+    return arrow::Status::Invalid("Array is null or empty");
+  }
+
+  if (array->IsNull(0)) {
+    return arrow::Status::Invalid("First value is null");
+  }
+
+  if constexpr (std::is_same_v<T, int64_t>) {
+    if (array->type_id() != arrow::Type::INT64) {
+      return arrow::Status::Invalid("Expected Int64 array, got: ",
+                                    array->type()->ToString());
+    }
+    auto typed_array = std::static_pointer_cast<arrow::Int64Array>(array);
+    return typed_array->Value(0);
+  } else if constexpr (std::is_same_v<T, std::string>) {
+    if (array->type_id() != arrow::Type::STRING) {
+      return arrow::Status::Invalid("Expected String array, got: ",
+                                    array->type()->ToString());
+    }
+    auto typed_array = std::static_pointer_cast<arrow::StringArray>(array);
+    return typed_array->GetString(0);
+  } else if constexpr (std::is_same_v<T, double>) {
+    if (array->type_id() != arrow::Type::DOUBLE) {
+      return arrow::Status::Invalid("Expected Double array, got: ",
+                                    array->type()->ToString());
+    }
+    auto typed_array = std::static_pointer_cast<arrow::DoubleArray>(array);
+    return typed_array->Value(0);
+  } else if constexpr (std::is_same_v<T, bool>) {
+    if (array->type_id() != arrow::Type::BOOL) {
+      return arrow::Status::Invalid("Expected Boolean array, got: ",
+                                    array->type()->ToString());
+    }
+    auto typed_array = std::static_pointer_cast<arrow::BooleanArray>(array);
+    return typed_array->Value(0);
+  } else {
+    return arrow::Status::NotImplemented("Unsupported type");
+  }
+}
+
+inline arrow::Result<int64_t> get_first_int64(
+    const std::shared_ptr<arrow::Array>& array) {
+  return get_first_value_from_array<int64_t>(array);
+}
+
+inline arrow::Result<std::string> get_first_string(
+    const std::shared_ptr<arrow::Array>& array) {
+  return get_first_value_from_array<std::string>(array);
+}
+
+inline arrow::Result<bool> apply_where_to_node(
+    const std::shared_ptr<Clause>& where_clause,
+    const std::shared_ptr<Node>& node) {
+  if (!where_clause || where_clause->type() != Clause::Type::WHERE) {
+    return arrow::Status::Invalid("Clause is not a WHERE clause");
+  }
+
+  auto where = std::static_pointer_cast<Where>(where_clause);
+  return where->matches(node);
+}
+
+// Utility function to filter a vector of nodes by a WHERE clause
+inline arrow::Result<std::vector<std::shared_ptr<Node>>> filter_nodes_by_where(
+    const std::vector<std::shared_ptr<Node>>& nodes,
+    const std::shared_ptr<Where>& where_clause) {
+  if (!where_clause) {
+    return arrow::Status::Invalid("WHERE clause is null");
+  }
+
+  std::vector<std::shared_ptr<Node>> filtered_nodes;
+  filtered_nodes.reserve(nodes.size());  // Reserve space for efficiency
+
+  for (const auto& node : nodes) {
+    ARROW_ASSIGN_OR_RAISE(bool matches, where_clause->matches(node));
+    if (matches) {
+      filtered_nodes.push_back(node);
+    }
+  }
+
+  return filtered_nodes;
+}
 }  // namespace tundradb
 
 #endif  // UTILS_HPP
