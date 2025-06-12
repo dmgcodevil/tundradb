@@ -138,7 +138,21 @@ TEST_F(WherePushdownJoinTest, WhereInJoin) {
             << ((static_cast<double>(older_than_50) / half) * 100.0) << "%"
             << std::endl;
 
-  std::cout << "run optimized" << std::endl;
+  start_time = std::chrono::high_resolution_clock::now();
+  result = db_->query(Query::from("u:User")
+                          .traverse("u", "FRIEND", "f:User")
+                          .where("f.age", CompareOp::Gt, 50)
+                          .build());
+  end_time = std::chrono::high_resolution_clock::now();
+  const auto duration_unoptimized =
+      std::chrono::duration_cast<std::chrono::milliseconds>(end_time -
+                                                            start_time);
+
+  const auto unoptimized_size = result.ValueOrDie()->table()->num_rows();
+  std::cout << "duration_unoptimized=" << duration_unoptimized.count() << " ms"
+            << std::endl;
+  std::cout << "unoptimized size=" << unoptimized_size << std::endl;
+
   start_time = std::chrono::high_resolution_clock::now();
   result = db_->query(Query::from("u:User")
                           .traverse("u", "FRIEND", "f:User")
@@ -149,15 +163,15 @@ TEST_F(WherePushdownJoinTest, WhereInJoin) {
   const auto duration_optimized =
       std::chrono::duration_cast<std::chrono::milliseconds>(end_time -
                                                             start_time);
-
+  const auto optimized_size = result.ValueOrDie()->table()->num_rows();
   std::cout << "duration_optimized=" << duration_optimized.count() << " ms"
             << std::endl;
-  std::cout << "optimized size=" << result.ValueOrDie()->table()->num_rows()
-            << std::endl;
+  std::cout << "optimized size=" << optimized_size << std::endl;
 
-
-  // w/o inline 2945ms
-  // with inline 2287ms
+  std::cout << "query time reduced by "
+            << duration_unoptimized.count() - duration_optimized.count()
+            << " ms" << std::endl;
+  EXPECT_EQ(optimized_size, unoptimized_size);
 }
 
 }  // namespace tundradb

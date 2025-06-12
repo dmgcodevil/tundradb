@@ -49,7 +49,11 @@ static arrow::Result<std::shared_ptr<arrow::Table>> filter_table_by_id(
     auto id_array = std::static_pointer_cast<arrow::Int64Array>(chunk);
 
     for (int64_t i = 0; i < id_array->length(); ++i) {
-      filter_builder.Append(filter_ids.count(id_array->Value(i)) > 0);
+      auto status =
+          filter_builder.Append(filter_ids.count(id_array->Value(i)) > 0);
+      if (!status.ok()) {
+        return status;
+      }
     }
   }
 
@@ -503,29 +507,28 @@ inline arrow::Result<std::string> get_first_string(
 }
 
 inline arrow::Result<bool> apply_where_to_node(
-    const std::shared_ptr<Clause>& where_clause,
+    const std::shared_ptr<WhereExpr>& where_expr,
     const std::shared_ptr<Node>& node) {
-  if (!where_clause || where_clause->type() != Clause::Type::WHERE) {
-    return arrow::Status::Invalid("Clause is not a WHERE clause");
+  if (!where_expr) {
+    return arrow::Status::Invalid("WHERE expression is null");
   }
 
-  auto where = std::static_pointer_cast<Where>(where_clause);
-  return where->matches(node);
+  return where_expr->matches(node);
 }
 
 // Utility function to filter a vector of nodes by a WHERE clause
 inline arrow::Result<std::vector<std::shared_ptr<Node>>> filter_nodes_by_where(
     const std::vector<std::shared_ptr<Node>>& nodes,
-    const std::shared_ptr<Where>& where_clause) {
-  if (!where_clause) {
-    return arrow::Status::Invalid("WHERE clause is null");
+    const std::shared_ptr<WhereExpr>& where_expr) {
+  if (!where_expr) {
+    return arrow::Status::Invalid("WHERE expression is null");
   }
 
   std::vector<std::shared_ptr<Node>> filtered_nodes;
   filtered_nodes.reserve(nodes.size());  // Reserve space for efficiency
 
   for (const auto& node : nodes) {
-    ARROW_ASSIGN_OR_RAISE(bool matches, where_clause->matches(node));
+    ARROW_ASSIGN_OR_RAISE(bool matches, where_expr->matches(node));
     if (matches) {
       filtered_nodes.push_back(node);
     }

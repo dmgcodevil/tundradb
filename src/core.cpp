@@ -2,8 +2,8 @@
 
 #include <arrow/compute/api.h>
 #include <arrow/dataset/dataset.h>
-#include <arrow/datum.h>
 #include <arrow/dataset/scanner.h>
+#include <arrow/datum.h>
 
 #include <chrono>
 #include <future>
@@ -49,7 +49,8 @@ arrow::compute::Expression value_to_expression(const Value& value) {
     case ValueType::Bool:
       return arrow::compute::literal(value.get<bool>());
     case ValueType::Null:
-      return arrow::compute::literal(arrow::Datum(arrow::MakeNullScalar(arrow::null())));
+      return arrow::compute::literal(
+          arrow::Datum(arrow::MakeNullScalar(arrow::null())));
     default:
       throw std::runtime_error("Unsupported value type for Arrow expression");
   }
@@ -58,9 +59,7 @@ arrow::compute::Expression value_to_expression(const Value& value) {
 // Convert CompareOp to appropriate Arrow compute function
 arrow::compute::Expression apply_comparison_op(
     const arrow::compute::Expression& field,
-    const arrow::compute::Expression& value,
-    CompareOp op) {
-  
+    const arrow::compute::Expression& value, CompareOp op) {
   switch (op) {
     case CompareOp::Eq:
       return arrow::compute::equal(field, value);
@@ -75,73 +74,34 @@ arrow::compute::Expression apply_comparison_op(
     case CompareOp::Lte:
       return arrow::compute::less_equal(field, value);
     case CompareOp::Contains:
-      // For string operations, we'd need to use match_substring_regex or similar
-      // For now, fall back to equal (this would need more sophisticated handling)
-      log_warn("CONTAINS operator not fully implemented for Arrow expressions, using equality");
+      // For string operations, we'd need to use match_substring_regex or
+      // similar For now, fall back to equal (this would need more sophisticated
+      // handling)
+      log_warn(
+          "CONTAINS operator not fully implemented for Arrow expressions, "
+          "using equality");
       return arrow::compute::equal(field, value);
     case CompareOp::StartsWith:
-      log_warn("STARTS_WITH operator not fully implemented for Arrow expressions, using equality");
+      log_warn(
+          "STARTS_WITH operator not fully implemented for Arrow expressions, "
+          "using equality");
       return arrow::compute::equal(field, value);
     case CompareOp::EndsWith:
-      log_warn("ENDS_WITH operator not fully implemented for Arrow expressions, using equality");
+      log_warn(
+          "ENDS_WITH operator not fully implemented for Arrow expressions, "
+          "using equality");
       return arrow::compute::equal(field, value);
     default:
-      throw std::runtime_error("Unsupported comparison operator for Arrow expression");
+      throw std::runtime_error(
+          "Unsupported comparison operator for Arrow expression");
   }
 }
 
-// Recursively convert WhereCondition to Arrow compute expression
-arrow::compute::Expression where_condition_to_expression(const WhereCondition& condition) {
-  // Handle SimpleWhereCondition
-  if (auto simple = dynamic_cast<const SimpleWhereCondition*>(&condition)) {
-    auto where = simple->get_where();
-    
-    // Parse field name (remove variable prefix if present)
-    std::string field_name;
-    size_t dot_pos = where->field().find('.');
-    if (dot_pos != std::string::npos) {
-      field_name = where->field().substr(dot_pos + 1);
-    } else {
-      field_name = where->field();
-    }
-    
-    auto field_expr = arrow::compute::field_ref(field_name);
-    auto value_expr = value_to_expression(where->value());
-    
-    return apply_comparison_op(field_expr, value_expr, where->op());
-  }
-  
-  // Handle compound WhereExpression
-  if (auto compound = dynamic_cast<const WhereExpression*>(&condition)) {
-    return compound->to_arrow_expression();
-  }
-  
-  throw std::runtime_error("Unknown WhereCondition type for Arrow expression conversion");
-}
-
-// Implementation of WhereExpression::to_arrow_expression()
-arrow::compute::Expression WhereExpression::to_arrow_expression() const {
-  if (!left_) {
-    throw std::runtime_error("WhereExpression has no left condition");
-  }
-  
-  // Single condition case
-  if (!op_ || !right_) {
-    return where_condition_to_expression(*left_);
-  }
-  
-  // Binary expression case - recursively convert left and right
-  auto left_expr = where_condition_to_expression(*left_);
-  auto right_expr = where_condition_to_expression(*right_);
-  
-  switch (op_.value()) {
-    case LogicalOp::AND:
-      return arrow::compute::and_(left_expr, right_expr);
-    case LogicalOp::OR:
-      return arrow::compute::or_(left_expr, right_expr);
-    default:
-      throw std::runtime_error("Unknown logical operator in WhereExpression");
-  }
+// Recursively convert WhereExpr to Arrow compute expression
+arrow::compute::Expression where_condition_to_expression(
+    const WhereExpr& condition) {
+  // Use the unified to_arrow_expression() method from WhereExpr
+  return condition.to_arrow_expression();
 }
 
 arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
@@ -233,130 +193,23 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
 }
 
 arrow::Result<std::shared_ptr<arrow::Table>> filter(
-    std::shared_ptr<arrow::Table> table, const std::string& field_name,
-    const CompareOp& op, const Value& value) {
-  log_debug("Filtering table on field '{}' with {} operator", field_name,
-            static_cast<int>(op));
-
-  // First check if the field exists
-  auto field_idx = table->schema()->GetFieldIndex(field_name);
-  if (field_idx == -1) {
-    log_error("Field '{}' not found in table", field_name);
-    return arrow::Status::Invalid("Field '", field_name,
-                                  "' not found in table");
-  }
-
-  // Get the column to filter on
-  auto column = table->column(field_idx);
-  log_debug("Found column '{}' at index {}", field_name, field_idx);
-
-  // Create the comparison scalar
-  arrow::compute::Expression scalar_value;
-  arrow::compute::Expression field = arrow::compute::field_ref(field_name);
-  log_debug("Created field reference for '{}'", field_name);
-
-  switch (value.type()) {
-    case ValueType::Int64:
-      log_debug("Using Int64 value {} for filter", value.get<int64_t>());
-      scalar_value = arrow::compute::literal(value.get<int64_t>());
-      break;
-    case ValueType::String:
-      log_debug("Using String value '{}' for filter", value.get<std::string>());
-      scalar_value = arrow::compute::literal(value.get<std::string>());
-      break;
-    // Add other types as needed
-    default:
-      log_error("Unsupported value type for filter: {}",
-                static_cast<int>(value.type()));
-      return arrow::Status::Invalid("Unsupported value type");
-  }
-
-  arrow::compute::Expression op_exp;
-  log_debug("Creating filter expression");
-
-  switch (op) {
-    case CompareOp::Eq:
-      log_debug("Using EQUAL operator");
-      op_exp = arrow::compute::equal(field, scalar_value);
-      break;
-    case CompareOp::NotEq:
-      log_debug("Using NOT_EQUAL operator");
-      op_exp = arrow::compute::not_equal(field, scalar_value);
-      break;
-    case CompareOp::Gt:
-      log_debug("Using GREATER operator");
-      op_exp = arrow::compute::greater(field, scalar_value);
-      break;
-    case CompareOp::Lt:
-      log_debug("Using LESS operator");
-      op_exp = arrow::compute::less(field, scalar_value);
-      break;
-    default:
-      log_error("Unsupported comparison operator: {}", static_cast<int>(op));
-      return arrow::Status::Invalid("Unsupported operation");
-  }
-
-  log_debug("Creating in-memory dataset from table with {} rows",
-            table->num_rows());
-  auto dataset = std::make_shared<arrow::dataset::InMemoryDataset>(table);
-
-  // Create scanner builder
-  log_debug("Creating scanner builder");
-  auto scan_builder_result = dataset->NewScan();
-  if (!scan_builder_result.ok()) {
-    log_error("Failed to create scanner builder: {}",
-              scan_builder_result.status().ToString());
-    return scan_builder_result.status();
-  }
-  auto scan_builder = scan_builder_result.ValueOrDie();
-
-  log_debug("Applying filter to scanner builder");
-  auto filter_status = scan_builder->Filter(op_exp);
-  if (!filter_status.ok()) {
-    log_error("Failed to apply filter: {}", filter_status.ToString());
-    return filter_status;
-  }
-
-  log_debug("Finishing scanner");
-  auto scanner_result = scan_builder->Finish();
-  if (!scanner_result.ok()) {
-    log_error("Failed to finish scanner: {}",
-              scanner_result.status().ToString());
-    return scanner_result.status();
-  }
-  auto scanner = scanner_result.ValueOrDie();
-
-  log_debug("Executing scan to table");
-  auto table_result = scanner->ToTable();
-  if (!table_result.ok()) {
-    log_error("Failed to convert scan results to table: {}",
-              table_result.status().ToString());
-    return table_result.status();
-  }
-
-  auto result_table = table_result.ValueOrDie();
-  log_debug("Filter completed: {} rows in, {} rows out", table->num_rows(),
-            result_table->num_rows());
-  return result_table;
-}
-
-// New overloaded filter function that accepts WhereCondition
-arrow::Result<std::shared_ptr<arrow::Table>> filter(
-    std::shared_ptr<arrow::Table> table, const WhereCondition& condition) {
+    std::shared_ptr<arrow::Table> table, const WhereExpr& condition) {
   log_debug("Filtering table with WhereCondition: {}", condition.toString());
 
   try {
     // Convert WhereCondition to Arrow compute expression
     auto filter_expr = where_condition_to_expression(condition);
-    
-    log_debug("Creating in-memory dataset from table with {} rows", table->num_rows());
+
+    log_debug("Creating in-memory dataset from table with {} rows",
+              table->num_rows());
     auto dataset = std::make_shared<arrow::dataset::InMemoryDataset>(table);
 
     // Create scanner builder
     log_debug("Creating scanner builder");
     auto scan_builder_result = dataset->NewScan();
     if (!scan_builder_result.ok()) {
-      log_error("Failed to create scanner builder: {}", scan_builder_result.status().ToString());
+      log_error("Failed to create scanner builder: {}",
+                scan_builder_result.status().ToString());
       return scan_builder_result.status();
     }
     auto scan_builder = scan_builder_result.ValueOrDie();
@@ -371,7 +224,8 @@ arrow::Result<std::shared_ptr<arrow::Table>> filter(
     log_debug("Finishing scanner");
     auto scanner_result = scan_builder->Finish();
     if (!scanner_result.ok()) {
-      log_error("Failed to finish scanner: {}", scanner_result.status().ToString());
+      log_error("Failed to finish scanner: {}",
+                scanner_result.status().ToString());
       return scanner_result.status();
     }
     auto scanner = scanner_result.ValueOrDie();
@@ -379,17 +233,21 @@ arrow::Result<std::shared_ptr<arrow::Table>> filter(
     log_debug("Executing scan to table");
     auto table_result = scanner->ToTable();
     if (!table_result.ok()) {
-      log_error("Failed to convert scan results to table: {}", table_result.status().ToString());
+      log_error("Failed to convert scan results to table: {}",
+                table_result.status().ToString());
       return table_result.status();
     }
 
     auto result_table = table_result.ValueOrDie();
-    log_debug("Filter completed: {} rows in, {} rows out", table->num_rows(), result_table->num_rows());
+    log_debug("Filter completed: {} rows in, {} rows out", table->num_rows(),
+              result_table->num_rows());
     return result_table;
-    
+
   } catch (const std::exception& e) {
-    log_error("Failed to convert WhereCondition to Arrow expression: {}", e.what());
-    return arrow::Status::Invalid("Failed to convert WHERE condition: ", e.what());
+    log_error("Failed to convert WhereCondition to Arrow expression: {}",
+              e.what());
+    return arrow::Status::Invalid("Failed to convert WHERE condition: ",
+                                  e.what());
   }
 }
 
@@ -853,7 +711,7 @@ struct RowNode {
 
   RowNode(std::optional<Row> r, int d,
           std::vector<std::unique_ptr<RowNode>> c = {})
-      : row(move(r)), depth(d), children(std::move(c)) {}
+      : row(std::move(r)), depth(d), children(std::move(c)) {}
 
   bool leaf() const { return row.has_value(); }
 
@@ -1544,6 +1402,8 @@ std::shared_ptr<arrow::Table> apply_select(
 
 arrow::Result<std::shared_ptr<QueryResult>> Database::query(
     const Query& query) const {
+  int64_t passed_count = 0;
+  int64_t not_passed_count = 0;
   QueryState query_state;
   log_debug("Executing query starting from schema '{}'",
             query.from().toString());
@@ -1574,22 +1434,24 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
     switch (clause->type()) {
       // note: consecutive 'where' clauses should be combined into one
       case Clause::Type::WHERE: {
-        // Handle both simple Where and compound WhereExpression
-        if (auto simple_where = std::dynamic_pointer_cast<Where>(clause)) {
+        // Handle both simple ComparisonExpr and compound LogicalExpr
+        if (auto comparison_expr =
+                std::dynamic_pointer_cast<ComparisonExpr>(clause)) {
           log_debug("Processing WHERE clause on field '{}' with operator {}",
-                    simple_where->field(), static_cast<int>(simple_where->op()));
-          if (simple_where->inlined()) continue;
+                    comparison_expr->field(),
+                    static_cast<int>(comparison_expr->op()));
+          if (comparison_expr->inlined()) continue;
 
           std::unordered_map<std::string, std::set<int64_t>> new_front_ids;
-          size_t pos = simple_where->field().find('.');
+          size_t pos = comparison_expr->field().find('.');
           std::string variable;
           std::string field;
           if (pos == std::string::npos) {
             return arrow::Status::Invalid("expected <var>.<field>, actual={}",
-                                          simple_where->field());
+                                          comparison_expr->field());
           }
-          variable = simple_where->field().substr(0, pos);
-          field = simple_where->field().substr(pos + 1);
+          variable = comparison_expr->field().substr(0, pos);
+          field = comparison_expr->field().substr(pos + 1);
           if (!query_state.tables.contains(variable)) {
             return arrow::Status::Invalid("Unknown variable '{}'", variable);
           }
@@ -1597,55 +1459,58 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           if (table->schema()->GetFieldIndex(field) == -1) {
             return arrow::Status::Invalid("Unknown field '{}'", field);
           }
-          auto filtered_table_result =
-              filter(table, field, simple_where->op(), simple_where->value());
+
+          // Use ComparisonExpr directly since it implements WhereExpr
+          auto filtered_table_result = filter(table, *comparison_expr);
           if (!filtered_table_result.ok()) {
-            log_error("Failed to filter table '{}': {}", simple_where->field(),
+            log_error("Failed to filter table '{}': {}",
+                      comparison_expr->field(),
                       filtered_table_result.status().ToString());
             return filtered_table_result.status();
           }
-          if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
-            log_debug("filtered '{}' table ", variable);
-            print_table(filtered_table_result.ValueOrDie());
-          }
-          auto res = query_state.update_table(filtered_table_result.ValueOrDie(),
-                                              SchemaRef::parse(variable));
+          auto res = query_state.update_table(
+              filtered_table_result.ValueOrDie(), SchemaRef::parse(variable));
           if (!res.ok()) {
             return res.status();
           }
-        } else if (auto where_expr = std::dynamic_pointer_cast<WhereExpression>(clause)) {
-          log_debug("Processing compound WHERE expression: {}", where_expr->toString());
+        } else if (auto where_expr =
+                       std::dynamic_pointer_cast<LogicalExpr>(clause)) {
+          log_debug("Processing compound WHERE expression: {}",
+                    where_expr->toString());
           if (where_expr->inlined()) continue;
-          
+
           // Extract variable from the expression
           std::string variable = where_expr->extract_first_variable();
-          
+
           if (variable.empty()) {
-            log_warn("Could not extract variable from compound WHERE expression");
+            log_warn(
+                "Could not extract variable from compound WHERE expression");
             continue;
           }
-          
+
           if (!query_state.tables.contains(variable)) {
             return arrow::Status::Invalid("Unknown variable '{}'", variable);
           }
-          
+
           auto table = query_state.tables.at(variable);
-          
+
           // Use the new WhereCondition-based filter
           auto filtered_table_result = filter(table, *where_expr);
           if (!filtered_table_result.ok()) {
-            log_error("Failed to filter table with compound expression '{}': {}", 
-                      where_expr->toString(), filtered_table_result.status().ToString());
+            log_error(
+                "Failed to filter table with compound expression '{}': {}",
+                where_expr->toString(),
+                filtered_table_result.status().ToString());
             return filtered_table_result.status();
           }
-          
+
           if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
             log_debug("filtered '{}' table with compound expression", variable);
             print_table(filtered_table_result.ValueOrDie());
           }
-          
-          auto res = query_state.update_table(filtered_table_result.ValueOrDie(),
-                                              SchemaRef::parse(variable));
+
+          auto res = query_state.update_table(
+              filtered_table_result.ValueOrDie(), SchemaRef::parse(variable));
           if (!res.ok()) {
             return res.status();
           }
@@ -1654,25 +1519,33 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
       }
       case Clause::Type::TRAVERSE: {
         auto traverse = std::static_pointer_cast<Traverse>(clause);
-        std::vector<std::shared_ptr<Where>> where_clauses;
+        std::vector<std::shared_ptr<WhereExpr>> where_clauses;
         if (query.inline_where()) {
           for (auto j = i + 1; j < query.clauses().size(); ++j) {
             if (query.clauses()[j]->type() == Clause::Type::WHERE) {
-              // Handle both simple Where and compound WhereExpression
-              if (auto simple_where = std::dynamic_pointer_cast<Where>(query.clauses()[j])) {
-                size_t pos = simple_where->field().find('.');
-                auto variable = simple_where->field().substr(0, pos);
+              // Handle both ComparisonExpr and LogicalExpr
+              if (auto comparison_expr =
+                      std::dynamic_pointer_cast<ComparisonExpr>(
+                          query.clauses()[j])) {
+                size_t pos = comparison_expr->field().find('.');
+                auto variable = comparison_expr->field().substr(0, pos);
                 if (variable == traverse->target().value()) {
-                  log_debug("inline where: '{}'", simple_where->toString());
-                  where_clauses.push_back(simple_where);
-                  simple_where->set_inlined(true);
+                  log_debug("inline where: '{}'", comparison_expr->toString());
+                  where_clauses.push_back(comparison_expr);
+                  comparison_expr->set_inlined(true);
                 }
-              } else if (auto where_expr = std::dynamic_pointer_cast<WhereExpression>(query.clauses()[j])) {
-                // Get all conditions for the target variable from the compound expression
-                auto conditions = where_expr->get_conditions_for_variable(traverse->target().value());
+              } else if (auto where_expr =
+                             std::dynamic_pointer_cast<LogicalExpr>(
+                                 query.clauses()[j])) {
+                // Get all conditions for the target variable from the compound
+                // expression
+                auto conditions = where_expr->get_conditions_for_variable(
+                    traverse->target().value());
                 if (!conditions.empty()) {
-                  log_debug("inline where expression: '{}'", where_expr->toString());
-                  where_clauses.insert(where_clauses.end(), conditions.begin(), conditions.end());
+                  log_debug("inline where expression: '{}'",
+                            where_expr->toString());
+                  where_clauses.insert(where_clauses.end(), conditions.begin(),
+                                       conditions.end());
                   where_expr->set_inlined(true);
                 }
               }
@@ -1721,33 +1594,41 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
             auto node_result = node_manager_->get_node(target_id);
             if (node_result.ok()) {
               auto target_node = node_result.ValueOrDie();
-              
+
               // First check if node belongs to target schema
               if (target_node->schema_name == target_schema) {
                 // Then apply all WHERE clauses with AND logic
                 bool passes_all_filters = true;
-                
+
                 if (where_clauses.size() == 1) {
+                  // std::cout << "where_clauses.size() == 1" << std::endl;
                   // Single condition - use existing method
-                  if (!apply_where_to_node(where_clauses[0], target_node).ValueOrDie()) {
+                  if (!apply_where_to_node(where_clauses[0], target_node)
+                           .ValueOrDie()) {
                     passes_all_filters = false;
                   }
                 } else if (where_clauses.size() > 1) {
-                  // Multiple conditions - could optimize by creating a temporary table and using Arrow expressions
-                  // For now, use the existing approach but this could be optimized
+                  // Multiple conditions - could optimize by creating a
+                  // temporary table and using Arrow expressions For now, use
+                  // the existing approach but this could be optimized
                   for (const auto& where_clause : where_clauses) {
-                    if (!apply_where_to_node(where_clause, target_node).ValueOrDie()) {
+                    if (!apply_where_to_node(where_clause, target_node)
+                             .ValueOrDie()) {
                       passes_all_filters = false;
-                      break; // Early exit on first failed condition (AND logic)
+                      break;  // Early exit on first failed condition (AND
+                              // logic)
                     }
                   }
                 }
-                
+
                 if (passes_all_filters) {
+                  passed_count++;
                   log_debug("found edge {}:{} -[{}]-> {}:{}", source.value(),
                             source_id, traverse->edge_type(),
                             traverse->target().value(), target_node->id);
                   target_nodes.push_back(target_node);
+                } else {
+                  not_passed_count++;
                 }
               }
             } else {
@@ -1884,7 +1765,8 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
   }
   auto output_table = output_table_res.ValueOrDie();
   result->set_table(apply_select(query.select(), output_table));
-
+  std::cout << "passed_count=" << passed_count << std::endl;
+  std::cout << "not_passed_count=" << not_passed_count << std::endl;
   return result;
 }
 
