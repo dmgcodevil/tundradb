@@ -99,9 +99,9 @@ arrow::compute::Expression apply_comparison_op(
 
 // Recursively convert WhereExpr to Arrow compute expression
 arrow::compute::Expression where_condition_to_expression(
-    const WhereExpr& condition) {
+    const WhereExpr& condition, bool strip_var) {
   // Use the unified to_arrow_expression() method from WhereExpr
-  return condition.to_arrow_expression();
+  return condition.to_arrow_expression(strip_var);
 }
 
 arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
@@ -193,12 +193,13 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
 }
 
 arrow::Result<std::shared_ptr<arrow::Table>> filter(
-    std::shared_ptr<arrow::Table> table, const WhereExpr& condition) {
+    std::shared_ptr<arrow::Table> table, const WhereExpr& condition,
+    bool strip_var) {
   log_debug("Filtering table with WhereCondition: {}", condition.toString());
 
   try {
     // Convert WhereCondition to Arrow compute expression
-    auto filter_expr = where_condition_to_expression(condition);
+    auto filter_expr = where_condition_to_expression(condition, strip_var);
 
     log_debug("Creating in-memory dataset from table with {} rows",
               table->num_rows());
@@ -1429,6 +1430,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
   }
 
   log_debug("Processing {} query clauses", query.clauses().size());
+  std::vector<std::shared_ptr<LogicalExpr>> post_where;
   for (auto i = 0; i < query.clauses().size(); ++i) {
     auto clause = query.clauses()[i];
     switch (clause->type()) {
@@ -1461,7 +1463,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           }
 
           // Use ComparisonExpr directly since it implements WhereExpr
-          auto filtered_table_result = filter(table, *comparison_expr);
+          auto filtered_table_result = filter(table, *comparison_expr, true);
           if (!filtered_table_result.ok()) {
             log_error("Failed to filter table '{}': {}",
                       comparison_expr->field(),
@@ -1478,42 +1480,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           log_debug("Processing compound WHERE expression: {}",
                     where_expr->toString());
           if (where_expr->inlined()) continue;
-
-          // Extract variable from the expression
-          std::string variable = where_expr->extract_first_variable();
-
-          if (variable.empty()) {
-            log_warn(
-                "Could not extract variable from compound WHERE expression");
-            continue;
-          }
-
-          if (!query_state.tables.contains(variable)) {
-            return arrow::Status::Invalid("Unknown variable '{}'", variable);
-          }
-
-          auto table = query_state.tables.at(variable);
-
-          // Use the new WhereCondition-based filter
-          auto filtered_table_result = filter(table, *where_expr);
-          if (!filtered_table_result.ok()) {
-            log_error(
-                "Failed to filter table with compound expression '{}': {}",
-                where_expr->toString(),
-                filtered_table_result.status().ToString());
-            return filtered_table_result.status();
-          }
-
-          if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
-            log_debug("filtered '{}' table with compound expression", variable);
-            print_table(filtered_table_result.ValueOrDie());
-          }
-
-          auto res = query_state.update_table(
-              filtered_table_result.ValueOrDie(), SchemaRef::parse(variable));
-          if (!res.ok()) {
-            return res.status();
-          }
+          post_where.emplace_back(where_expr);
         }
         break;
       }
@@ -1764,6 +1731,10 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
     return output_table_res.status();
   }
   auto output_table = output_table_res.ValueOrDie();
+  for (const auto& expr : post_where) {
+    log_debug("post process where: {}", expr->toString());
+    output_table = filter(output_table, *expr, false).ValueOrDie();
+  }
   result->set_table(apply_select(query.select(), output_table));
   std::cout << "passed_count=" << passed_count << std::endl;
   std::cout << "not_passed_count=" << not_passed_count << std::endl;

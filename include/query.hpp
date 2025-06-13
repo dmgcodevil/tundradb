@@ -124,7 +124,8 @@ class WhereExpr {
   virtual std::string toString() const = 0;
   virtual void set_inlined(bool inlined) = 0;
   virtual bool inlined() const = 0;
-  virtual arrow::compute::Expression to_arrow_expression() const = 0;
+  virtual arrow::compute::Expression to_arrow_expression(
+      bool strip_var) const = 0;
 
   // Collect all conditions for a specific variable (for inline optimization)
   virtual std::vector<std::shared_ptr<ComparisonExpr>>
@@ -529,16 +530,18 @@ class ComparisonExpr : public Clause, public WhereExpr {
     return compare_values(field_array, value_, op_);
   }
 
-  arrow::compute::Expression to_arrow_expression() const override {
+  arrow::compute::Expression to_arrow_expression(
+      bool strip_var) const override {
     // Parse field name (remove variable prefix if present)
-    std::string field_name;
-    size_t dot_pos = field_.find('.');
-    if (dot_pos != std::string::npos) {
-      field_name = field_.substr(dot_pos + 1);
-    } else {
-      field_name = field_;
+    std::string field_name = field_;
+    if (strip_var) {
+      size_t dot_pos = field_.find('.');
+      if (dot_pos != std::string::npos) {
+        field_name = field_.substr(dot_pos + 1);
+      } else {
+        field_name = field_;
+      }
     }
-
     auto field_expr = arrow::compute::field_ref(field_name);
     auto value_expr = value_to_expression(value_);
 
@@ -737,13 +740,14 @@ class LogicalExpr : public Clause, public WhereExpr {
     return arrow::Status::Invalid("Unknown logical operator");
   }
 
-  arrow::compute::Expression to_arrow_expression() const override {
+  arrow::compute::Expression to_arrow_expression(
+      bool strip_var) const override {
     if (!left_ || !right_) {
       throw std::runtime_error("LogicalExpr missing left or right operand");
     }
 
-    auto left_expr = left_->to_arrow_expression();
-    auto right_expr = right_->to_arrow_expression();
+    auto left_expr = left_->to_arrow_expression(strip_var);
+    auto right_expr = right_->to_arrow_expression(strip_var);
 
     switch (op_) {
       case LogicalOp::AND:
