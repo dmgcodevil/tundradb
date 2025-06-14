@@ -1,9 +1,9 @@
 #include "../include/core.hpp"
 
-#include <arrow/compute/api.h>
 #include <arrow/dataset/dataset.h>
 #include <arrow/dataset/scanner.h>
 #include <arrow/datum.h>
+#include <arrow/table.h>
 
 #include <chrono>
 #include <future>
@@ -13,7 +13,9 @@
 #include <queue>
 #include <ranges>
 #include <stack>
+#include <string>
 #include <thread>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -1329,13 +1331,6 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_rows(
   return arrow::Table::Make(output_schema, arrays);
 }
 
-#include <arrow/table.h>
-
-#include <memory>
-#include <string>
-#include <unordered_set>
-#include <vector>
-
 // Function to project a table based on Select clause
 std::shared_ptr<arrow::Table> apply_select(
     const std::shared_ptr<Select>& select,
@@ -1401,11 +1396,47 @@ std::shared_ptr<arrow::Table> apply_select(
   return result.ValueOrDie();
 }
 
+std::vector<std::shared_ptr<WhereExpr>> get_where_to_inline(
+    const std::string& target_var, size_t i,
+    const std::vector<std::shared_ptr<Clause>>& clauses) {
+  std::vector<std::shared_ptr<WhereExpr>> inlined;
+  for (; i < clauses.size(); i++) {
+    if (clauses[i]->type() == Clause::Type::WHERE) {
+      auto where_expr = std::dynamic_pointer_cast<WhereExpr>(clauses[i]);
+      if (where_expr->can_inline(target_var)) {
+        log_debug("inline where: '{}'", where_expr->toString());
+        inlined.push_back(where_expr);
+      }
+    }
+  }
+  return inlined;
+}
+
+arrow::Result<std::shared_ptr<arrow::Table>> inline_where(
+    const SchemaRef& ref, std::shared_ptr<arrow::Table> table,
+    QueryState& query_state,
+    const std::vector<std::shared_ptr<WhereExpr>>& where_exprs) {
+  auto curr_table = std::move(table);
+  for (const auto& exp : where_exprs) {
+    log_debug("inline where '{}'", exp->toString());
+    auto result = filter(curr_table, *exp, true);
+    if (!result.ok()) {
+      log_error(
+          "Where inline. Failed to filter table '{}', where: '{}', error: {}",
+          ref.toString(), exp->toString(), result.status().ToString());
+      return result.status();
+    }
+    ARROW_RETURN_NOT_OK(query_state.update_table(result.ValueOrDie(), ref));
+    curr_table = result.ValueOrDie();
+    exp->set_inlined(true);
+  }
+  return curr_table;
+}
+
 arrow::Result<std::shared_ptr<QueryResult>> Database::query(
     const Query& query) const {
-  int64_t passed_count = 0;
-  int64_t not_passed_count = 0;
   QueryState query_state;
+  auto result = std::make_shared<QueryResult>();
   log_debug("Executing query starting from schema '{}'",
             query.from().toString());
   query_state.node_manager = this->node_manager_;
@@ -1429,58 +1460,59 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
     ARROW_RETURN_NOT_OK(query_state.update_table(source_table, query.from()));
   }
 
+  {
+    auto where_exps =
+        get_where_to_inline(query.from().value(), 0, query.clauses());
+    result->mutable_execution_stats().num_where_clauses_inlined +=
+        where_exps.size();
+    auto res =
+        inline_where(query.from(), query_state.tables[query.from().value()],
+                     query_state, where_exps);
+    if (!res.ok()) {
+      return res.status();
+    }
+  }
+
   log_debug("Processing {} query clauses", query.clauses().size());
-  std::vector<std::shared_ptr<LogicalExpr>> post_where;
+  std::vector<std::shared_ptr<WhereExpr>> post_where;
   for (auto i = 0; i < query.clauses().size(); ++i) {
     auto clause = query.clauses()[i];
     switch (clause->type()) {
-      // note: consecutive 'where' clauses should be combined into one
       case Clause::Type::WHERE: {
-        // Handle both simple ComparisonExpr and compound LogicalExpr
-        if (auto comparison_expr =
-                std::dynamic_pointer_cast<ComparisonExpr>(clause)) {
-          log_debug("Processing WHERE clause on field '{}' with operator {}",
-                    comparison_expr->field(),
-                    static_cast<int>(comparison_expr->op()));
-          if (comparison_expr->inlined()) continue;
+        auto where = std::dynamic_pointer_cast<WhereExpr>(clause);
+        if (where->inlined()) {
+          log_debug("where '{}' is inlined, skip", where->toString());
+          continue;
+        }
+        auto variables = where->get_all_variables();
+        if (variables.empty()) {
+          return arrow::Status::Invalid(
+              "where clause field must have variable "
+              "<var>.<field>, actual={}",
+              where->toString());
+        }
+        if (variables.size() == 1) {
+          log_debug("Processing WHERE clause: '{}'", where->toString());
 
           std::unordered_map<std::string, std::set<int64_t>> new_front_ids;
-          size_t pos = comparison_expr->field().find('.');
-          std::string variable;
-          std::string field;
-          if (pos == std::string::npos) {
-            return arrow::Status::Invalid("expected <var>.<field>, actual={}",
-                                          comparison_expr->field());
-          }
-          variable = comparison_expr->field().substr(0, pos);
-          field = comparison_expr->field().substr(pos + 1);
+          std::string variable = *variables.begin();
           if (!query_state.tables.contains(variable)) {
             return arrow::Status::Invalid("Unknown variable '{}'", variable);
           }
           auto table = query_state.tables.at(variable);
-          if (table->schema()->GetFieldIndex(field) == -1) {
-            return arrow::Status::Invalid("Unknown field '{}'", field);
-          }
-
-          // Use ComparisonExpr directly since it implements WhereExpr
-          auto filtered_table_result = filter(table, *comparison_expr, true);
+          auto filtered_table_result = filter(table, *where, true);
           if (!filtered_table_result.ok()) {
-            log_error("Failed to filter table '{}': {}",
-                      comparison_expr->field(),
+            log_error("Failed to process where: '{}', error: {}",
+                      where->toString(),
                       filtered_table_result.status().ToString());
             return filtered_table_result.status();
           }
-          auto res = query_state.update_table(
-              filtered_table_result.ValueOrDie(), SchemaRef::parse(variable));
-          if (!res.ok()) {
-            return res.status();
-          }
-        } else if (auto where_expr =
-                       std::dynamic_pointer_cast<LogicalExpr>(clause)) {
-          log_debug("Processing compound WHERE expression: {}",
-                    where_expr->toString());
-          if (where_expr->inlined()) continue;
-          post_where.emplace_back(where_expr);
+          ARROW_RETURN_NOT_OK(query_state.update_table(
+              filtered_table_result.ValueOrDie(), SchemaRef::parse(variable)));
+        } else {
+          log_debug("Add compound WHERE expression: '{}' to post process",
+                    where->toString());
+          post_where.emplace_back(where);
         }
         break;
       }
@@ -1488,36 +1520,10 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
         auto traverse = std::static_pointer_cast<Traverse>(clause);
         std::vector<std::shared_ptr<WhereExpr>> where_clauses;
         if (query.inline_where()) {
-          for (auto j = i + 1; j < query.clauses().size(); ++j) {
-            if (query.clauses()[j]->type() == Clause::Type::WHERE) {
-              // Handle both ComparisonExpr and LogicalExpr
-              if (auto comparison_expr =
-                      std::dynamic_pointer_cast<ComparisonExpr>(
-                          query.clauses()[j])) {
-                size_t pos = comparison_expr->field().find('.');
-                auto variable = comparison_expr->field().substr(0, pos);
-                if (variable == traverse->target().value()) {
-                  log_debug("inline where: '{}'", comparison_expr->toString());
-                  where_clauses.push_back(comparison_expr);
-                  comparison_expr->set_inlined(true);
-                }
-              } else if (auto where_expr =
-                             std::dynamic_pointer_cast<LogicalExpr>(
-                                 query.clauses()[j])) {
-                // Get all conditions for the target variable from the compound
-                // expression
-                auto conditions = where_expr->get_conditions_for_variable(
-                    traverse->target().value());
-                if (!conditions.empty()) {
-                  log_debug("inline where expression: '{}'",
-                            where_expr->toString());
-                  where_clauses.insert(where_clauses.end(), conditions.begin(),
-                                       conditions.end());
-                  where_expr->set_inlined(true);
-                }
-              }
-            }
-          }
+          where_clauses = get_where_to_inline(traverse->target().value(), i + 1,
+                                              query.clauses());
+          result->mutable_execution_stats().num_where_clauses_inlined +=
+              where_clauses.size();
         }
 
         ARROW_ASSIGN_OR_RAISE(auto source_schema,
@@ -1561,41 +1567,24 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
             auto node_result = node_manager_->get_node(target_id);
             if (node_result.ok()) {
               auto target_node = node_result.ValueOrDie();
-
-              // First check if node belongs to target schema
               if (target_node->schema_name == target_schema) {
                 // Then apply all WHERE clauses with AND logic
                 bool passes_all_filters = true;
-
-                if (where_clauses.size() == 1) {
-                  // std::cout << "where_clauses.size() == 1" << std::endl;
-                  // Single condition - use existing method
-                  if (!apply_where_to_node(where_clauses[0], target_node)
+                // Multiple conditions - could optimize by creating a
+                // temporary table and using Arrow expressions For now, use
+                // the existing approach but this could be optimized
+                for (const auto& where_clause : where_clauses) {
+                  if (!apply_where_to_node(where_clause, target_node)
                            .ValueOrDie()) {
                     passes_all_filters = false;
-                  }
-                } else if (where_clauses.size() > 1) {
-                  // Multiple conditions - could optimize by creating a
-                  // temporary table and using Arrow expressions For now, use
-                  // the existing approach but this could be optimized
-                  for (const auto& where_clause : where_clauses) {
-                    if (!apply_where_to_node(where_clause, target_node)
-                             .ValueOrDie()) {
-                      passes_all_filters = false;
-                      break;  // Early exit on first failed condition (AND
-                              // logic)
-                    }
+                    break;
                   }
                 }
-
                 if (passes_all_filters) {
-                  passed_count++;
                   log_debug("found edge {}:{} -[{}]-> {}:{}", source.value(),
                             source_id, traverse->edge_type(),
                             traverse->target().value(), target_node->id);
                   target_nodes.push_back(target_node);
-                } else {
-                  not_passed_count++;
                 }
               }
             } else {
@@ -1709,7 +1698,6 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
 
   log_debug("Query processing complete, building result");
   log_debug("Query state: {}", query_state.ToString());
-  auto result = std::make_shared<QueryResult>();
 
   auto output_schema_res = build_denormalized_schema(query_state);
   if (!output_schema_res.ok()) {
@@ -1732,12 +1720,11 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
   }
   auto output_table = output_table_res.ValueOrDie();
   for (const auto& expr : post_where) {
+    result->mutable_execution_stats().num_where_clauses_post_processed++;
     log_debug("post process where: {}", expr->toString());
     output_table = filter(output_table, *expr, false).ValueOrDie();
   }
   result->set_table(apply_select(query.select(), output_table));
-  std::cout << "passed_count=" << passed_count << std::endl;
-  std::cout << "not_passed_count=" << not_passed_count << std::endl;
   return result;
 }
 

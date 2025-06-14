@@ -136,6 +136,8 @@ class WhereExpr {
 
   // Extract the first variable name found in this expression tree
   virtual std::string extract_first_variable() const = 0;
+
+  virtual bool can_inline(const std::string& variable) const = 0;
 };
 
 class Where : public Clause {
@@ -560,6 +562,14 @@ class ComparisonExpr : public Clause, public WhereExpr {
     return {};
   }
 
+  bool can_inline(const std::string& variable) const override {
+    size_t dot_pos = field_.find('.');
+    if (dot_pos != std::string::npos) {
+      return field_.substr(0, dot_pos) == variable;
+    }
+    return false;
+  }
+
   std::string extract_first_variable() const override {
     size_t dot_pos = field_.find('.');
     if (dot_pos != std::string::npos) {
@@ -844,6 +854,12 @@ class LogicalExpr : public Clause, public WhereExpr {
     }
     return variables;
   }
+
+  bool can_inline(const std::string& variable) const override {
+    if (left_ && !left_->can_inline(variable)) return false;
+    if (right_ && !right_->can_inline(variable)) return false;
+    return true;
+  }
 };
 
 class Query {
@@ -966,13 +982,26 @@ class Query {
   };
 };
 
+struct QueryExecutionStats {
+  int num_nodes_processed = 0;
+  int num_edges_traversed = 0;
+  int num_where_clauses_inlined = 0;
+  int num_where_clauses_post_processed = 0;
+  std::vector<std::string> inlined_conditions;         // For debugging
+  std::vector<std::string> post_processed_conditions;  // For debugging
+};
+
 class QueryResult {
  public:
   [[nodiscard]] std::shared_ptr<arrow::Table> table() const { return table_; }
   void set_table(const std::shared_ptr<arrow::Table>& table) { table_ = table; }
 
+  const QueryExecutionStats& execution_stats() const { return stats_; }
+  QueryExecutionStats& mutable_execution_stats() { return stats_; }
+
  private:
   std::shared_ptr<arrow::Table> table_;
+  QueryExecutionStats stats_;
 };
 
 }  // namespace tundradb

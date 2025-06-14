@@ -15,7 +15,6 @@ using namespace std::string_literals;
 using namespace tundradb;
 
 namespace tundradb {
-
 class WhereExpressionTest : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -201,12 +200,14 @@ TEST_F(WhereExpressionTest, CompoundWhereAndFluent) {
 
 // Test compound WHERE with OR - fluent API
 TEST_F(WhereExpressionTest, CompoundWhereOrFluent) {
+  Logger::get_instance().set_level(LogLevel::DEBUG);
   // Test: city = "SF" OR salary > 150000
   Query query = Query::from("u:User")
                     .where("u.city", CompareOp::Eq, "SF")
                     .or_where("u.salary", CompareOp::Gt, 150000)
                     .build();
 
+  std::cout << query.clauses().size() << std::endl;
   auto result = db_->query(query);
   ASSERT_TRUE(result.ok()) << result.status().ToString();
 
@@ -601,6 +602,76 @@ TEST_F(WhereExpressionTest, OrWithMultipleVariablesNotInlined) {
   EXPECT_EQ(ages[0], 30);
   EXPECT_EQ(cities[0], "LA");
   EXPECT_EQ(sizes[0], 2000);
+}
+
+// Test different combinations of traversals and where clauses
+TEST_F(WhereExpressionTest, TraversalWhereCombinations) {
+  Logger::get_instance().set_level(LogLevel::DEBUG);
+
+  // Test Case 1: Single variable where clause (should be inlined)
+  {
+    Query query = Query::from("u:User")
+                      .where("u.age", CompareOp::Gt, 35)
+                      .traverse("u", "WORKS_AT", "c:Company")
+
+                      .select({"u.age", "u.city", "c.size"})
+                      .inline_where()
+                      .build();
+
+    auto result = db_->query(query);
+    ASSERT_TRUE(result.ok()) << result.status().ToString();
+
+    auto table = result.ValueOrDie()->table();
+    ASSERT_EQ(table->num_rows(), 1);  // Charlie (45) have companies
+
+    const auto& stats = result.ValueOrDie()->execution_stats();
+    EXPECT_EQ(stats.num_where_clauses_inlined, 1);
+    EXPECT_EQ(stats.num_where_clauses_post_processed, 0);
+  }
+}
+
+TEST_F(WhereExpressionTest, TraversalWhereCombinations2) {
+  Query query = Query::from("u:User")
+                    .traverse("u", "WORKS_AT", "c:Company")
+                    .where("u.age", CompareOp::Gte, 35)
+                    .and_where("c.size", CompareOp::Gt, 1000)
+                    .select({"u.age", "u.city", "c.size"})
+                    .build();
+
+  auto result = db_->query(query);
+  ASSERT_TRUE(result.ok()) << result.status().ToString();
+
+  auto table = result.ValueOrDie()->table();
+  ASSERT_EQ(table->num_rows(),
+            1);  // Only Bob (35) -> TechCorp (5000) matches
+
+  const auto& stats = result.ValueOrDie()->execution_stats();
+  EXPECT_EQ(stats.num_where_clauses_inlined, 0);
+  EXPECT_EQ(stats.num_where_clauses_post_processed, 1);
+}
+
+TEST_F(WhereExpressionTest, TraversalWhereCombinations3) {
+  Query query =
+      Query::from("u:User")
+          .where("u.age", CompareOp::Gte, 35)  // Should be inlined
+          .traverse("u", "WORKS_AT", "c:Company")
+          .where("c.size", CompareOp::Gt, 1000)  // Should be inlined
+          .traverse("c", "EMPLOYS", "u2:User")
+          .where("u2.city", CompareOp::Eq, "NYC")  // Should be inlined
+          .and_where("u.city", CompareOp::Eq,
+                     "LA")  // Should be post-processed (references u)
+          .inline_where()
+          .build();
+
+  auto result = db_->query(query);
+  ASSERT_TRUE(result.ok()) << result.status().ToString();
+
+  auto table = result.ValueOrDie()->table();
+  ASSERT_EQ(table->num_rows(), 0);
+
+  const auto& stats = result.ValueOrDie()->execution_stats();
+  EXPECT_EQ(stats.num_where_clauses_inlined, 2);
+  EXPECT_EQ(stats.num_where_clauses_post_processed, 1);
 }
 
 }  // namespace tundradb
