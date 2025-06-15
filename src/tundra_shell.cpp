@@ -577,9 +577,31 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
       tundraql::TundraQLParser::WhereClauseContext* whereClause) {
     auto expression = whereClause->expression();
 
-    // For now, we only handle simple expressions like "a.field > value"
-    if (expression->term().size() == 1) {
-      auto term = expression->term(0);
+    // Try to build a complex WHERE expression using the new method
+    auto whereExpr = buildWhereExpression(expression);
+    if (whereExpr) {
+      // Successfully built a complex expression with AND/OR support
+      query_builder.where_logical_expr(whereExpr);
+      spdlog::info("Added complex WHERE expression with AND/OR support");
+      return;
+    }
+
+    // Fallback to simple expression handling for single terms
+    // Check if this is a simple single comparison
+    if (expression->orExpression() &&
+        expression->orExpression()->andExpression().size() == 1 &&
+        expression->orExpression()
+                ->andExpression(0)
+                ->primaryExpression()
+                .size() == 1 &&
+        expression->orExpression()
+            ->andExpression(0)
+            ->primaryExpression(0)
+            ->term()) {
+      auto term = expression->orExpression()
+                      ->andExpression(0)
+                      ->primaryExpression(0)
+                      ->term();
 
       // Check if the term has a comparison operator
       if (term->EQ() || term->NEQ() || term->GT() || term->LT() ||
@@ -675,9 +697,8 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
         spdlog::info("Added WHERE condition: {}", fieldName);
       }
     } else {
-      // Complex expressions with AND/OR are not supported yet
-      spdlog::warn(
-          "Complex WHERE expressions with AND/OR are not supported yet");
+      // This should not happen anymore since we try buildWhereExpression first
+      spdlog::warn("Failed to process WHERE clause");
     }
   }
 
@@ -1098,6 +1119,210 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
 
     return matching_ids;
   }
+
+  // Helper method to build WHERE expression from grammar
+  std::shared_ptr<tundradb::LogicalExpr> buildWhereExpression(
+      tundraql::TundraQLParser::ExpressionContext* expression) {
+    if (!expression) {
+      return nullptr;
+    }
+
+    // With the new grammar, expression -> orExpression
+    return buildOrExpression(expression->orExpression());
+  }
+
+  // Build OR expression (lowest precedence)
+  std::shared_ptr<tundradb::LogicalExpr> buildOrExpression(
+      tundraql::TundraQLParser::OrExpressionContext* orExpr) {
+    if (!orExpr) {
+      return nullptr;
+    }
+
+    // Handle single AND expression (no OR)
+    if (orExpr->andExpression().size() == 1) {
+      auto andResult = buildAndExpression(orExpr->andExpression(0));
+      if (andResult) {
+        // For single comparison, we need to return a LogicalExpr wrapper
+        if (auto comparison =
+                std::dynamic_pointer_cast<tundradb::ComparisonExpr>(
+                    andResult)) {
+          return tundradb::LogicalExpr::and_expr(comparison, comparison);
+        }
+        return std::dynamic_pointer_cast<tundradb::LogicalExpr>(andResult);
+      }
+      return nullptr;
+    }
+
+    // Handle multiple AND expressions connected by OR
+    auto result = buildAndExpression(orExpr->andExpression(0));
+    if (!result) {
+      return nullptr;
+    }
+
+    for (size_t i = 1; i < orExpr->andExpression().size(); ++i) {
+      auto nextExpr = buildAndExpression(orExpr->andExpression(i));
+      if (nextExpr) {
+        result = tundradb::LogicalExpr::or_expr(result, nextExpr);
+        spdlog::debug("Combined with OR");
+      }
+    }
+
+    return std::dynamic_pointer_cast<tundradb::LogicalExpr>(result);
+  }
+
+  // Build AND expression (higher precedence than OR)
+  std::shared_ptr<tundradb::WhereExpr> buildAndExpression(
+      tundraql::TundraQLParser::AndExpressionContext* andExpr) {
+    if (!andExpr) {
+      return nullptr;
+    }
+
+    // Handle single primary expression (no AND)
+    if (andExpr->primaryExpression().size() == 1) {
+      return buildPrimaryExpression(andExpr->primaryExpression(0));
+    }
+
+    // Handle multiple primary expressions connected by AND
+    auto result = buildPrimaryExpression(andExpr->primaryExpression(0));
+    if (!result) {
+      return nullptr;
+    }
+
+    for (size_t i = 1; i < andExpr->primaryExpression().size(); ++i) {
+      auto nextExpr = buildPrimaryExpression(andExpr->primaryExpression(i));
+      if (nextExpr) {
+        result = tundradb::LogicalExpr::and_expr(result, nextExpr);
+        spdlog::debug("Combined with AND");
+      }
+    }
+
+    return result;
+  }
+
+  // Build primary expression (comparison or parenthesized expression)
+  std::shared_ptr<tundradb::WhereExpr> buildPrimaryExpression(
+      tundraql::TundraQLParser::PrimaryExpressionContext* primaryExpr) {
+    if (!primaryExpr) {
+      return nullptr;
+    }
+
+    if (primaryExpr->term()) {
+      // Basic comparison term
+      return buildComparisonExpression(primaryExpr->term());
+    } else if (primaryExpr->expression()) {
+      // Parenthesized expression - recursively parse
+      return buildWhereExpression(primaryExpr->expression());
+    }
+
+    return nullptr;
+  }
+
+  // Helper method to build comparison expression from a term
+  std::shared_ptr<tundradb::ComparisonExpr> buildComparisonExpression(
+      tundraql::TundraQLParser::TermContext* term) {
+    if (!term) {
+      return nullptr;
+    }
+
+    // Check if the term has a comparison operator
+    if (!(term->EQ() || term->NEQ() || term->GT() || term->LT() ||
+          term->GTE() || term->LTE())) {
+      spdlog::warn("Term does not have a comparison operator");
+      return nullptr;
+    }
+
+    // Get the left and right operands
+    auto leftFactor = term->factor(0);
+    auto rightFactor = term->factor(1);
+
+    if (!leftFactor || !rightFactor) {
+      spdlog::warn("Term missing left or right factor");
+      return nullptr;
+    }
+
+    // Get the field name (should be in format alias.field)
+    std::string fieldName;
+    if (leftFactor->IDENTIFIER().size() == 2) {
+      fieldName = leftFactor->IDENTIFIER(0)->getText() + "." +
+                  leftFactor->IDENTIFIER(1)->getText();
+    } else {
+      spdlog::warn("WHERE clause field must be in format alias.field");
+      return nullptr;
+    }
+
+    // Get the comparison operator
+    tundradb::CompareOp op;
+    if (term->EQ())
+      op = tundradb::CompareOp::Eq;
+    else if (term->NEQ())
+      op = tundradb::CompareOp::NotEq;
+    else if (term->GT())
+      op = tundradb::CompareOp::Gt;
+    else if (term->LT())
+      op = tundradb::CompareOp::Lt;
+    else if (term->GTE())
+      op = tundradb::CompareOp::Gte;
+    else if (term->LTE())
+      op = tundradb::CompareOp::Lte;
+    else {
+      spdlog::warn("Unsupported comparison operator in WHERE clause");
+      return nullptr;
+    }
+
+    // Get the value from the right operand
+    tundradb::Value value;
+    if (rightFactor->value()) {
+      auto valueNode = rightFactor->value();
+      if (valueNode->INTEGER_LITERAL()) {
+        // Integer value
+        try {
+          int64_t intValue =
+              std::stoll(valueNode->INTEGER_LITERAL()->getText());
+          value = tundradb::Value(intValue);
+          spdlog::debug("WHERE condition: {} {} {}", fieldName,
+                        static_cast<int>(op), intValue);
+        } catch (const std::exception& e) {
+          spdlog::error("Failed to parse integer literal: {}", e.what());
+          return nullptr;
+        }
+      } else if (valueNode->FLOAT_LITERAL()) {
+        // Float value
+        try {
+          double doubleValue = std::stod(valueNode->FLOAT_LITERAL()->getText());
+          value = tundradb::Value(doubleValue);
+          spdlog::debug("WHERE condition: {} {} {}", fieldName,
+                        static_cast<int>(op), doubleValue);
+        } catch (const std::exception& e) {
+          spdlog::error("Failed to parse float literal: {}", e.what());
+          return nullptr;
+        }
+      } else if (valueNode->STRING_LITERAL()) {
+        // String value (remove quotes)
+        std::string stringValue = valueNode->STRING_LITERAL()->getText();
+        // Remove surrounding quotes
+        if (stringValue.size() >= 2 && stringValue.front() == '"' &&
+            stringValue.back() == '"') {
+          stringValue = stringValue.substr(1, stringValue.size() - 2);
+        }
+        value = tundradb::Value(stringValue);
+        spdlog::debug("WHERE condition: {} {} \"{}\"", fieldName,
+                      static_cast<int>(op), stringValue);
+      } else {
+        spdlog::warn("Unsupported value type in WHERE clause");
+        return nullptr;
+      }
+    } else if (rightFactor->IDENTIFIER().size() > 0) {
+      // Handle field comparison (not implemented yet)
+      spdlog::warn("Field comparison in WHERE clause not supported yet");
+      return nullptr;
+    } else {
+      spdlog::warn("Invalid right operand in WHERE clause");
+      return nullptr;
+    }
+
+    // Create and return the comparison expression
+    return std::make_shared<tundradb::ComparisonExpr>(fieldName, op, value);
+  }
 };
 
 // Custom formatter for tables using ASCII art
@@ -1443,7 +1668,7 @@ bool executeScriptFile(const std::string& script_path, tundradb::Database& db) {
 }
 
 int main(int argc, char* argv[]) {
-  tundradb::Logger::get_instance().set_level(tundradb::LogLevel::DEBUG);
+  tundradb::Logger::get_instance().set_level(tundradb::LogLevel::INFO);
   // Parse command-line arguments
   std::string db_path = "./test-db";
   std::string script_file = "";

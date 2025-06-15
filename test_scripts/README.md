@@ -39,6 +39,18 @@ You can execute these scripts using the TundraDB shell with the `--script` optio
 - **Features**: Various comparison operators (=, !=, >, <, >=, <=) with different data types
 - **Good for**: Testing filtering and conditional queries
 
+### `where_and_or_test.sql`
+- **Purpose**: Complex WHERE clause testing with AND/OR operators
+- **Features**: Compound WHERE clauses using AND/OR logical operators
+- **Good for**: Testing complex filtering conditions and logical combinations
+
+### `where_and_or_simple_test.sql`
+- **Purpose**: Basic AND/OR functionality demonstration
+- **Features**: Simple examples of AND/OR usage in WHERE clauses
+- **Good for**: Learning basic logical operators in queries
+
+### `enhanced_edge_test.sql`
+
 ## Command Line Options
 
 ### `--script` / `-s`
@@ -81,6 +93,47 @@ tundra> exit
 - **ID Column**: All schemas automatically include an `id: INT64` column as the primary key
 - **Data Types**: Supported types are `STRING`, `INT64`, and `FLOAT64`
 - **Relationships**: Created using `CREATE EDGE` statements between existing nodes
+
+## WHERE Clause Syntax
+
+TundraDB supports complex WHERE clauses with logical operators:
+
+### Basic Comparisons
+```sql
+-- Equality and inequality
+MATCH (u:User) WHERE u.name = "Alice";
+MATCH (u:User) WHERE u.age != 25;
+
+-- Numeric comparisons
+MATCH (u:User) WHERE u.age > 30;
+MATCH (u:User) WHERE u.salary <= 100000;
+```
+
+### Logical Operators
+```sql
+-- AND operator (all conditions must be true)
+MATCH (u:User) WHERE u.age > 25 AND u.city = "NYC";
+
+-- OR operator (at least one condition must be true)
+MATCH (u:User) WHERE u.city = "NYC" OR u.city = "SF";
+
+-- Multiple conditions
+MATCH (u:User) WHERE u.name = "Alice" AND u.age = 25 AND u.city = "NYC";
+MATCH (u:User) WHERE u.age = 25 OR u.age = 30 OR u.age = 35;
+```
+
+### Current Limitations
+- **Operator Precedence**: Currently uses left-to-right evaluation with simple heuristics
+- **Parentheses**: Not yet supported for explicit precedence control
+- **Complex Expressions**: Mixed AND/OR in the same expression may not follow standard precedence rules
+
+### Supported Operators
+- `=` (equals)
+- `!=` (not equals)  
+- `>` (greater than)
+- `<` (less than)
+- `>=` (greater than or equal)
+- `<=` (less than or equal)
 
 ## Tips
 

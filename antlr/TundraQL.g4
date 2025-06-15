@@ -69,10 +69,17 @@ joinSpecifier: K_INNER | K_LEFT | K_RIGHT | K_FULL;
 
 // --- WHERE Clause ---
 whereClause: expression; // Define your expression grammar (e.g., comparisons, AND/OR)
-expression: term ( (K_AND | K_OR) term )*;
+
+// Updated expression grammar with proper precedence and parentheses support
+expression: orExpression;
+orExpression: andExpression (K_OR andExpression)*;
+andExpression: primaryExpression (K_AND primaryExpression)*;
+primaryExpression: 
+    term                                    // Basic comparison
+    | LPAREN expression RPAREN;            // Parenthesized expression
+
 term: factor ( (EQ | NEQ | LT | LTE | GT | GTE) factor )?; // Simplified
 factor: IDENTIFIER (DOT IDENTIFIER)? | value;
-
 
 // --- SELECT Clause ---
 selectClause: selectField (COMMA selectField)*;
