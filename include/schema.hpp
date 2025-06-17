@@ -18,17 +18,10 @@ class SchemaRegistry {
 
   static std::shared_ptr<arrow::Schema> prepend_id_field(
       const std::shared_ptr<arrow::Schema> &original_schema) {
-    // Create the ID field (typically an int64)
     const auto id_field = arrow::field("id", arrow::int64());
-
-    // Get all existing fields
     std::vector<std::shared_ptr<arrow::Field>> fields;
     fields.reserve(original_schema->num_fields() + 1);
-
-    // Add ID field first
     fields.push_back(id_field);
-
-    // Add all existing fields
     for (const auto &field : original_schema->fields()) {
       fields.push_back(field);
     }

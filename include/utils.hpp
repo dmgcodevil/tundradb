@@ -60,11 +60,9 @@ static arrow::Result<std::shared_ptr<arrow::Table>> filter_table_by_id(
   std::shared_ptr<arrow::Array> filter_array;
   ARROW_RETURN_NOT_OK(filter_builder.Finish(&filter_array));
 
-  // Flatten table into a single chunk to match the filter
   ARROW_ASSIGN_OR_RAISE(auto combined_table,
                         table->CombineChunks(arrow::default_memory_pool()));
 
-  // Apply filter
   ARROW_ASSIGN_OR_RAISE(
       auto filtered_table,
       arrow::compute::Filter(combined_table, arrow::Datum(filter_array)));
@@ -98,26 +96,21 @@ static arrow::Result<std::set<int64_t>> get_ids_from_table(
   return result_ids;
 }
 
-// Create a table from a schema and a list of nodes
 static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
     const std::shared_ptr<arrow::Schema>& schema,
     const std::vector<std::shared_ptr<Node>>& nodes, size_t chunk_size) {
-  auto final_schema = schema;  // prepend_id_field(schema);
-  // log_debug("Creating table. schema: {}", schema->ToString());
   if (nodes.empty()) {
-    // Return empty table with the given schema
     std::vector<std::shared_ptr<arrow::ChunkedArray>> empty_columns;
-    empty_columns.reserve(final_schema->num_fields());
-    for (int i = 0; i < final_schema->num_fields(); i++) {
+    empty_columns.reserve(schema->num_fields());
+    for (int i = 0; i < schema->num_fields(); i++) {
       empty_columns.push_back(std::make_shared<arrow::ChunkedArray>(
           std::vector<std::shared_ptr<arrow::Array>>{}));
     }
-    return arrow::Table::Make(final_schema, empty_columns);
+    return arrow::Table::Make(schema, empty_columns);
   }
 
-  // Create builders for each field in the schema
   std::vector<std::unique_ptr<arrow::ArrayBuilder>> builders;
-  for (const auto& field : final_schema->fields()) {
+  for (const auto& field : schema->fields()) {
     switch (field->type()->id()) {
       case arrow::Type::INT64:
         builders.push_back(std::make_unique<arrow::Int64Builder>());
@@ -131,35 +124,27 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
     }
   }
 
-  // Process nodes in chunks
   std::vector<std::vector<std::shared_ptr<arrow::Array>>> chunks_per_field(
-      final_schema->num_fields());
+      schema->num_fields());
   size_t nodes_in_current_chunk = 0;
 
   for (const auto& node : nodes) {
-    // explicitly add id field
-    // ARROW_RETURN_NOT_OK(
-    //     static_cast<arrow::Int64Builder*>(builders[0].get())->Append(node->id));
-    // For each field, extract the value from the node and append to the builder
-    // start from 1 to skip "id" field
-    for (int i = 0; i < final_schema->num_fields(); i++) {
-      const auto& field = final_schema->field(i);
+    for (int i = 0; i < schema->num_fields(); i++) {
+      const auto& field = schema->field(i);
       auto field_result = node->get_field(field->name());
       if (!field_result.ok()) {
-        // Field not present, append null
         ARROW_RETURN_NOT_OK(builders[i]->AppendNull());
       } else {
-        auto array = field_result.ValueOrDie();
+        const auto& array = field_result.ValueOrDie();
         if (array->length() == 0 || array->IsNull(0)) {
           ARROW_RETURN_NOT_OK(builders[i]->AppendNull());
         } else {
-          // Append the value based on the field type
           switch (field->type()->id()) {
             case arrow::Type::INT64: {
               auto int_array =
                   std::static_pointer_cast<arrow::Int64Array>(array);
               ARROW_RETURN_NOT_OK(
-                  static_cast<arrow::Int64Builder*>(builders[i].get())
+                  dynamic_cast<arrow::Int64Builder*>(builders[i].get())
                       ->Append(int_array->Value(0)));
               break;
             }
@@ -168,7 +153,7 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
                   std::static_pointer_cast<arrow::StringArray>(array);
               if (str_array->length() > 0 && !str_array->IsNull(0)) {
                 ARROW_RETURN_NOT_OK(
-                    static_cast<arrow::StringBuilder*>(builders[i].get())
+                    dynamic_cast<arrow::StringBuilder*>(builders[i].get())
                         ->Append(str_array->GetString(0)));
               } else {
                 ARROW_RETURN_NOT_OK(builders[i]->AppendNull());
@@ -185,10 +170,8 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
 
     nodes_in_current_chunk++;
 
-    // If we've reached the chunk size, finalize the arrays and reset the
-    // builders
     if (nodes_in_current_chunk >= chunk_size) {
-      for (int i = 0; i < final_schema->num_fields(); i++) {
+      for (int i = 0; i < schema->num_fields(); i++) {
         std::shared_ptr<arrow::Array> array;
         ARROW_RETURN_NOT_OK(builders[i]->Finish(&array));
         chunks_per_field[i].push_back(array);
@@ -198,38 +181,33 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
     }
   }
 
-  // Finalize any remaining data
   if (nodes_in_current_chunk > 0) {
-    for (int i = 0; i < final_schema->num_fields(); i++) {
+    for (int i = 0; i < schema->num_fields(); i++) {
       std::shared_ptr<arrow::Array> array;
       ARROW_RETURN_NOT_OK(builders[i]->Finish(&array));
       chunks_per_field[i].push_back(array);
     }
   }
 
-  // Create chunked arrays for each field
   std::vector<std::shared_ptr<arrow::ChunkedArray>> chunked_arrays;
-  chunked_arrays.reserve(final_schema->num_fields());
-  for (int i = 0; i < final_schema->num_fields(); i++) {
+  chunked_arrays.reserve(schema->num_fields());
+  for (int i = 0; i < schema->num_fields(); i++) {
     chunked_arrays.push_back(
         std::make_shared<arrow::ChunkedArray>(chunks_per_field[i]));
   }
 
-  // Create and return the table
-  return arrow::Table::Make(final_schema, chunked_arrays);
+  return arrow::Table::Make(schema, chunked_arrays);
 }
 
-// Helper function to print a single row
 static void print_row(const std::shared_ptr<arrow::Table>& table,
-                      int64_t row_index) {
+                      const int64_t row_index) {
   for (int j = 0; j < table->num_columns(); ++j) {
-    auto column = table->column(j);
+    const auto column = table->column(j);
     if (!column || column->num_chunks() == 0) {
       std::cout << "NULL\t";
       continue;
     }
 
-    // Find the chunk containing this row
     int64_t accumulated_length = 0;
     std::shared_ptr<arrow::Array> chunk;
     int64_t chunk_offset = row_index;
@@ -280,7 +258,7 @@ static void print_row(const std::shared_ptr<arrow::Table>& table,
           } else {
             std::cout << "NULL";
           }
-        } catch (const std::exception& e) {
+        } catch ([[maybe_unused]] const std::exception& e) {
           std::cout << "ERROR";
         }
         break;
@@ -306,7 +284,6 @@ static void print_table(const std::shared_ptr<arrow::Table>& table,
   std::cout << "Table Schema:" << std::endl;
   std::cout << table->schema()->ToString() << std::endl;
 
-  // Print chunk information
   std::cout << "\nChunk Information:" << std::endl;
   for (int j = 0; j < table->num_columns(); ++j) {
     auto column = table->column(j);
@@ -328,17 +305,14 @@ static void print_table(const std::shared_ptr<arrow::Table>& table,
   std::cout << "\nTable Data (" << total_rows << " rows):" << std::endl;
 
   try {
-    // Determine how many rows to print
     bool use_ellipsis = max_rows > 0 && total_rows > max_rows;
     int64_t rows_to_print = use_ellipsis ? max_rows / 2 : total_rows;
 
     std::cout << "First " << rows_to_print << " rows:" << std::endl;
-    // Print first half of rows
     for (int64_t i = 0; i < rows_to_print && i < total_rows; ++i) {
       print_row(table, i);
     }
 
-    // Print ellipsis and last half of rows if needed
     if (use_ellipsis) {
       std::cout << "....\n" << std::endl;
 
@@ -352,47 +326,37 @@ static void print_table(const std::shared_ptr<arrow::Table>& table,
   }
 }
 
-// Contextual ValueOrDie helper that logs and provides context on errors
 template <typename T>
 T ValueOrDieWithContext(
     const arrow::Result<T>& result, const std::string& context,
     const std::source_location& location = std::source_location::current()) {
   if (!result.ok()) {
-    // Extract filename from path (remove directory)
     std::string_view path(location.file_name());
     size_t pos = path.find_last_of("/\\");
     std::string_view filename =
         (pos == std::string_view::npos) ? path : path.substr(pos + 1);
-
-    // Log failure with context and location
     std::string error_msg = "Operation failed [" + context + "] - " +
                             result.status().ToString() + " [at " +
                             std::string(filename) + ":" +
                             std::to_string(location.line()) + "]";
     log_error(error_msg);
 
-    // Still use the original ValueOrDie behavior
     return result.ValueOrDie();
   }
   return result.ValueOrDie();
 }
 
-// Macro for easier usage that automatically includes function name
 #define VALUE_OR_DIE_CTX(result, context) \
   ValueOrDieWithContext((result), (context))
 
-/**
- * Convert an Arrow scalar value to a string representation
- */
-std::string stringifyArrowScalar(
+std::string stringify_arrow_scalar(
     const std::shared_ptr<arrow::ChunkedArray>& column, int64_t row_idx);
 
-// Utility functions for extracting column values from Arrow tables
 template <typename T>
 arrow::Result<std::vector<T>> get_column_values(
     const std::shared_ptr<arrow::Table>& table,
     const std::string& column_name) {
-  auto column = table->GetColumnByName(column_name);
+  const auto column = table->GetColumnByName(column_name);
   if (!column) {
     return arrow::Status::Invalid("Column '", column_name, "' not found");
   }
@@ -404,28 +368,32 @@ arrow::Result<std::vector<T>> get_column_values(
     auto chunk = column->chunk(chunk_idx);
 
     if constexpr (std::is_same_v<T, int64_t>) {
-      auto typed_array = std::static_pointer_cast<arrow::Int64Array>(chunk);
+      const auto typed_array =
+          std::static_pointer_cast<arrow::Int64Array>(chunk);
       for (int64_t i = 0; i < typed_array->length(); ++i) {
         if (!typed_array->IsNull(i)) {
           values.push_back(typed_array->Value(i));
         }
       }
     } else if constexpr (std::is_same_v<T, std::string>) {
-      auto typed_array = std::static_pointer_cast<arrow::StringArray>(chunk);
+      const auto typed_array =
+          std::static_pointer_cast<arrow::StringArray>(chunk);
       for (int64_t i = 0; i < typed_array->length(); ++i) {
         if (!typed_array->IsNull(i)) {
           values.push_back(typed_array->GetString(i));
         }
       }
     } else if constexpr (std::is_same_v<T, double>) {
-      auto typed_array = std::static_pointer_cast<arrow::DoubleArray>(chunk);
+      const auto typed_array =
+          std::static_pointer_cast<arrow::DoubleArray>(chunk);
       for (int64_t i = 0; i < typed_array->length(); ++i) {
         if (!typed_array->IsNull(i)) {
           values.push_back(typed_array->Value(i));
         }
       }
     } else if constexpr (std::is_same_v<T, bool>) {
-      auto typed_array = std::static_pointer_cast<arrow::BooleanArray>(chunk);
+      const auto typed_array =
+          std::static_pointer_cast<arrow::BooleanArray>(chunk);
       for (int64_t i = 0; i < typed_array->length(); ++i) {
         if (!typed_array->IsNull(i)) {
           values.push_back(typed_array->Value(i));
@@ -440,7 +408,7 @@ arrow::Result<std::vector<T>> get_column_values(
 inline arrow::Result<std::shared_ptr<arrow::Array>> get_column_as_array(
     const std::shared_ptr<arrow::Table>& table,
     const std::string& column_name) {
-  auto column = table->GetColumnByName(column_name);
+  const auto column = table->GetColumnByName(column_name);
   if (!column) {
     return arrow::Status::Invalid("Column '", column_name, "' not found");
   }
@@ -451,7 +419,6 @@ inline arrow::Result<std::shared_ptr<arrow::Array>> get_column_as_array(
   return combined_array;
 }
 
-// Utility functions for getting first value from Arrow arrays
 template <typename T>
 arrow::Result<T> get_first_value_from_array(
     const std::shared_ptr<arrow::Array>& array) {
@@ -516,7 +483,6 @@ inline arrow::Result<bool> apply_where_to_node(
   return where_expr->matches(node);
 }
 
-// Utility function to filter a vector of nodes by a WHERE clause
 inline arrow::Result<std::vector<std::shared_ptr<Node>>> filter_nodes_by_where(
     const std::vector<std::shared_ptr<Node>>& nodes,
     const std::shared_ptr<WhereExpr>& where_expr) {
@@ -525,7 +491,7 @@ inline arrow::Result<std::vector<std::shared_ptr<Node>>> filter_nodes_by_where(
   }
 
   std::vector<std::shared_ptr<Node>> filtered_nodes;
-  filtered_nodes.reserve(nodes.size());  // Reserve space for efficiency
+  filtered_nodes.reserve(nodes.size());
 
   for (const auto& node : nodes) {
     ARROW_ASSIGN_OR_RAISE(bool matches, where_expr->matches(node));

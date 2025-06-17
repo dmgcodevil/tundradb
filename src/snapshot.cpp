@@ -50,7 +50,6 @@ arrow::Result<bool> SnapshotManager::initialize() {
       log_info("Manifest has been loaded");
       log_info(this->manifest_->toString());
 
-      // Set ID counters for all managers
       edge_store_->set_id_seq(manifest_->edge_id_seq);
       node_manager_->set_id_counter(manifest_->node_id_seq);
       shard_manager_->set_id_counter(manifest_->shard_id_seq);
@@ -71,7 +70,6 @@ arrow::Result<bool> SnapshotManager::initialize() {
                   "' to " + std::to_string(max_index));
       }
 
-      // Group shards by schema name
       std::unordered_map<std::string, std::vector<ShardMetadata>>
           grouped_shards;
       for (auto &shard : manifest_result.ValueOrDie().shards) {
@@ -88,8 +86,6 @@ arrow::Result<bool> SnapshotManager::initialize() {
       }
 
       log_info("Grouped shards: " + std::to_string(grouped_shards.size()));
-
-      // Load and add each shard
       for (auto &[schema_name, shards] : grouped_shards) {
         log_info("Loading shard '{}', size={}", schema_name, shards.size());
         for (auto &shard_metadata : shards) {
@@ -114,8 +110,7 @@ arrow::Result<bool> SnapshotManager::initialize() {
           if (auto add_result = this->shard_manager_->add_shard(shard);
               !add_result.ok()) {
             log_error("Failed to add shard: " + add_result.status().ToString());
-            return add_result
-                .status();  // Return the error instead of continuing
+            return add_result.status();
           }
           for (const auto &node : shard->get_nodes()) {
             log_debug("Adding node {}", node->id);
@@ -135,10 +130,6 @@ arrow::Result<bool> SnapshotManager::initialize() {
         log_debug("edges type '" + edge_type + "' size = " +
                   std::to_string(edge_store_->get_count_by_type(edge_type)));
       }
-
-      // Ensure all shards are properly sorted by index
-      // log_info("Sorting all shards by index");
-      // this->shard_manager->sort_shards();
     } else {
       log_info("No current snapshot exists");
     }
@@ -155,11 +146,8 @@ arrow::Result<Snapshot> SnapshotManager::commit() {
   log_info("Creating new snapshot");
   auto timestamp_ms = now_millis();
 
-  // Save the original updated states of shards before compaction
   std::unordered_map<std::string, std::unordered_map<int64_t, bool>>
       original_update_states;
-
-  // Store the original update status for each shard
   for (const auto &schema_name : this->shard_manager_->get_schema_names()) {
     for (const auto &shard :
          this->shard_manager_->get_shards(schema_name).ValueOrDie()) {
@@ -167,7 +155,6 @@ arrow::Result<Snapshot> SnapshotManager::commit() {
     }
   }
 
-  // Compact all shards before creating a new snapshot
   log_info("Compacting all shards before snapshot creation");
   if (auto compact_result = this->shard_manager_->compact_all();
       !compact_result.ok()) {
@@ -190,17 +177,14 @@ arrow::Result<Snapshot> SnapshotManager::commit() {
     }
   }
 
-  // Create new snapshot
   Snapshot new_snapshot;
   new_snapshot.id = timestamp_ms;
   new_snapshot.timestamp_ms = timestamp_ms;
 
-  // Set parent ID if previous snapshot exists
   if (this->metadata_.get_current_snapshot() != nullptr) {
     new_snapshot.parent_id = this->metadata_.get_current_snapshot()->id;
   }
 
-  // Track shard metadata from current manifest
   std::unordered_map<std::string, std::unordered_map<int64_t, ShardMetadata>>
       curr_shard_metadata;
   std::unordered_map<std::string, EdgeMetadata> curr_edge_metadata;
@@ -214,11 +198,8 @@ arrow::Result<Snapshot> SnapshotManager::commit() {
     }
   }
 
-  // Create new manifest
   Manifest new_manifest;
   new_manifest.id = generate_uuid();
-
-  // Save all ID counters to the manifest
   new_manifest.edge_id_seq = edge_store_->get_edge_id_counter();
   new_manifest.node_id_seq = node_manager_->get_id_counter();
   new_manifest.shard_id_seq = shard_manager_->get_id_counter();
@@ -248,7 +229,6 @@ arrow::Result<Snapshot> SnapshotManager::commit() {
     }
   }
 
-  // Go through all schemas and shards
   for (const auto &schema_name : this->shard_manager_->get_schema_names()) {
     log_info("Writing shards for schema: " + schema_name);
     for (const auto &shard :
@@ -266,8 +246,7 @@ arrow::Result<Snapshot> SnapshotManager::commit() {
         shard_metadata.max_id = shard->max_id;
         shard_metadata.record_count = shard->size();
         shard_metadata.chunk_size = shard->chunk_size;
-        shard_metadata.index =
-            shard->index;  // shard_manager->get_index_counter(schema_name);
+        shard_metadata.index = shard->index;
         shard_metadata.data_file =
             this->storage_->write_shard(shard).ValueOrDie();
         new_manifest.shards.push_back(shard_metadata);
@@ -279,15 +258,11 @@ arrow::Result<Snapshot> SnapshotManager::commit() {
     }
   }
 
-  // Save the manifest
   new_snapshot.manifest_location =
       this->metadata_manager_->write_manifest(new_manifest).ValueOrDie();
   log_info("Created manifest: " + new_manifest.id + " at " +
            new_snapshot.manifest_location);
-
-  // Add the new snapshot to metadata
   this->metadata_.snapshots.push_back(new_snapshot);
-
   this->metadata_.current_snapshot_index = this->metadata_.snapshots.size() - 1;
   log_info("Updating schemas");
   std::vector<SchemaMetadata> schemas;
@@ -297,19 +272,14 @@ arrow::Result<Snapshot> SnapshotManager::commit() {
   }
   log_info("schemas count {}", schemas.size());
   this->metadata_.schemas = schemas;
-  // Save the updated metadata
   std::string metadata_location =
       this->metadata_manager_->write_metadata(this->metadata_).ValueOrDie();
   log_info("Saved metadata to: " + metadata_location);
-
-  // Update database info to point to the new metadata location
   DatabaseInfo db_info;
   db_info.metadata_location = metadata_location;
   db_info.timestamp_ms = timestamp_ms;
   this->metadata_manager_->write_db_info(db_info).ValueOrDie();
   log_info("Updated database info to point to new metadata");
-
-  // Reset all updated flags
   if (auto reset_result = shard_manager_->reset_all_updated();
       !reset_result.ok()) {
     log_warn("Failed to reset shard updated flags: " +
@@ -317,8 +287,6 @@ arrow::Result<Snapshot> SnapshotManager::commit() {
   }
   this->manifest_.reset();
   this->manifest_ = std::make_shared<Manifest>(new_manifest);
-
-  // Return a copy of the snapshot instead of a pointer
   return new_snapshot;
 }
 

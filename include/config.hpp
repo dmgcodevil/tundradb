@@ -5,7 +5,6 @@
 
 namespace tundradb {
 
-// Default configuration constants
 namespace defaults {
 constexpr size_t SHARD_CAPACITY = 100000;
 constexpr size_t CHUNK_SIZE = 10000;

@@ -80,7 +80,6 @@ struct GraphConnection {
   }
 };
 
-// Comparison operators
 enum class CompareOp {
   Eq,
   NotEq,
@@ -93,21 +92,17 @@ enum class CompareOp {
   EndsWith
 };
 
-// Base class for all query clauses
 class Clause {
  public:
   virtual ~Clause() = default;
 
-  // Potential common functionality or type identification
   enum class Type { WHERE, TRAVERSE, PROJECT, ORDER_BY, LIMIT, SELECT };
   [[nodiscard]] virtual Type type() const = 0;
 };
 
-// Forward declaration for recursive structure
 class WhereExpr;
 class ComparisonExpr;
 
-// Forward declare function from core.cpp
 arrow::compute::Expression value_to_expression(const Value& value);
 arrow::compute::Expression apply_comparison_op(
     const arrow::compute::Expression& field,
@@ -115,7 +110,6 @@ arrow::compute::Expression apply_comparison_op(
 
 enum class LogicalOp { AND, OR };
 
-// Base class for WHERE expressions (ADT)
 class WhereExpr {
  public:
   virtual ~WhereExpr() = default;
@@ -127,14 +121,11 @@ class WhereExpr {
   virtual arrow::compute::Expression to_arrow_expression(
       bool strip_var) const = 0;
 
-  // Collect all conditions for a specific variable (for inline optimization)
   virtual std::vector<std::shared_ptr<ComparisonExpr>>
   get_conditions_for_variable(const std::string& variable) const = 0;
 
-  // Collect all variables referenced in this expression tree
   virtual std::set<std::string> get_all_variables() const = 0;
 
-  // Extract the first variable name found in this expression tree
   virtual std::string extract_first_variable() const = 0;
 
   virtual bool can_inline(const std::string& variable) const = 0;
@@ -164,7 +155,6 @@ class Where : public Clause {
     std::stringstream ss;
     ss << "WHERE " << field_;
 
-    // Convert operator to string
     switch (op_) {
       case CompareOp::Eq:
         ss << " = ";
@@ -226,7 +216,6 @@ class Where : public Clause {
     return os;
   }
 
-  // Method to evaluate if a Node matches this WHERE condition
   arrow::Result<bool> matches(const std::shared_ptr<Node>& node) const {
     if (!node) {
       return arrow::Status::Invalid("Node is null");
@@ -256,7 +245,7 @@ class Where : public Clause {
         case CompareOp::NotEq:
           return value_.type() != ValueType::Null;
         default:
-          return false;  // Most operators return false for null values
+          return false;
       }
     }
     return compare_values(field_array, value_, op_);
@@ -349,13 +338,13 @@ class Where : public Clause {
         if constexpr (std::is_same_v<T, std::string>) {
           return field_val.find(where_val) != std::string::npos;
         } else {
-          return false;  // CONTAINS only makes sense for strings
+          return false;
         }
       case CompareOp::StartsWith:
         if constexpr (std::is_same_v<T, std::string>) {
           return field_val.find(where_val) == 0;
         } else {
-          return false;  // STARTS_WITH only makes sense for strings
+          return false;
         }
       case CompareOp::EndsWith:
         if constexpr (std::is_same_v<T, std::string>) {
@@ -363,7 +352,7 @@ class Where : public Clause {
                  field_val.substr(field_val.size() - where_val.size()) ==
                      where_val;
         } else {
-          return false;  // ENDS_WITH only makes sense for strings
+          return false;
         }
     }
     return false;
@@ -409,7 +398,6 @@ struct Select final : Clause {
   }
 };
 
-// Simple comparison: field op value
 class ComparisonExpr : public Clause, public WhereExpr {
  private:
   std::string field_;
@@ -433,7 +421,6 @@ class ComparisonExpr : public Clause, public WhereExpr {
     std::stringstream ss;
     ss << "WHERE " << field_;
 
-    // Convert operator to string
     switch (op_) {
       case CompareOp::Eq:
         ss << " = ";
@@ -495,7 +482,6 @@ class ComparisonExpr : public Clause, public WhereExpr {
     return os;
   }
 
-  // Method to evaluate if a Node matches this comparison
   arrow::Result<bool> matches(
       const std::shared_ptr<Node>& node) const override {
     if (!node) {
@@ -526,7 +512,7 @@ class ComparisonExpr : public Clause, public WhereExpr {
         case CompareOp::NotEq:
           return value_.type() != ValueType::Null;
         default:
-          return false;  // Most operators return false for null values
+          return false;
       }
     }
     return compare_values(field_array, value_, op_);
@@ -534,7 +520,6 @@ class ComparisonExpr : public Clause, public WhereExpr {
 
   arrow::compute::Expression to_arrow_expression(
       bool strip_var) const override {
-    // Parse field name (remove variable prefix if present)
     std::string field_name = field_;
     if (strip_var) {
       size_t dot_pos = field_.find('.');
@@ -578,7 +563,6 @@ class ComparisonExpr : public Clause, public WhereExpr {
     return "";
   }
 
-  // Collect all variables referenced in this expression tree
   std::set<std::string> get_all_variables() const override {
     std::set<std::string> variables;
     size_t dot_pos = field_.find('.');
@@ -664,13 +648,13 @@ class ComparisonExpr : public Clause, public WhereExpr {
         if constexpr (std::is_same_v<T, std::string>) {
           return field_val.find(where_val) != std::string::npos;
         } else {
-          return false;  // CONTAINS only makes sense for strings
+          return false;
         }
       case CompareOp::StartsWith:
         if constexpr (std::is_same_v<T, std::string>) {
           return field_val.find(where_val) == 0;
         } else {
-          return false;  // STARTS_WITH only makes sense for strings
+          return false;
         }
       case CompareOp::EndsWith:
         if constexpr (std::is_same_v<T, std::string>) {
@@ -678,14 +662,13 @@ class ComparisonExpr : public Clause, public WhereExpr {
                  field_val.substr(field_val.size() - where_val.size()) ==
                      where_val;
         } else {
-          return false;  // ENDS_WITH only makes sense for strings
+          return false;
         }
     }
     return false;
   }
 };
 
-// Logical combination: left op right
 class LogicalExpr : public Clause, public WhereExpr {
  private:
   std::shared_ptr<WhereExpr> left_;
@@ -706,7 +689,6 @@ class LogicalExpr : public Clause, public WhereExpr {
     if (right_) right_->set_inlined(inlined);
   }
 
-  // Factory methods for building expressions
   static std::shared_ptr<LogicalExpr> and_expr(
       std::shared_ptr<WhereExpr> left, std::shared_ptr<WhereExpr> right) {
     return std::make_shared<LogicalExpr>(std::move(left), LogicalOp::AND,
@@ -719,7 +701,6 @@ class LogicalExpr : public Clause, public WhereExpr {
                                          std::move(right));
   }
 
-  // Tree evaluation with proper precedence
   arrow::Result<bool> matches(
       const std::shared_ptr<Node>& node) const override {
     if (!left_ || !right_) {
@@ -771,17 +752,13 @@ class LogicalExpr : public Clause, public WhereExpr {
 
   std::vector<std::shared_ptr<ComparisonExpr>> get_conditions_for_variable(
       const std::string& variable) const override {
-    // First check if ALL variables in this expression belong to the target
-    // variable
     auto all_variables = get_all_variables();
     for (const auto& var : all_variables) {
       if (var != variable) {
-        // Found a variable that doesn't match the target - return empty
         return {};
       }
     }
 
-    // All variables belong to the target, so we can safely collect conditions
     std::vector<std::shared_ptr<ComparisonExpr>> result;
     if (left_) {
       auto left_conditions = left_->get_conditions_for_variable(variable);
@@ -816,7 +793,6 @@ class LogicalExpr : public Clause, public WhereExpr {
     std::string left_str = left_->toString();
     std::string right_str = right_->toString();
 
-    // Remove "WHERE " prefixes from nested expressions
     if (left_str.substr(0, 6) == "WHERE ") {
       left_str = left_str.substr(6);
     }
@@ -841,7 +817,6 @@ class LogicalExpr : public Clause, public WhereExpr {
     return os;
   }
 
-  // Collect all variables referenced in this expression tree
   std::set<std::string> get_all_variables() const override {
     std::set<std::string> variables;
     if (left_) {
@@ -887,10 +862,8 @@ class Query {
   }
   [[nodiscard]] bool inline_where() const { return inline_where_; }
 
-  // Builder creation
   static Builder from(const std::string& schema) { return Builder(schema); }
 
-  // Builder class
   class Builder {
    private:
     SchemaRef from_;
@@ -961,7 +934,6 @@ class Query {
       return *this;
     }
 
-    // Advanced API for explicit precedence control
     Builder& where_and(std::shared_ptr<WhereExpr> left,
                        std::shared_ptr<WhereExpr> right) {
       clauses_.push_back(

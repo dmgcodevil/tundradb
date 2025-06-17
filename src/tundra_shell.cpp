@@ -1348,7 +1348,7 @@ void printTableAsAscii(const std::shared_ptr<arrow::Table>& table) {
   for (int i = 0; i < table->num_columns(); i++) {
     auto column = table->column(i);
     for (int64_t j = 0; j < column->length(); j++) {
-      std::string str_val = tundradb::stringifyArrowScalar(column, j);
+      std::string str_val = tundradb::stringify_arrow_scalar(column, j);
       column_widths[i] = std::max(column_widths[i], str_val.length() + 2);
     }
   }
@@ -1390,7 +1390,7 @@ void printTableAsAscii(const std::shared_ptr<arrow::Table>& table) {
     *g_output_stream << "|";
     for (int col = 0; col < table->num_columns(); col++) {
       std::string value =
-          tundradb::stringifyArrowScalar(table->column(col), row);
+          tundradb::stringify_arrow_scalar(table->column(col), row);
       size_t padding = column_widths[col] - value.length();
       size_t left_pad = padding / 2;
       size_t right_pad = padding - left_pad;
@@ -1425,7 +1425,7 @@ void printTableAsAscii(const std::shared_ptr<arrow::Table>& table) {
 
 // Add a utility function to stringify Arrow values
 namespace tundradb {
-std::string stringifyArrowScalar(
+std::string stringify_arrow_scalar(
     const std::shared_ptr<arrow::ChunkedArray>& column, int64_t row_idx) {
   int chunk_idx = 0;
   int64_t chunk_row = row_idx;

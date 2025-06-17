@@ -8,7 +8,7 @@
 namespace tundradb {
 
 // Implementation of stringifyArrowScalar
-std::string stringifyArrowScalar(
+std::string stringify_arrow_scalar(
     const std::shared_ptr<arrow::ChunkedArray>& column, const int64_t row_idx) {
   int chunk_idx = 0;
   int64_t chunk_row = row_idx;

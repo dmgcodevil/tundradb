@@ -183,7 +183,6 @@ struct Metadata {
   std::vector<Snapshot> snapshots;
   std::vector<SchemaMetadata> schemas;
 
-  // Get current snapshot safely
   Snapshot *get_current_snapshot() {
     if (current_snapshot_index >= 0 &&
         current_snapshot_index < static_cast<int>(snapshots.size())) {
@@ -200,14 +199,12 @@ struct Metadata {
     return nullptr;
   }
 
-  // Custom serialization for Metadata
   friend void to_json(nlohmann::json &j, const Metadata &m) {
     j = nlohmann::json{{"schemas", m.schemas},
                        {"snapshots", m.snapshots},
                        {"current_snapshot_index", m.current_snapshot_index}};
   }
 
-  // Custom deserialization for Metadata
   friend void from_json(const nlohmann::json &j, Metadata &m) {
     j.at("snapshots").get_to(m.snapshots);
     j.at("schemas").get_to(m.schemas);
@@ -228,7 +225,6 @@ struct Metadata {
   }
 };
 
-// DatabaseInfo to store location of the latest metadata file
 struct DatabaseInfo {
   std::string metadata_location;
   int64_t timestamp_ms = 0;

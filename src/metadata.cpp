@@ -4,7 +4,6 @@
 
 #include <filesystem>
 #include <fstream>
-#include <iostream>
 #include <string>
 
 #include "../libs/json/json.hpp"
@@ -28,7 +27,6 @@ arrow::Result<bool> MetadataManager::initialize() {
       }
     }
 
-    // Create necessary subdirectories
     std::string manifest_dir = metadata_dir + "/manifests";
     if (!std::filesystem::exists(manifest_dir)) {
       log_info("Creating manifests directory: " + manifest_dir);
@@ -94,7 +92,6 @@ arrow::Result<std::string> MetadataManager::write_metadata(
     const Metadata &metadata) {
   log_info("Writing metadata");
   try {
-    // Generate a unique filename for the metadata using timestamp
     const std::string metadata_id = std::to_string(now_millis());
     std::string metadata_path =
         metadata_dir + "/metadata/" + metadata_id + ".metadata.json";
@@ -145,16 +142,13 @@ arrow::Result<DatabaseInfo> MetadataManager::read_db_info() {
   log_info("Reading database info");
   try {
     const std::string db_info_path = metadata_dir + "/db_info.json";
-
-    // For a new database, it's ok if the file doesn't exist
     if (!std::filesystem::exists(db_info_path)) {
       log_info("Database info file does not exist at " + db_info_path +
                " - likely a new database");
-      return DatabaseInfo{};  // Return empty database info for a new database
+      return DatabaseInfo{};
     }
 
     if (const std::ifstream file(db_info_path); !file.is_open()) {
-      // If the file exists but can't be opened, that's a critical error
       return arrow::Status::IOError(
           "Failed to open existing database info file: " + db_info_path);
     }
@@ -169,10 +163,8 @@ arrow::Result<DatabaseInfo> MetadataManager::read_db_info() {
 arrow::Result<Metadata> MetadataManager::load_current_metadata() {
   log_info("Loading current metadata");
   try {
-    // Read database info to get the metadata location
     auto db_info_result = read_db_info();
     if (!db_info_result.ok()) {
-      // This is a critical error - we need the database info
       log_error("Failed to read database info: " +
                 db_info_result.status().ToString());
       return db_info_result.status();
@@ -183,22 +175,17 @@ arrow::Result<Metadata> MetadataManager::load_current_metadata() {
       log_info(
           "No metadata location in database info - starting with fresh "
           "metadata");
-      return Metadata{};  // This is acceptable for a new database
+      return Metadata{};
     }
 
-    // Read metadata from the location specified in database info
     auto metadata_result = read_metadata(metadata_location);
     if (!metadata_result.ok()) {
-      // This is a critical error - if we have a metadata location, we should be
-      // able to read it
       log_error("Failed to read metadata: " +
                 metadata_result.status().ToString());
       return metadata_result.status();
     }
 
     Metadata metadata = metadata_result.ValueOrDie();
-
-    // Set current_snapshot pointer if snapshots exist
     if (!metadata.snapshots.empty() &&
         metadata.get_current_snapshot() == nullptr) {
       metadata.current_snapshot_index = metadata.snapshots.size() - 1;

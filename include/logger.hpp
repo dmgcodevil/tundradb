@@ -77,7 +77,6 @@ class Logger {
     }
   }
 
-  // Enhanced logging methods with source location and format support
   template <typename... Args>
   void debug(const std::source_location& location,
              spdlog::format_string_t<Args...> fmt, Args&&... args) {
@@ -102,7 +101,6 @@ class Logger {
     log(spdlog::level::err, location, fmt, std::forward<Args>(args)...);
   }
 
-  // Convenience overloads that use current source location
   template <typename... Args>
   void debug(spdlog::format_string_t<Args...> fmt, Args&&... args) {
     debug(std::source_location::current(), fmt, std::forward<Args>(args)...);
@@ -123,7 +121,6 @@ class Logger {
     error(std::source_location::current(), fmt, std::forward<Args>(args)...);
   }
 
-  // Backward compatibility with string-only logging
   void debug(const std::string& message, const std::source_location& location =
                                              std::source_location::current()) {
     debug(location, "{}", message);
@@ -145,33 +142,26 @@ class Logger {
   }
 
  private:
-  Logger() {
-    // Set default pattern to include file and line
-    spdlog::set_pattern("%Y-%m-%d %H:%M:%S.%e [%^%l%$] [%s:%#] %v");
-  }
+  Logger() { spdlog::set_pattern("%Y-%m-%d %H:%M:%S.%e [%^%l%$] [%s:%#] %v"); }
 
   template <typename... Args>
   void log(spdlog::level::level_enum level,
            const std::source_location& location,
            spdlog::format_string_t<Args...> fmt, Args&&... args) {
-    // Extract filename from path (remove directory)
     std::string_view path(location.file_name());
     size_t pos = path.find_last_of("/\\");
     std::string_view filename =
         (pos == std::string_view::npos) ? path : path.substr(pos + 1);
 
-    // Format message with provided arguments and add location
     std::string message =
         spdlog::fmt_lib::format(fmt, std::forward<Args>(args)...);
     spdlog::log(level, "{} [{}:{}]", message, filename, location.line());
   }
 
-  // Private methods to prevent copying
   Logger(const Logger&) = delete;
   Logger& operator=(const Logger&) = delete;
 };
 
-// Context-aware convenience functions with format string support
 template <typename... Args>
 inline void log_debug(spdlog::format_string_t<Args...> fmt, Args&&... args) {
   Logger::get_instance().debug(fmt, std::forward<Args>(args)...);
@@ -192,7 +182,6 @@ inline void log_error(spdlog::format_string_t<Args...> fmt, Args&&... args) {
   Logger::get_instance().error(fmt, std::forward<Args>(args)...);
 }
 
-// With explicit source location
 template <typename... Args>
 inline void log_debug(const std::source_location& location,
                       spdlog::format_string_t<Args...> fmt, Args&&... args) {
@@ -217,7 +206,6 @@ inline void log_error(const std::source_location& location,
   Logger::get_instance().error(location, fmt, std::forward<Args>(args)...);
 }
 
-// Backward compatibility with string-only logging
 inline void log_debug(
     const std::string& message,
     const std::source_location& location = std::source_location::current()) {
@@ -242,7 +230,6 @@ inline void log_error(
   Logger::get_instance().error(message, location);
 }
 
-// Contextual logger that can be used to add operation context
 class ContextLogger {
  public:
   ContextLogger(std::string prefix) : prefix_(std::move(prefix)) {}
@@ -275,7 +262,6 @@ class ContextLogger {
     log_error(prefix_ + ": " + message);
   }
 
-  // Backward compatibility with string-only logging
   void debug(const std::string& message, const std::source_location& location =
                                              std::source_location::current()) {
     log_debug(prefix_ + ": " + message, location);

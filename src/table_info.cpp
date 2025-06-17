@@ -6,7 +6,6 @@ namespace tundradb {
 
 TableInfo::TableInfo(const std::shared_ptr<arrow::Table>& table)
     : num_rows_(table->num_rows()) {
-  // Pre-calculate chunk boundaries for each column
   chunk_boundaries_.reserve(table->num_columns());
 
   for (int col_idx = 0; col_idx < table->num_columns(); ++col_idx) {

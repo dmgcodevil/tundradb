@@ -11,17 +11,13 @@
 
 namespace tundradb {
 
-// Write a string to a file. Creates the file if it doesn't exist.
 arrow::Result<bool> write_to_file(const std::string& file_path,
                                   const std::string& content);
 
-// Read a string from a file if it exists.
 arrow::Result<std::string> read_from_file(const std::string& file_path);
 
-// Check if a file exists
 bool file_exists(const std::string& file_path);
 
-// Read a JSON file into a type T that supports JSON deserialization
 template <typename T>
 arrow::Result<T> read_json_file(const std::string& file_path) {
   try {
@@ -42,7 +38,6 @@ arrow::Result<T> read_json_file(const std::string& file_path) {
   }
 };
 
-// Write an object to a JSON file, ensuring the directory exists
 template <typename T>
 arrow::Result<bool> write_json_file(const T& object,
                                     const std::string& file_path) {

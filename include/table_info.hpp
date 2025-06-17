@@ -12,7 +12,6 @@ class TableInfo {
  public:
   explicit TableInfo(const std::shared_ptr<arrow::Table>& table);
 
-  // Get chunk index and offset for a specific row in a column
   struct ChunkInfo {
     int chunk_index;
     int64_t offset_in_chunk;
@@ -25,7 +24,6 @@ class TableInfo {
   [[nodiscard]] int64_t num_rows() const { return num_rows_; }
 
  private:
-  // Pre-calculated chunk boundaries for each column
   std::vector<std::vector<int64_t>> chunk_boundaries_;
   int64_t num_rows_;
 };

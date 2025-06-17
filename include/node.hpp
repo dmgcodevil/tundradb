@@ -11,7 +11,6 @@
 
 namespace tundradb {
 
-// Utility functions for creating arrays
 static arrow::Result<std::shared_ptr<arrow::Array>> create_int64_array(
     const int64_t value) {
   arrow::Int64Builder int64_builder;
@@ -54,13 +53,11 @@ static arrow::Result<std::shared_ptr<arrow::Array>> create_null_array(
   }
 }
 
-// Operation types
 enum OperationType { SET };
 
-// Base operation class
 struct BaseOperation {
-  int64_t node_id;  // The node identifier to apply the operation to
-  std::vector<std::string> field_name;  // Name of the field to update
+  int64_t node_id;
+  std::vector<std::string> field_name;
 
   BaseOperation(const int64_t id, const std::vector<std::string> &field)
       : node_id(id), field_name(field) {}
@@ -79,22 +76,17 @@ struct BaseOperation {
   virtual ~BaseOperation() = default;
 };
 
-// Set operation - assigns a new value to a field
 struct SetOperation final : public BaseOperation {
-  std::shared_ptr<arrow::Array> value;  // The new value to set
+  std::shared_ptr<arrow::Array> value;
 
   SetOperation(const int64_t id, const std::vector<std::string> &field,
                const std::shared_ptr<arrow::Array> &v)
       : BaseOperation(id, field), value(v) {}
 
-  ~SetOperation() override {
-    // Ensure the value is properly cleaned up
-    value.reset();
-  }
+  ~SetOperation() override { value.reset(); }
 
   arrow::Result<bool> apply(const std::shared_ptr<arrow::Array> &array,
                             const int64_t row_index) const override {
-    // Make a copy of the array data to avoid modifying the original
     const auto array_data = array->data()->Copy();
     switch (array->type_id()) {
       case arrow::Type::INT64: {
@@ -122,7 +114,6 @@ struct SetOperation final : public BaseOperation {
   }
 };
 
-// Node class represents a single data entity
 class Node {
  private:
   std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data_;
@@ -138,10 +129,7 @@ class Node {
         id(id),
         schema_name(std::move(schema_name)) {}
 
-  ~Node() {
-    // Clear the data map to ensure proper cleanup of Arrow arrays
-    data_.clear();
-  }
+  ~Node() { data_.clear(); }
 
   void add_field(const std::string &field_name,
                  const std::shared_ptr<arrow::Array> &value) {

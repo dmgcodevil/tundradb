@@ -80,11 +80,10 @@ arrow::Result<std::string> Storage::write_shard(
   if (!shard) {
     return arrow::Status::Invalid("Cannot write null shard");
   }
-  ARROW_ASSIGN_OR_RAISE(auto table, shard->get_table());
+  ARROW_ASSIGN_OR_RAISE(const auto table, shard->get_table());
   const std::string& schema_name = shard->schema_name;
 
-  return write_table(table, static_cast<int64_t>(shard->chunk_size),
-                     schema_name);
+  return write_table(table, shard->chunk_size, schema_name);
 }
 
 arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(
@@ -99,30 +98,21 @@ arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(
   std::shared_ptr<arrow::Table> table;
   ARROW_RETURN_NOT_OK(reader->ReadTable(&table));
 
-  // Create a new shard with metadata properties
   auto shard = std::make_shared<Shard>(
       shard_metadata.id, shard_metadata.index,
-      this->config_
-          .get_shard_capacity(),  // Use configured capacity, not record count
-      shard_metadata.min_id, shard_metadata.max_id, shard_metadata.chunk_size,
+      this->config_.get_shard_capacity(), shard_metadata.min_id,
+      shard_metadata.max_id, shard_metadata.chunk_size,
       shard_metadata.schema_name, this->schema_registry_);
 
   TableInfo table_info(table);
 
-  // Convert table rows back to nodes and add to shard
   for (int64_t row_idx = 0; row_idx < table->num_rows(); ++row_idx) {
-    // Extract fields for this row into a map
     std::unordered_map<std::string, std::shared_ptr<arrow::Array>> node_data;
-
     for (int col_idx = 0; col_idx < table->num_columns(); ++col_idx) {
       auto column_name = table->schema()->field(col_idx)->name();
       auto column = table->column(col_idx);
-
-      // Use TableInfo to get chunk location
       auto chunk_loc = table_info.get_chunk_info(col_idx, row_idx);
       auto chunk = column->chunk(chunk_loc.chunk_index);
-
-      // Extract this single value as a new array
       std::shared_ptr<arrow::Array> value_array;
 
       switch (chunk->type_id()) {
@@ -194,7 +184,6 @@ arrow::Result<std::vector<Edge>> Storage::read_edges(
 
   const TableInfo table_info(table);
 
-  // Get column indices
   const int id_col_idx = 0;
   const int source_id_col_idx = 1;
   const int target_id_col_idx = 2;
@@ -209,7 +198,6 @@ arrow::Result<std::vector<Edge>> Storage::read_edges(
     const auto created_ts_chunk_info =
         table_info.get_chunk_info(created_ts_col_idx, row_idx);
 
-    // Get chunks
     const auto id_chunk = std::static_pointer_cast<arrow::Int64Array>(
         table->column(id_col_idx)->chunk(id_chunk_info.chunk_index));
     const auto source_id_chunk = std::static_pointer_cast<arrow::Int64Array>(
@@ -222,7 +210,6 @@ arrow::Result<std::vector<Edge>> Storage::read_edges(
         table->column(created_ts_col_idx)
             ->chunk(created_ts_chunk_info.chunk_index));
 
-    // Extract values
     int64_t id = id_chunk->Value(id_chunk_info.offset_in_chunk);
     int64_t source_id =
         source_id_chunk->Value(source_id_chunk_info.offset_in_chunk);

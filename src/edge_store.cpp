@@ -139,8 +139,8 @@ arrow::Result<std::vector<std::shared_ptr<Edge>>> EdgeStore::get_outgoing_edges(
     typename tbb::concurrent_hash_map<
         int64_t, std::shared_ptr<Edge>>::const_accessor edge_acc;
     if (edges.find(edge_acc, edge_id)) {
-      auto edge = edge_acc->second;
-      if (type.empty() || edge->get_type() == type) {
+      if (auto edge = edge_acc->second;
+          type.empty() || edge->get_type() == type) {
         result.push_back(edge);
       }
     }
@@ -231,20 +231,16 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::generate_table(
     }
   }
 
-  // If no edges found, return an empty table with the correct schema
   if (selected_edges.empty()) {
     log_info("No edges found for type '" + edge_type +
              "', returning empty table");
 
-    // Create schema
-    std::vector<std::shared_ptr<arrow::Field>> fields = {
-        arrow::field("id", arrow::int64()),
-        arrow::field("source_id", arrow::int64()),
-        arrow::field("target_id", arrow::int64()),
-        arrow::field("created_ts", arrow::int64())};
+    std::vector fields = {arrow::field("id", arrow::int64()),
+                          arrow::field("source_id", arrow::int64()),
+                          arrow::field("target_id", arrow::int64()),
+                          arrow::field("created_ts", arrow::int64())};
     auto schema = arrow::schema(fields);
 
-    // Create empty arrays
     std::shared_ptr<arrow::Array> empty_id_array;
     std::shared_ptr<arrow::Array> empty_source_id_array;
     std::shared_ptr<arrow::Array> empty_target_id_array;
@@ -267,7 +263,6 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::generate_table(
   auto id_builder = arrow::Int64Builder();
   auto source_id_builder = arrow::Int64Builder();
   auto target_id_builder = arrow::Int64Builder();
-  // auto type_builder = arrow::StringBuilder();
   auto created_ts_builder = arrow::Int64Builder();
 
   // Process edges in chunks. todo make configurable
@@ -276,7 +271,6 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::generate_table(
   std::vector<std::shared_ptr<arrow::Array>> id_chunks;
   std::vector<std::shared_ptr<arrow::Array>> source_id_chunks;
   std::vector<std::shared_ptr<arrow::Array>> target_id_chunks;
-  // std::vector<std::shared_ptr<arrow::Array>> type_chunks;
   std::vector<std::shared_ptr<arrow::Array>> created_ts_chunks;
 
   size_t current_chunk_size = 0;
@@ -284,7 +278,6 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::generate_table(
     ARROW_RETURN_NOT_OK(id_builder.Append(edge->get_id()));
     ARROW_RETURN_NOT_OK(source_id_builder.Append(edge->get_source_id()));
     ARROW_RETURN_NOT_OK(target_id_builder.Append(edge->get_target_id()));
-    // ARROW_RETURN_NOT_OK(type_builder.Append(edge->get_type()));
     ARROW_RETURN_NOT_OK(created_ts_builder.Append(edge->get_created_ts()));
 
     current_chunk_size++;
@@ -299,61 +292,49 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::generate_table(
       ARROW_RETURN_NOT_OK(id_builder.Finish(&id_array));
       ARROW_RETURN_NOT_OK(source_id_builder.Finish(&source_id_array));
       ARROW_RETURN_NOT_OK(target_id_builder.Finish(&target_id_array));
-      // ARROW_RETURN_NOT_OK(type_builder.Finish(&type_array));
       ARROW_RETURN_NOT_OK(created_ts_builder.Finish(&created_ts_array));
 
       id_chunks.push_back(id_array);
       source_id_chunks.push_back(source_id_array);
       target_id_chunks.push_back(target_id_array);
-      // type_chunks.push_back(type_array);
       created_ts_chunks.push_back(created_ts_array);
 
-      // Reset builders for next chunk
       id_builder.Reset();
       source_id_builder.Reset();
       target_id_builder.Reset();
-      // type_builder.Reset();
       created_ts_builder.Reset();
 
       current_chunk_size = 0;
     }
   }
 
-  // Handle the last partial chunk if any
   if (current_chunk_size > 0) {
     std::shared_ptr<arrow::Array> id_array;
     std::shared_ptr<arrow::Array> source_id_array;
     std::shared_ptr<arrow::Array> target_id_array;
-    // std::shared_ptr<arrow::Array> type_array;
     std::shared_ptr<arrow::Array> created_ts_array;
 
     ARROW_RETURN_NOT_OK(id_builder.Finish(&id_array));
     ARROW_RETURN_NOT_OK(source_id_builder.Finish(&source_id_array));
     ARROW_RETURN_NOT_OK(target_id_builder.Finish(&target_id_array));
-    // ARROW_RETURN_NOT_OK(type_builder.Finish(&type_array));
     ARROW_RETURN_NOT_OK(created_ts_builder.Finish(&created_ts_array));
 
     id_chunks.push_back(id_array);
     source_id_chunks.push_back(source_id_array);
     target_id_chunks.push_back(target_id_array);
-    // type_chunks.push_back(type_array);
     created_ts_chunks.push_back(created_ts_array);
   }
 
-  // Create chunked arrays - add safety check for empty chunks
   if (id_chunks.empty()) {
     log_info("No chunks created for edge type '" + edge_type +
              "', returning empty table");
 
-    // Create schema
-    std::vector<std::shared_ptr<arrow::Field>> fields = {
-        arrow::field("id", arrow::int64()),
-        arrow::field("source_id", arrow::int64()),
-        arrow::field("target_id", arrow::int64()),
-        arrow::field("created_ts", arrow::int64())};
+    std::vector fields = {arrow::field("id", arrow::int64()),
+                          arrow::field("source_id", arrow::int64()),
+                          arrow::field("target_id", arrow::int64()),
+                          arrow::field("created_ts", arrow::int64())};
     auto schema = arrow::schema(fields);
 
-    // Create empty arrays
     std::shared_ptr<arrow::Array> empty_id_array;
     std::shared_ptr<arrow::Array> empty_source_id_array;
     std::shared_ptr<arrow::Array> empty_target_id_array;
@@ -378,25 +359,18 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::generate_table(
       std::make_shared<arrow::ChunkedArray>(source_id_chunks);
   auto target_id_chunked_array =
       std::make_shared<arrow::ChunkedArray>(target_id_chunks);
-  // auto type_chunked_array =
-  // std::make_shared<arrow::ChunkedArray>(type_chunks);
   auto created_ts_chunked_array =
       std::make_shared<arrow::ChunkedArray>(created_ts_chunks);
 
-  // Create schema
-  std::vector<std::shared_ptr<arrow::Field>> fields = {
-      arrow::field("id", arrow::int64()),
-      arrow::field("source_id", arrow::int64()),
-      arrow::field("target_id", arrow::int64()),
-      // arrow::field("type", arrow::utf8()),
-      arrow::field("created_ts", arrow::int64())};
+  std::vector fields = {arrow::field("id", arrow::int64()),
+                        arrow::field("source_id", arrow::int64()),
+                        arrow::field("target_id", arrow::int64()),
+                        arrow::field("created_ts", arrow::int64())};
   static auto schema = arrow::schema(fields);
 
-  // Create and return the table
-  return arrow::Table::Make(schema, {id_chunked_array, source_id_chunked_array,
-                                     target_id_chunked_array,
-                                     // type_chunked_array,
-                                     created_ts_chunked_array});
+  return arrow::Table::Make(
+      schema, {id_chunked_array, source_id_chunked_array,
+               target_id_chunked_array, created_ts_chunked_array});
 }
 
 arrow::Result<int64_t> EdgeStore::get_version_snapshot(
@@ -419,7 +393,6 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::get_table(
   }
 
   while (retry_count < MAX_RETRIES) {
-    // First try to get the table with read-only access
     {
       typename tbb::concurrent_hash_map<
           std::string, std::shared_ptr<TableCache>>::const_accessor tables_acc;
@@ -436,10 +409,6 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::get_table(
           return arrow::Status::Invalid(
               "Invalid state: current_version > latest_version");
         }
-
-        // Cache is up-to-date and available
-        //  tables_acc->second->table can be null if table generation failed
-        //  during insertion
         if (current_version == latest_version &&
             tables_acc->second->table != nullptr) {
           return tables_acc->second->table;
@@ -447,12 +416,10 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::get_table(
       }
     }
 
-    // Need to update or create - get write access
     typename tbb::concurrent_hash_map<
         std::string, std::shared_ptr<TableCache>>::accessor tables_acc;
 
     if (tables_.find(tables_acc, edge_type)) {
-      // Entry exists, check if we need to update it
       auto latest_version_res = get_version_snapshot(edge_type);
       if (!latest_version_res.ok()) {
         return latest_version_res.status();
@@ -462,7 +429,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::get_table(
           tables_acc->second->version.load(std::memory_order_acquire);
 
       if (current_version < latest_version) {
-        std::lock_guard<std::mutex> lock(tables_acc->second->lock);
+        std::lock_guard lock(tables_acc->second->lock);
         // Double-check under lock
         if (current_version ==
             tables_acc->second->version.load(std::memory_order_acquire)) {
