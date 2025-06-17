@@ -77,13 +77,14 @@ TEST_F(TableInfoTest, BasicFunctionality) {
 TEST_F(TableInfoTest, OutOfRange) {
   TableInfo info(table_);
 
-  // Test out of range column
-  EXPECT_THROW(info.get_chunk_info(1, 0), std::out_of_range);
-  EXPECT_THROW(info.get_chunk_info(-1, 0), std::out_of_range);
-
-  // Test out of range row
-  EXPECT_THROW(info.get_chunk_info(0, -1), std::out_of_range);
-  EXPECT_THROW(info.get_chunk_info(0, 5), std::out_of_range);
+  // Test invalid chunk coordinates
+  EXPECT_THROW(static_cast<void>(info.get_chunk_info(1, 0)), std::out_of_range);
+  EXPECT_THROW(static_cast<void>(info.get_chunk_info(-1, 0)),
+               std::out_of_range);
+  // Test invalid column index
+  EXPECT_THROW(static_cast<void>(info.get_chunk_info(0, -1)),
+               std::out_of_range);
+  EXPECT_THROW(static_cast<void>(info.get_chunk_info(0, 5)), std::out_of_range);
 }
 
 TEST_F(TableInfoTest, TableProperties) {

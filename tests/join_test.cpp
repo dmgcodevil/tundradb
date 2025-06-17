@@ -9,6 +9,9 @@
 #include "../include/metadata.hpp"
 #include "../include/query.hpp"
 
+// Helper macro for Arrow operations
+#define ASSERT_OK(expr) ASSERT_TRUE((expr).ok())
+
 using namespace std::string_literals;
 using namespace tundradb;
 
@@ -30,14 +33,28 @@ std::vector<std::shared_ptr<Node>> create_users(
   for (auto user : users) {
     arrow::StringBuilder name_builder;
     std::shared_ptr<arrow::Array> name_array;
-    name_builder.Append(user.name);
-    name_builder.Finish(&name_array);
+    auto status = name_builder.Append(user.name);
+    if (!status.ok()) {
+      throw std::runtime_error("Failed to append name: " + status.ToString());
+    }
+    status = name_builder.Finish(&name_array);
+    if (!status.ok()) {
+      throw std::runtime_error("Failed to finish name array: " +
+                               status.ToString());
+    }
 
     // Create age array
     arrow::Int64Builder age_builder;
     std::shared_ptr<arrow::Array> age_array;
-    age_builder.Append(user.age);
-    age_builder.Finish(&age_array);
+    status = age_builder.Append(user.age);
+    if (!status.ok()) {
+      throw std::runtime_error("Failed to append age: " + status.ToString());
+    }
+    status = age_builder.Finish(&age_array);
+    if (!status.ok()) {
+      throw std::runtime_error("Failed to finish age array: " +
+                               status.ToString());
+    }
 
     std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
         {"name", name_array}, {"age", age_array}};
@@ -56,14 +73,30 @@ std::vector<std::shared_ptr<Node>> create_companies(
   for (auto company : companies) {
     arrow::StringBuilder name_builder;
     std::shared_ptr<arrow::Array> name_array;
-    name_builder.Append(company.name);
-    name_builder.Finish(&name_array);
+    auto status = name_builder.Append(company.name);
+    if (!status.ok()) {
+      throw std::runtime_error("Failed to append company name: " +
+                               status.ToString());
+    }
+    status = name_builder.Finish(&name_array);
+    if (!status.ok()) {
+      throw std::runtime_error("Failed to finish company name array: " +
+                               status.ToString());
+    }
 
     // Create age array
     arrow::Int64Builder size_builder;
     std::shared_ptr<arrow::Array> size_array;
-    size_builder.Append(company.size);
-    size_builder.Finish(&size_array);
+    status = size_builder.Append(company.size);
+    if (!status.ok()) {
+      throw std::runtime_error("Failed to append company size: " +
+                               status.ToString());
+    }
+    status = size_builder.Finish(&size_array);
+    if (!status.ok()) {
+      throw std::runtime_error("Failed to finish company size array: " +
+                               status.ToString());
+    }
 
     std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
         {"name", name_array}, {"size", size_array}};
@@ -123,7 +156,7 @@ TEST(JoinTest, MatchAll) {
 
   // Pretty print for debugging if needed
   std::cout << "Result Table:" << std::endl;
-  arrow::PrettyPrint(*result_table, {}, &std::cout);
+  static_cast<void>(arrow::PrettyPrint(*result_table, {}, &std::cout));
   ASSERT_EQ(result_table->num_rows(), 5);
 }
 
@@ -147,7 +180,8 @@ TEST(JoinTest, UserFriendCompanyInnerJoin) {
 
   // Pretty print for debugging if needed
   std::cout << "JoinTest Result Table:" << std::endl;
-  arrow::PrettyPrint(*result_table, {}, &std::cout);
+  print_table(result_table);
+  static_cast<void>(arrow::PrettyPrint(*result_table, {}, &std::cout));
 
   ASSERT_EQ(result_table->num_rows(), 1);
 
@@ -209,7 +243,7 @@ TEST(JoinTest, JoinFromSameNode) {
   // Pretty print for debugging if needed
   std::cout << "JoinTest Result Table:" << std::endl;
   print_table(result_table);
-  arrow::PrettyPrint(*result_table, {}, &std::cout);
+  static_cast<void>(arrow::PrettyPrint(*result_table, {}, &std::cout));
 
   ASSERT_EQ(result_table->num_rows(), 2);
 
@@ -281,7 +315,7 @@ TEST(JoinTest, InnerJoinFromSameNodeMultiTarget) {
   // Pretty print for debugging
   std::cout << "InnerJoinFromSameNodeMultiTarget Result Table:" << std::endl;
   print_table(result_table);
-  arrow::PrettyPrint(*result_table, {}, &std::cout);
+  static_cast<void>(arrow::PrettyPrint(*result_table, {}, &std::cout));
 
   // Verify result has exactly 2 rows (cartesian product of 2 friends × 1
   // company)
@@ -370,7 +404,7 @@ TEST(JoinTest, InnerJoinFromSameNodeAndEndConnections) {
   std::cout << "InnerJoinFromSameNodeAndEndConnections Result Table:"
             << std::endl;
   print_table(result_table);
-  arrow::PrettyPrint(*result_table, {}, &std::cout);
+  static_cast<void>(arrow::PrettyPrint(*result_table, {}, &std::cout));
 
   // Verify result has exactly 2 rows (cartesian product of 2 friends × 1
   // company)
@@ -464,7 +498,7 @@ TEST(JoinTest, EmptyResultFromInnerJoin) {
   // Pretty print for debugging
   std::cout << "EmptyResultFromInnerJoin Result Table:" << std::endl;
   print_table(result_table);
-  arrow::PrettyPrint(*result_table, {}, &std::cout);
+  static_cast<void>(arrow::PrettyPrint(*result_table, {}, &std::cout));
 
   // Should have 0 rows due to inner join failing at the last hop
   ASSERT_EQ(result_table->num_rows(), 0);
@@ -500,7 +534,7 @@ TEST(JoinTest, MultiPathToSameTarget) {
   // Pretty print for debugging
   std::cout << "MultiPathToSameTarget Result Table:" << std::endl;
   print_table(result_table);
-  arrow::PrettyPrint(*result_table, {}, &std::cout);
+  static_cast<void>(arrow::PrettyPrint(*result_table, {}, &std::cout));
 
   // Should have 1 row - bob works at IBM just like alex does
   ASSERT_EQ(result_table->num_rows(), 1);
@@ -569,7 +603,7 @@ TEST(JoinTest, CartesianProductExplosion) {
   // Pretty print for debugging
   std::cout << "CartesianProductExplosion Result Table:" << std::endl;
   print_table(result_table);
-  arrow::PrettyPrint(*result_table, {}, &std::cout);
+  static_cast<void>(arrow::PrettyPrint(*result_table, {}, &std::cout));
 
   // Should have 6 rows: Bob(IBM,Google) + Jeff(Google,AWS) + Sam(IBM,AWS)
   ASSERT_EQ(result_table->num_rows(), 6);
@@ -617,7 +651,7 @@ TEST(JoinTest, LeftJoin) {
   // Pretty print for debugging
   std::cout << "LeftJoin Result Table:" << std::endl;
   print_table(result_table);
-  arrow::PrettyPrint(*result_table, {}, &std::cout);
+  static_cast<void>(arrow::PrettyPrint(*result_table, {}, &std::cout));
 
   // Should have 2 rows - one for bob (with company) and one for jeff (without
   // company)
@@ -729,7 +763,7 @@ TEST(JoinTest, RightJoin) {
   // Pretty print for debugging
   std::cout << "RightJoin Result Table:" << std::endl;
   print_table(result_table);
-  arrow::PrettyPrint(*result_table, {}, &std::cout);
+  static_cast<void>(arrow::PrettyPrint(*result_table, {}, &std::cout));
 
   // Should show IBM in the results even though no friend of alex works there
   // But sam (who isn't alex's friend) works at IBM
@@ -780,7 +814,7 @@ TEST(JoinTest, CombinedJoinTypes) {
   // Pretty print for debugging
   std::cout << "CombinedJoinTypes Result Table:" << std::endl;
   print_table(result_table);
-  arrow::PrettyPrint(*result_table, {}, &std::cout);
+  static_cast<void>(arrow::PrettyPrint(*result_table, {}, &std::cout));
 
   // Expected result should include:
   // 1. alex->bob->google (regular match)
@@ -915,7 +949,7 @@ TEST(JoinTest, MultiLevelLeftJoin) {
   // Pretty print for debugging
   std::cout << "MultiLevelLeftJoin Result Table:" << std::endl;
   print_table(result_table);
-  arrow::PrettyPrint(*result_table, {}, &std::cout);
+  static_cast<void>(arrow::PrettyPrint(*result_table, {}, &std::cout));
 
   // Should have 7 rows - 3 for alex's friends and 4 for each user as a starting
   // point
@@ -1046,7 +1080,7 @@ TEST(JoinTest, SelfJoinWithLeftJoin) {
   // Pretty print for debugging
   std::cout << "SelfJoinWithLeftJoin Result Table:" << std::endl;
   print_table(result_table);
-  arrow::PrettyPrint(*result_table, {}, &std::cout);
+  static_cast<void>(arrow::PrettyPrint(*result_table, {}, &std::cout));
 
   // For detailed debugging, print each row with IDs
   std::cout << "Managers and employees by ID:" << std::endl;
@@ -1169,7 +1203,7 @@ TEST(JoinTest, FullOuterJoin) {
   // Pretty print for debugging
   std::cout << "FullOuterJoin Result Table:" << std::endl;
   print_table(result_table);
-  arrow::PrettyPrint(*result_table, {}, &std::cout);
+  static_cast<void>(arrow::PrettyPrint(*result_table, {}, &std::cout));
 
   // Collect all company names present in the result
   std::set<std::string> company_names;
@@ -1320,7 +1354,7 @@ TEST(JoinTest, SelectClauseFiltering) {
   // Pretty print for debugging
   std::cout << "SelectClauseFiltering Result Table:" << std::endl;
   print_table(result_table);
-  arrow::PrettyPrint(*result_table, {}, &std::cout);
+  static_cast<void>(arrow::PrettyPrint(*result_table, {}, &std::cout));
 
   // Verify that only columns with u.* and f.* prefixes are in the result
   for (const auto& field : result_table->schema()->fields()) {
@@ -1398,7 +1432,7 @@ TEST(JoinTest, SelectSpecificColumns) {
   // Pretty print for debugging
   std::cout << "SelectSpecificColumns Result Table:" << std::endl;
   print_table(result_table);
-  arrow::PrettyPrint(*result_table, {}, &std::cout);
+  static_cast<void>(arrow::PrettyPrint(*result_table, {}, &std::cout));
 
   // Verify we have exactly 2 columns
   ASSERT_EQ(result_table->schema()->num_fields(), 2);
@@ -1483,11 +1517,11 @@ TEST(JoinTest, MultiPatternPathThroughFriends) {
       arrow::Int64Builder age_builder;
       std::shared_ptr<arrow::Array> name_array, age_array;
 
-      name_builder.Append("Alex");
-      name_builder.Finish(&name_array);
+      static_cast<void>(name_builder.Append("Alex"));
+      static_cast<void>(name_builder.Finish(&name_array));
 
-      age_builder.Append(25);
-      age_builder.Finish(&age_array);
+      static_cast<void>(age_builder.Append(25));
+      static_cast<void>(age_builder.Finish(&age_array));
 
       std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
           {"name", name_array}, {"age", age_array}};
@@ -1502,11 +1536,11 @@ TEST(JoinTest, MultiPatternPathThroughFriends) {
       arrow::Int64Builder age_builder;
       std::shared_ptr<arrow::Array> name_array, age_array;
 
-      name_builder.Append("Bob");
-      name_builder.Finish(&name_array);
+      static_cast<void>(name_builder.Append("Bob"));
+      static_cast<void>(name_builder.Finish(&name_array));
 
-      age_builder.Append(31);
-      age_builder.Finish(&age_array);
+      static_cast<void>(age_builder.Append(31));
+      static_cast<void>(age_builder.Finish(&age_array));
 
       std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
           {"name", name_array}, {"age", age_array}};
@@ -1521,11 +1555,11 @@ TEST(JoinTest, MultiPatternPathThroughFriends) {
       arrow::Int64Builder age_builder;
       std::shared_ptr<arrow::Array> name_array, age_array;
 
-      name_builder.Append("Jeff");
-      name_builder.Finish(&name_array);
+      static_cast<void>(name_builder.Append("Jeff"));
+      static_cast<void>(name_builder.Finish(&name_array));
 
-      age_builder.Append(33);
-      age_builder.Finish(&age_array);
+      static_cast<void>(age_builder.Append(33));
+      static_cast<void>(age_builder.Finish(&age_array));
 
       std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
           {"name", name_array}, {"age", age_array}};
@@ -1540,11 +1574,11 @@ TEST(JoinTest, MultiPatternPathThroughFriends) {
       arrow::Int64Builder age_builder;
       std::shared_ptr<arrow::Array> name_array, age_array;
 
-      name_builder.Append("Sam");
-      name_builder.Finish(&name_array);
+      static_cast<void>(name_builder.Append("Sam"));
+      static_cast<void>(name_builder.Finish(&name_array));
 
-      age_builder.Append(21);
-      age_builder.Finish(&age_array);
+      static_cast<void>(age_builder.Append(21));
+      static_cast<void>(age_builder.Finish(&age_array));
 
       std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
           {"name", name_array}, {"age", age_array}};
@@ -1563,11 +1597,11 @@ TEST(JoinTest, MultiPatternPathThroughFriends) {
       arrow::Int64Builder size_builder;
       std::shared_ptr<arrow::Array> name_array, size_array;
 
-      name_builder.Append("Google");
-      name_builder.Finish(&name_array);
+      static_cast<void>(name_builder.Append("Google"));
+      static_cast<void>(name_builder.Finish(&name_array));
 
-      size_builder.Append(3000);
-      size_builder.Finish(&size_array);
+      static_cast<void>(size_builder.Append(3000));
+      static_cast<void>(size_builder.Finish(&size_array));
 
       std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
           {"name", name_array}, {"size", size_array}};
@@ -1582,11 +1616,11 @@ TEST(JoinTest, MultiPatternPathThroughFriends) {
       arrow::Int64Builder size_builder;
       std::shared_ptr<arrow::Array> name_array, size_array;
 
-      name_builder.Append("IBM");
-      name_builder.Finish(&name_array);
+      static_cast<void>(name_builder.Append("IBM"));
+      static_cast<void>(name_builder.Finish(&name_array));
 
-      size_builder.Append(1000);
-      size_builder.Finish(&size_array);
+      static_cast<void>(size_builder.Append(1000));
+      static_cast<void>(size_builder.Finish(&size_array));
 
       std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
           {"name", name_array}, {"size", size_array}};
@@ -1601,11 +1635,11 @@ TEST(JoinTest, MultiPatternPathThroughFriends) {
       arrow::Int64Builder size_builder;
       std::shared_ptr<arrow::Array> name_array, size_array;
 
-      name_builder.Append("AWS");
-      name_builder.Finish(&name_array);
+      static_cast<void>(name_builder.Append("AWS"));
+      static_cast<void>(name_builder.Finish(&name_array));
 
-      size_builder.Append(2000);
-      size_builder.Finish(&size_array);
+      static_cast<void>(size_builder.Append(2000));
+      static_cast<void>(size_builder.Finish(&size_array));
 
       std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
           {"name", name_array}, {"size", size_array}};
@@ -1638,7 +1672,7 @@ TEST(JoinTest, MultiPatternPathThroughFriends) {
   // Print the results
   std::cout << "MultiPatternPathThroughFriends Result Table:" << std::endl;
   print_table(result_table_custom);
-  arrow::PrettyPrint(*result_table_custom, {}, &std::cout);
+  static_cast<void>(arrow::PrettyPrint(*result_table_custom, {}, &std::cout));
 
   // We should have exactly 2 rows:
   // 1. Alex -> Bob -> IBM
@@ -1758,7 +1792,7 @@ TEST(JoinTest, MultiPatternWithSharedVars) {
   // Pretty print for debugging
   std::cout << "SelfJoinWithLeftJoin Result Table:" << std::endl;
   print_table(result_table);
-  arrow::PrettyPrint(*result_table, {}, &std::cout);
+  static_cast<void>(arrow::PrettyPrint(*result_table, {}, &std::cout));
   // 0	alex	25	2	jeff	33	6	google	3000
   ASSERT_EQ(result_table->num_rows(), 1);
 
@@ -1833,7 +1867,7 @@ TEST(JoinTest, FullJoinFriendRelationship) {
   // Pretty print for debugging
   std::cout << "FullJoinFriendRelationship Result Table:" << std::endl;
   print_table(result_table);
-  arrow::PrettyPrint(*result_table, {}, &std::cout);
+  static_cast<void>(arrow::PrettyPrint(*result_table, {}, &std::cout));
 
   // Should have 8 rows total:
   // 2 matched relationships (alex->bob, alex->jeff)

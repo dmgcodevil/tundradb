@@ -1,5 +1,3 @@
-
-
 #include <arrow/pretty_print.h>
 #include <benchmark/benchmark.h>
 #include <gtest/gtest.h>
@@ -16,6 +14,9 @@
 #include "../include/metadata.hpp"
 #include "../include/query.hpp"
 #include "../include/utils.hpp"
+
+// Helper macro for Arrow operations
+#define ASSERT_OK(expr) ASSERT_TRUE((expr).ok())
 
 using namespace std::string_literals;
 using namespace tundradb;
@@ -55,12 +56,12 @@ class WherePushdownJoinTest : public ::testing::Test {
       arrow::StringBuilder name_builder;
       arrow::Int64Builder age_builder;
 
-      name_builder.Append(name);
-      age_builder.Append(age);
+      ASSERT_OK(name_builder.Append(name));
+      ASSERT_OK(age_builder.Append(age));
 
       std::shared_ptr<arrow::Array> name_array, age_array;
-      name_builder.Finish(&name_array);
-      age_builder.Finish(&age_array);
+      ASSERT_OK(name_builder.Finish(&name_array));
+      ASSERT_OK(age_builder.Finish(&age_array));
 
       std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
           {"name", name_array}, {"age", age_array}};
@@ -76,12 +77,12 @@ class WherePushdownJoinTest : public ::testing::Test {
       arrow::StringBuilder name_builder;
       arrow::Int64Builder size_builder;
 
-      name_builder.Append(name);
-      size_builder.Append(size);
+      ASSERT_OK(name_builder.Append(name));
+      ASSERT_OK(size_builder.Append(size));
 
       std::shared_ptr<arrow::Array> name_array, size_array;
-      name_builder.Finish(&name_array);
-      size_builder.Finish(&size_array);
+      ASSERT_OK(name_builder.Finish(&name_array));
+      ASSERT_OK(size_builder.Finish(&size_array));
 
       std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
           {"name", name_array}, {"size", size_array}};

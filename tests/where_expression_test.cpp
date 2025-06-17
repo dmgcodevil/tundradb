@@ -11,6 +11,9 @@
 #include "../include/query.hpp"
 #include "../include/utils.hpp"
 
+// Helper macro for Arrow operations
+#define ASSERT_OK(expr) ASSERT_TRUE((expr).ok())
+
 using namespace std::string_literals;
 using namespace tundradb;
 
@@ -77,17 +80,17 @@ class WhereExpressionTest : public ::testing::Test {
       arrow::StringBuilder city_builder;
       arrow::Int64Builder salary_builder;
 
-      name_builder.Append(user.name);
-      age_builder.Append(user.age);
-      city_builder.Append(user.city);
-      salary_builder.Append(user.salary);
+      static_cast<void>(name_builder.Append(user.name));
+      static_cast<void>(age_builder.Append(user.age));
+      static_cast<void>(city_builder.Append(user.city));
+      static_cast<void>(salary_builder.Append(user.salary));
 
       std::shared_ptr<arrow::Array> name_array, age_array, city_array,
           salary_array;
-      ASSERT_TRUE(name_builder.Finish(&name_array).ok());
-      ASSERT_TRUE(age_builder.Finish(&age_array).ok());
-      ASSERT_TRUE(city_builder.Finish(&city_array).ok());
-      ASSERT_TRUE(salary_builder.Finish(&salary_array).ok());
+      ASSERT_OK(name_builder.Finish(&name_array));
+      ASSERT_OK(age_builder.Finish(&age_array));
+      ASSERT_OK(city_builder.Finish(&city_array));
+      ASSERT_OK(salary_builder.Finish(&salary_array));
 
       std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
           {"name", name_array},
@@ -115,14 +118,14 @@ class WhereExpressionTest : public ::testing::Test {
       arrow::Int64Builder size_builder;
       arrow::StringBuilder city_builder;
 
-      name_builder.Append(company.name);
-      size_builder.Append(company.size);
-      city_builder.Append(company.city);
+      static_cast<void>(name_builder.Append(company.name));
+      static_cast<void>(size_builder.Append(company.size));
+      static_cast<void>(city_builder.Append(company.city));
 
       std::shared_ptr<arrow::Array> name_array, size_array, city_array;
-      ASSERT_TRUE(name_builder.Finish(&name_array).ok());
-      ASSERT_TRUE(size_builder.Finish(&size_array).ok());
-      ASSERT_TRUE(city_builder.Finish(&city_array).ok());
+      ASSERT_OK(name_builder.Finish(&name_array));
+      ASSERT_OK(size_builder.Finish(&size_array));
+      ASSERT_OK(city_builder.Finish(&city_array));
 
       std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
           {"name", name_array}, {"size", size_array}, {"city", city_array}};
@@ -162,7 +165,7 @@ TEST_F(WhereExpressionTest, SimpleWhereCondition) {
   Query query = Query::from("u:User").where("u.age", CompareOp::Gt, 40).build();
 
   auto result = db_->query(query);
-  ASSERT_TRUE(result.ok()) << result.status().ToString();
+  ASSERT_OK(result);
 
   auto table = result.ValueOrDie()->table();
   ASSERT_EQ(table->num_rows(), 4);  // Charlie(45), Eve(55), Henry(60), Jack(42)
@@ -183,7 +186,7 @@ TEST_F(WhereExpressionTest, CompoundWhereAndFluent) {
                     .build();
 
   auto result = db_->query(query);
-  ASSERT_TRUE(result.ok()) << result.status().ToString();
+  ASSERT_OK(result);
 
   auto table = result.ValueOrDie()->table();
   ASSERT_EQ(table->num_rows(), 3);  // Bob(35,NYC), Eve(55,NYC), Henry(60,NYC)
@@ -209,7 +212,7 @@ TEST_F(WhereExpressionTest, CompoundWhereOrFluent) {
 
   std::cout << query.clauses().size() << std::endl;
   auto result = db_->query(query);
-  ASSERT_TRUE(result.ok()) << result.status().ToString();
+  ASSERT_OK(result);
 
   auto table = result.ValueOrDie()->table();
   ASSERT_EQ(table->num_rows(),
@@ -247,7 +250,7 @@ TEST_F(WhereExpressionTest, ComplexExpressionWithPrecedence) {
   Query query = Query::from("u:User").where_logical_expr(final_expr).build();
 
   auto result = db_->query(query);
-  ASSERT_TRUE(result.ok()) << result.status().ToString();
+  ASSERT_OK(result);
 
   auto table = result.ValueOrDie()->table();
   ASSERT_EQ(table->num_rows(), 3);  // Bob, Eve, Henry
@@ -276,7 +279,7 @@ TEST_F(WhereExpressionTest, InlineWhereSimple) {
                     .build();
 
   auto result = db_->query(query);
-  ASSERT_TRUE(result.ok()) << result.status().ToString();
+  ASSERT_OK(result);
 
   auto table = result.ValueOrDie()->table();
   // Should find: Alice->Charlie(45), Bob->Charlie(45), Charlie->Eve(55)
@@ -300,7 +303,7 @@ TEST_F(WhereExpressionTest, InlineWhereCompound) {
                     .build();
 
   auto result = db_->query(query);
-  ASSERT_TRUE(result.ok()) << result.status().ToString();
+  ASSERT_OK(result);
 
   auto table = result.ValueOrDie()->table();
   // Should find: Alice->Bob(35,NYC), Bob->Nothing (Charlie is SF),
@@ -333,7 +336,7 @@ TEST_F(WhereExpressionTest, MultipleDifferentPrecedence) {
                          .build();
 
   auto result_left = db_->query(query_left);
-  ASSERT_TRUE(result_left.ok());
+  ASSERT_OK(result_left);
   auto table_left = result_left.ValueOrDie()->table();
 
   // Explicit precedence: age > 40 AND (city = "LA" OR salary > 100000)
@@ -352,7 +355,7 @@ TEST_F(WhereExpressionTest, MultipleDifferentPrecedence) {
       Query::from("u:User").where_logical_expr(final_expr).build();
 
   auto result_explicit = db_->query(query_explicit);
-  ASSERT_TRUE(result_explicit.ok());
+  ASSERT_OK(result_explicit);
   auto table_explicit = result_explicit.ValueOrDie()->table();
 
   // Results should be different due to precedence:
@@ -461,17 +464,17 @@ TEST_F(WhereExpressionTest, PerformanceComparison) {
     arrow::StringBuilder city_builder;
     arrow::Int64Builder salary_builder;
 
-    name_builder.Append("User" + std::to_string(i));
-    age_builder.Append(20 + (i % 50));
-    city_builder.Append(i % 2 == 0 ? "NYC" : "SF");
-    salary_builder.Append(50000 + (i * 100));
+    static_cast<void>(name_builder.Append("User" + std::to_string(i)));
+    static_cast<void>(age_builder.Append(20 + (i % 50)));
+    static_cast<void>(city_builder.Append(i % 2 == 0 ? "NYC" : "SF"));
+    static_cast<void>(salary_builder.Append(50000 + (i * 100)));
 
     std::shared_ptr<arrow::Array> name_array, age_array, city_array,
         salary_array;
-    ASSERT_TRUE(name_builder.Finish(&name_array).ok());
-    ASSERT_TRUE(age_builder.Finish(&age_array).ok());
-    ASSERT_TRUE(city_builder.Finish(&city_array).ok());
-    ASSERT_TRUE(salary_builder.Finish(&salary_array).ok());
+    ASSERT_OK(name_builder.Finish(&name_array));
+    ASSERT_OK(age_builder.Finish(&age_array));
+    ASSERT_OK(city_builder.Finish(&city_array));
+    ASSERT_OK(salary_builder.Finish(&salary_array));
 
     std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
         {"name", name_array},
@@ -491,7 +494,7 @@ TEST_F(WhereExpressionTest, PerformanceComparison) {
                     .build();
 
   auto result = db_->query(query);
-  ASSERT_TRUE(result.ok());
+  ASSERT_OK(result);
 
   auto end = std::chrono::high_resolution_clock::now();
   auto duration =
@@ -515,16 +518,17 @@ TEST_F(WhereExpressionTest, OrWithMultipleVariablesNotInlined) {
 
   // Create a user that will match the first part but not the second part of the
   // OR
-  name_builder.Append("TestUser");
-  age_builder.Append(30);     // This will match a.age == 30
-  city_builder.Append("LA");  // This will NOT match a.city == "NYC"
-  salary_builder.Append(50000);
+  static_cast<void>(name_builder.Append("TestUser"));
+  static_cast<void>(age_builder.Append(30));  // This will match a.age == 30
+  static_cast<void>(
+      city_builder.Append("LA"));  // This will NOT match a.city == "NYC"
+  static_cast<void>(salary_builder.Append(50000));
 
   std::shared_ptr<arrow::Array> name_array, age_array, city_array, salary_array;
-  ASSERT_TRUE(name_builder.Finish(&name_array).ok());
-  ASSERT_TRUE(age_builder.Finish(&age_array).ok());
-  ASSERT_TRUE(city_builder.Finish(&city_array).ok());
-  ASSERT_TRUE(salary_builder.Finish(&salary_array).ok());
+  ASSERT_OK(name_builder.Finish(&name_array));
+  ASSERT_OK(age_builder.Finish(&age_array));
+  ASSERT_OK(city_builder.Finish(&city_array));
+  ASSERT_OK(salary_builder.Finish(&salary_array));
 
   std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
       {"name", name_array},
@@ -539,15 +543,16 @@ TEST_F(WhereExpressionTest, OrWithMultipleVariablesNotInlined) {
   arrow::Int64Builder company_size_builder;
   arrow::StringBuilder company_city_builder;
 
-  company_name_builder.Append("TestCompany");
-  company_size_builder.Append(2000);  // This will match c.size > 1000
-  company_city_builder.Append("NYC");
+  static_cast<void>(company_name_builder.Append("TestCompany"));
+  static_cast<void>(
+      company_size_builder.Append(2000));  // This will match c.size > 1000
+  static_cast<void>(company_city_builder.Append("NYC"));
 
   std::shared_ptr<arrow::Array> company_name_array, company_size_array,
       company_city_array;
-  ASSERT_TRUE(company_name_builder.Finish(&company_name_array).ok());
-  ASSERT_TRUE(company_size_builder.Finish(&company_size_array).ok());
-  ASSERT_TRUE(company_city_builder.Finish(&company_city_array).ok());
+  ASSERT_OK(company_name_builder.Finish(&company_name_array));
+  ASSERT_OK(company_size_builder.Finish(&company_size_array));
+  ASSERT_OK(company_city_builder.Finish(&company_city_array));
 
   std::unordered_map<std::string, std::shared_ptr<arrow::Array>> company_data =
       {{"name", company_name_array},
@@ -584,7 +589,7 @@ TEST_F(WhereExpressionTest, OrWithMultipleVariablesNotInlined) {
                     .build();
 
   auto result = db_->query(query);
-  ASSERT_TRUE(result.ok()) << result.status().ToString();
+  ASSERT_OK(result);
 
   auto table = result.ValueOrDie()->table();
 
@@ -619,7 +624,7 @@ TEST_F(WhereExpressionTest, TraversalWhereCombinations) {
                       .build();
 
     auto result = db_->query(query);
-    ASSERT_TRUE(result.ok()) << result.status().ToString();
+    ASSERT_OK(result);
 
     auto table = result.ValueOrDie()->table();
     ASSERT_EQ(table->num_rows(), 1);  // Charlie (45) have companies
@@ -639,7 +644,7 @@ TEST_F(WhereExpressionTest, TraversalWhereCombinations2) {
                     .build();
 
   auto result = db_->query(query);
-  ASSERT_TRUE(result.ok()) << result.status().ToString();
+  ASSERT_OK(result);
 
   auto table = result.ValueOrDie()->table();
   ASSERT_EQ(table->num_rows(),
@@ -664,7 +669,7 @@ TEST_F(WhereExpressionTest, TraversalWhereCombinations3) {
           .build();
 
   auto result = db_->query(query);
-  ASSERT_TRUE(result.ok()) << result.status().ToString();
+  ASSERT_OK(result);
 
   auto table = result.ValueOrDie()->table();
   ASSERT_EQ(table->num_rows(), 0);

@@ -721,7 +721,6 @@ struct RowNode {
   void insert_row_dfs(size_t path_idx, const Row& new_row) {
     if (path_idx == new_row.path.size()) {
       this->row = new_row;
-      this->depth = depth;
       return;
     }
 
