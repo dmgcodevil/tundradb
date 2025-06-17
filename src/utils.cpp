@@ -7,13 +7,11 @@
 
 namespace tundradb {
 
-// Implementation of stringifyArrowScalar
 std::string stringify_arrow_scalar(
     const std::shared_ptr<arrow::ChunkedArray>& column, const int64_t row_idx) {
   int chunk_idx = 0;
   int64_t chunk_row = row_idx;
 
-  // Find the correct chunk
   while (chunk_idx < column->num_chunks() &&
          chunk_row >= column->chunk(chunk_idx)->length()) {
     chunk_row -= column->chunk(chunk_idx)->length();

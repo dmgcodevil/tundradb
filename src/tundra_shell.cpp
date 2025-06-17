@@ -120,7 +120,6 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
     std::string schema_name = ctx->IDENTIFIER()->getText();
     spdlog::info("Creating schema: {}", schema_name);
 
-    // Extract schema fields
     std::vector<std::shared_ptr<arrow::Field>> arrow_fields;
     auto fieldList = ctx->schemaFieldList();
     for (auto field : fieldList->schemaField()) {
@@ -143,7 +142,6 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
 
     auto arrow_schema = arrow::schema(arrow_fields);
 
-    // Add schema to registry
     auto schema_registry = db.get_schema_registry();
     auto result = schema_registry->create(schema_name, arrow_schema);
     if (!result.ok()) {
@@ -161,14 +159,12 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
     std::string node_type = ctx->IDENTIFIER()->getText();
     spdlog::info("Creating node of type: {}", node_type);
 
-    // Extract properties
     std::unordered_map<std::string, std::string> properties;
     auto propList = ctx->propertyList();
     for (auto prop : propList->propertyAssignment()) {
       std::string prop_name = prop->IDENTIFIER()->getText();
       std::string prop_value = prop->value()->getText();
 
-      // Debug: Print the raw property value
       std::cout << "DEBUG: Raw property " << prop_name << "=" << prop_value
                 << std::endl;
 
@@ -181,11 +177,9 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
       properties[prop_name] = prop_value;
     }
 
-    // Create node and add to database
     auto schema_registry = db.get_schema_registry();
     auto schema = schema_registry->get(node_type).ValueOrDie();
 
-    // Build data map for node creation
     std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data;
 
     for (const auto& field : schema->fields()) {
@@ -197,19 +191,16 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
         continue;
       }
 
-      // Check if property exists
       if (properties.find(field_name) == properties.end()) {
         throw std::runtime_error("Missing property: " + field_name);
       }
 
       const auto& value_str = properties[field_name];
 
-      // Debug: Print the value that will be converted
       std::cout << "DEBUG: Converting field " << field_name
                 << " (type=" << field_type->ToString() << ") from value '"
                 << value_str << "'" << std::endl;
 
-      // Create array based on field type
       if (field_type->id() == arrow::Type::STRING) {
         arrow::StringBuilder builder;
         auto status = builder.Append(value_str);
@@ -274,8 +265,6 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
             throw std::runtime_error("Empty value for FLOAT64 field");
           }
 
-          // Check if value is a valid floating-point number
-          // Allow digits, decimal point, and optional sign
           bool is_numeric = !cleaned_value.empty() &&
                             cleaned_value.find_first_not_of(
                                 "0123456789.+-eE") == std::string::npos;
@@ -320,11 +309,9 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
     spdlog::info("Creating {} edge of type: {}", is_unique ? "UNIQUE" : "",
                  edge_type);
 
-    // Extract source and target node selectors
     auto sourceSelector = ctx->nodeSelector(0);
     auto targetSelector = ctx->nodeSelector(1);
 
-    // Resolve source nodes
     std::vector<int64_t> source_ids = resolveNodeSelector(sourceSelector);
     std::vector<int64_t> target_ids = resolveNodeSelector(targetSelector);
 
@@ -342,7 +329,6 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
       }
     }
 
-    // Create edges for all combinations
     int edge_count = 0;
     for (auto source_id : source_ids) {
       for (auto target_id : target_ids) {
@@ -374,11 +360,9 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
       tundraql::TundraQLParser::MatchStatementContext* ctx) override {
     spdlog::info("Executing MATCH query");
 
-    // Get the pattern list
     auto patternList = ctx->patternList();
     auto patterns = patternList->pathPattern();
 
-    // Initialize query builder with the first pattern
     auto query_builder = processPathPattern(patterns[0]);
 
     // Process any additional patterns (after commas)
@@ -389,13 +373,11 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
       processAdditionalPattern(query_builder, patterns[p]);
     }
 
-    // Process WHERE clause if present
     if (ctx->whereClause()) {
       spdlog::info("Processing WHERE clause");
       processWhereClause(query_builder, ctx->whereClause());
     }
 
-    // Process SELECT clause if present
     if (ctx->selectClause()) {
       auto selectClause = ctx->selectClause();
       std::vector<std::string> columns;
@@ -403,11 +385,9 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
       for (auto field : selectClause->selectField()) {
         std::string column_name;
         if (field->IDENTIFIER().size() > 1) {
-          // Table qualified column: u.name
           column_name = field->IDENTIFIER(0)->getText() + "." +
                         field->IDENTIFIER(1)->getText();
         } else {
-          // Just table prefix: u
           column_name = field->IDENTIFIER(0)->getText();
         }
 
@@ -417,7 +397,6 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
       query_builder.select(columns);
     }
 
-    // Build the query and execute it
     auto query = query_builder.build();
     auto result = db.query(query);
     if (!result.ok()) {
@@ -426,7 +405,6 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
     }
     auto result_table = result.ValueOrDie()->table();
 
-    // Print results
     writeResultSeparator("MATCH");
     *g_output_stream << "\nQuery results:\n";
     printTableAsAscii(result_table);
@@ -440,31 +418,24 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
     auto nodes = pathPattern->nodePattern();
     auto edges = pathPattern->edgePattern();
 
-    // Add first node
     auto firstNode = nodes[0];
     std::string node_alias = firstNode->IDENTIFIER(0)->getText();
     std::string node_type;
 
-    // Check if node type is specified
     if (firstNode->IDENTIFIER().size() > 1) {
       node_type = firstNode->IDENTIFIER(1)->getText();
     } else {
-      // If no type specified, use alias as type
       node_type = node_alias;
     }
 
-    // Start the query builder with FROM clause
     auto query_builder = tundradb::Query::from(node_alias + ":" + node_type);
 
-    // Process each edge and subsequent node
     for (size_t i = 0; i < edges.size(); i++) {
       auto edge = edges[i];
       auto nextNode = nodes[i + 1];
 
-      // Determine edge direction
       bool outgoing = edge->GT() != nullptr;
 
-      // Get edge type if specified
       std::string edge_type;
       if (edge->IDENTIFIER() != nullptr) {
         edge_type = edge->IDENTIFIER()->getText();
@@ -472,7 +443,6 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
         edge_type = "";  // Default edge type
       }
 
-      // Determine join type
       tundradb::TraverseType traverse_type = tundradb::TraverseType::Inner;
       if (edge->joinSpecifier()) {
         if (edge->joinSpecifier()->K_LEFT()) {
@@ -484,7 +454,6 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
         }
       }
 
-      // Get target node type
       std::string target_alias = nextNode->IDENTIFIER(0)->getText();
       std::string target_type;
 
@@ -494,15 +463,12 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
         target_type = target_alias;
       }
 
-      // Get source node alias
       std::string source_alias = nodes[i]->IDENTIFIER(0)->getText();
 
-      // Add the traverse to the query
       if (outgoing) {
         query_builder.traverse(source_alias, edge_type,
                                target_alias + ":" + target_type, traverse_type);
       } else {
-        // For incoming edges, swap source and target
         query_builder.traverse(target_alias + ":" + target_type, edge_type,
                                source_alias, traverse_type);
       }
@@ -518,15 +484,12 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
     auto nodes = pathPattern->nodePattern();
     auto edges = pathPattern->edgePattern();
 
-    // Process each edge and subsequent node
     for (size_t i = 0; i < edges.size(); i++) {
       auto edge = edges[i];
       auto nextNode = nodes[i + 1];
 
-      // Determine edge direction
       bool outgoing = edge->GT() != nullptr;
 
-      // Get edge type if specified
       std::string edge_type;
       if (edge->IDENTIFIER() != nullptr) {
         edge_type = edge->IDENTIFIER()->getText();
@@ -534,7 +497,6 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
         edge_type = "";  // Default edge type
       }
 
-      // Determine join type
       tundradb::TraverseType traverse_type = tundradb::TraverseType::Inner;
       if (edge->joinSpecifier()) {
         if (edge->joinSpecifier()->K_LEFT()) {
@@ -546,7 +508,6 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
         }
       }
 
-      // Get target node type
       std::string target_alias = nextNode->IDENTIFIER(0)->getText();
       std::string target_type;
 
@@ -556,10 +517,8 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
         target_type = target_alias;
       }
 
-      // Get source node alias
       std::string source_alias = nodes[i]->IDENTIFIER(0)->getText();
 
-      // Add the traverse to the query
       if (outgoing) {
         query_builder.traverse(source_alias, edge_type,
                                target_alias + ":" + target_type, traverse_type);
@@ -577,17 +536,12 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
       tundraql::TundraQLParser::WhereClauseContext* whereClause) {
     auto expression = whereClause->expression();
 
-    // Try to build a complex WHERE expression using the new method
-    auto whereExpr = buildWhereExpression(expression);
-    if (whereExpr) {
-      // Successfully built a complex expression with AND/OR support
-      query_builder.where_logical_expr(whereExpr);
+    if (auto where_expr = buildWhereExpression(expression)) {
+      query_builder.where_logical_expr(where_expr);
       spdlog::info("Added complex WHERE expression with AND/OR support");
       return;
     }
 
-    // Fallback to simple expression handling for single terms
-    // Check if this is a simple single comparison
     if (expression->orExpression() &&
         expression->orExpression()->andExpression().size() == 1 &&
         expression->orExpression()
@@ -603,14 +557,11 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
                       ->primaryExpression(0)
                       ->term();
 
-      // Check if the term has a comparison operator
       if (term->EQ() || term->NEQ() || term->GT() || term->LT() ||
           term->GTE() || term->LTE()) {
-        // Get the left and right operands
         auto leftFactor = term->factor(0);
         auto rightFactor = term->factor(1);
 
-        // Get the field name (should be in format alias.field)
         std::string fieldName;
         if (leftFactor->IDENTIFIER().size() == 2) {
           fieldName = leftFactor->IDENTIFIER(0)->getText() + "." +
@@ -621,7 +572,6 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
           return;
         }
 
-        // Get the comparison operator
         tundradb::CompareOp op;
         if (term->EQ())
           op = tundradb::CompareOp::Eq;
@@ -640,12 +590,10 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
           return;
         }
 
-        // Get the value from the right operand
         tundradb::Value value;
         if (rightFactor->value()) {
           auto valueNode = rightFactor->value();
           if (valueNode->INTEGER_LITERAL()) {
-            // Integer value
             try {
               int64_t intValue =
                   std::stoll(valueNode->INTEGER_LITERAL()->getText());
@@ -657,7 +605,6 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
               return;
             }
           } else if (valueNode->FLOAT_LITERAL()) {
-            // Float value
             try {
               double doubleValue =
                   std::stod(valueNode->FLOAT_LITERAL()->getText());
@@ -669,9 +616,7 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
               return;
             }
           } else if (valueNode->STRING_LITERAL()) {
-            // String value (remove quotes)
             std::string stringValue = valueNode->STRING_LITERAL()->getText();
-            // Remove surrounding quotes
             if (stringValue.size() >= 2 && stringValue.front() == '"' &&
                 stringValue.back() == '"') {
               stringValue = stringValue.substr(1, stringValue.size() - 2);
@@ -683,8 +628,7 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
             spdlog::warn("Unsupported value type in WHERE clause");
             return;
           }
-        } else if (rightFactor->IDENTIFIER().size() > 0) {
-          // Handle field comparison (not implemented yet)
+        } else if (!rightFactor->IDENTIFIER().empty()) {
           spdlog::warn("Field comparison in WHERE clause not supported yet");
           return;
         } else {
@@ -692,7 +636,6 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
           return;
         }
 
-        // Add the WHERE clause to the query builder
         query_builder.where(fieldName, op, value);
         spdlog::info("Added WHERE condition: {}", fieldName);
       }
@@ -746,7 +689,6 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
                          << "): " << result.status().ToString() << std::endl;
       }
     } else if (deleteTarget->nodePattern()) {
-      // DELETE (u:User); - Delete nodes by pattern
       auto nodePattern = deleteTarget->nodePattern();
       std::string alias = nodePattern->IDENTIFIER(0)->getText();
       std::string schema_name;
@@ -757,15 +699,12 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
         schema_name = alias;
       }
 
-      // Build a query to find matching nodes
       auto query_builder = tundradb::Query::from(alias + ":" + schema_name);
 
-      // Process WHERE clause if present
       if (ctx->whereClause()) {
         processWhereClause(query_builder, ctx->whereClause());
       }
 
-      // Execute the query to find nodes to delete
       auto query = query_builder.build();
       auto result = db.query(query);
       if (!result.ok()) {
@@ -776,7 +715,6 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
 
       auto result_table = result.ValueOrDie()->table();
 
-      // Get the ID column to find which nodes to delete
       auto id_column = result_table->GetColumnByName("id");
       if (!id_column) {
         *g_output_stream << "No ID column found in query result" << std::endl;
@@ -1225,116 +1163,102 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
     }
 
     // Check if the term has a comparison operator
-    if (!(term->EQ() || term->NEQ() || term->GT() || term->LT() ||
-          term->GTE() || term->LTE())) {
-      spdlog::warn("Term does not have a comparison operator");
-      return nullptr;
-    }
+    if (term->EQ() || term->NEQ() || term->GT() || term->LT() || term->GTE() ||
+        term->LTE()) {
+      auto leftFactor = term->factor(0);
+      auto rightFactor = term->factor(1);
 
-    // Get the left and right operands
-    auto leftFactor = term->factor(0);
-    auto rightFactor = term->factor(1);
-
-    if (!leftFactor || !rightFactor) {
-      spdlog::warn("Term missing left or right factor");
-      return nullptr;
-    }
-
-    // Get the field name (should be in format alias.field)
-    std::string fieldName;
-    if (leftFactor->IDENTIFIER().size() == 2) {
-      fieldName = leftFactor->IDENTIFIER(0)->getText() + "." +
-                  leftFactor->IDENTIFIER(1)->getText();
-    } else {
-      spdlog::warn("WHERE clause field must be in format alias.field");
-      return nullptr;
-    }
-
-    // Get the comparison operator
-    tundradb::CompareOp op;
-    if (term->EQ())
-      op = tundradb::CompareOp::Eq;
-    else if (term->NEQ())
-      op = tundradb::CompareOp::NotEq;
-    else if (term->GT())
-      op = tundradb::CompareOp::Gt;
-    else if (term->LT())
-      op = tundradb::CompareOp::Lt;
-    else if (term->GTE())
-      op = tundradb::CompareOp::Gte;
-    else if (term->LTE())
-      op = tundradb::CompareOp::Lte;
-    else {
-      spdlog::warn("Unsupported comparison operator in WHERE clause");
-      return nullptr;
-    }
-
-    // Get the value from the right operand
-    tundradb::Value value;
-    if (rightFactor->value()) {
-      auto valueNode = rightFactor->value();
-      if (valueNode->INTEGER_LITERAL()) {
-        // Integer value
-        try {
-          int64_t intValue =
-              std::stoll(valueNode->INTEGER_LITERAL()->getText());
-          value = tundradb::Value(intValue);
-          spdlog::debug("WHERE condition: {} {} {}", fieldName,
-                        static_cast<int>(op), intValue);
-        } catch (const std::exception& e) {
-          spdlog::error("Failed to parse integer literal: {}", e.what());
-          return nullptr;
-        }
-      } else if (valueNode->FLOAT_LITERAL()) {
-        // Float value
-        try {
-          double doubleValue = std::stod(valueNode->FLOAT_LITERAL()->getText());
-          value = tundradb::Value(doubleValue);
-          spdlog::debug("WHERE condition: {} {} {}", fieldName,
-                        static_cast<int>(op), doubleValue);
-        } catch (const std::exception& e) {
-          spdlog::error("Failed to parse float literal: {}", e.what());
-          return nullptr;
-        }
-      } else if (valueNode->STRING_LITERAL()) {
-        // String value (remove quotes)
-        std::string stringValue = valueNode->STRING_LITERAL()->getText();
-        // Remove surrounding quotes
-        if (stringValue.size() >= 2 && stringValue.front() == '"' &&
-            stringValue.back() == '"') {
-          stringValue = stringValue.substr(1, stringValue.size() - 2);
-        }
-        value = tundradb::Value(stringValue);
-        spdlog::debug("WHERE condition: {} {} \"{}\"", fieldName,
-                      static_cast<int>(op), stringValue);
+      std::string fieldName;
+      if (leftFactor->IDENTIFIER().size() == 2) {
+        fieldName = leftFactor->IDENTIFIER(0)->getText() + "." +
+                    leftFactor->IDENTIFIER(1)->getText();
       } else {
-        spdlog::warn("Unsupported value type in WHERE clause");
+        // Can't handle just a field name without alias
+        spdlog::warn("WHERE clause field must be in format alias.field");
         return nullptr;
       }
-    } else if (rightFactor->IDENTIFIER().size() > 0) {
-      // Handle field comparison (not implemented yet)
-      spdlog::warn("Field comparison in WHERE clause not supported yet");
-      return nullptr;
-    } else {
-      spdlog::warn("Invalid right operand in WHERE clause");
-      return nullptr;
+
+      tundradb::CompareOp op;
+      if (term->EQ())
+        op = tundradb::CompareOp::Eq;
+      else if (term->NEQ())
+        op = tundradb::CompareOp::NotEq;
+      else if (term->GT())
+        op = tundradb::CompareOp::Gt;
+      else if (term->LT())
+        op = tundradb::CompareOp::Lt;
+      else if (term->GTE())
+        op = tundradb::CompareOp::Gte;
+      else if (term->LTE())
+        op = tundradb::CompareOp::Lte;
+      else {
+        spdlog::warn("Unsupported comparison operator in WHERE clause");
+        return nullptr;
+      }
+
+      tundradb::Value value;
+      if (rightFactor->value()) {
+        auto valueNode = rightFactor->value();
+        if (valueNode->INTEGER_LITERAL()) {
+          try {
+            int64_t intValue =
+                std::stoll(valueNode->INTEGER_LITERAL()->getText());
+            value = tundradb::Value(intValue);
+            spdlog::debug("WHERE condition: {} {} {}", fieldName,
+                          static_cast<int>(op), intValue);
+          } catch (const std::exception& e) {
+            spdlog::error("Failed to parse integer literal: {}", e.what());
+            return nullptr;
+          }
+        } else if (valueNode->FLOAT_LITERAL()) {
+          try {
+            double doubleValue =
+                std::stod(valueNode->FLOAT_LITERAL()->getText());
+            value = tundradb::Value(doubleValue);
+            spdlog::debug("WHERE condition: {} {} {}", fieldName,
+                          static_cast<int>(op), doubleValue);
+          } catch (const std::exception& e) {
+            spdlog::error("Failed to parse float literal: {}", e.what());
+            return nullptr;
+          }
+        } else if (valueNode->STRING_LITERAL()) {
+          std::string stringValue = valueNode->STRING_LITERAL()->getText();
+          // Remove surrounding quotes
+          if (stringValue.size() >= 2 && stringValue.front() == '"' &&
+              stringValue.back() == '"') {
+            stringValue = stringValue.substr(1, stringValue.size() - 2);
+          }
+          value = tundradb::Value(stringValue);
+          spdlog::debug("WHERE condition: {} {} \"{}\"", fieldName,
+                        static_cast<int>(op), stringValue);
+        } else {
+          spdlog::warn("Unsupported value type in WHERE clause");
+          return nullptr;
+        }
+      } else if (rightFactor->IDENTIFIER().size() > 0) {
+        // Handle field comparison (not implemented yet)
+        spdlog::warn("Field comparison in WHERE clause not supported yet");
+        return nullptr;
+      } else {
+        spdlog::warn("Invalid right operand in WHERE clause");
+        return nullptr;
+      }
+
+      // Create and return the comparison expression
+      return std::make_shared<tundradb::ComparisonExpr>(fieldName, op, value);
     }
 
-    // Create and return the comparison expression
-    return std::make_shared<tundradb::ComparisonExpr>(fieldName, op, value);
+    return nullptr;
   }
 };
 
 // Custom formatter for tables using ASCII art
 void printTableAsAscii(const std::shared_ptr<arrow::Table>& table) {
-  // Basic ASCII table implementation
-
   if (!table || table->num_columns() == 0) {
     *g_output_stream << "Empty table" << std::endl;
     return;
   }
 
-  // Get column names and determine column widths
   std::vector<std::string> column_names;
   std::vector<size_t> column_widths;
 
@@ -1344,7 +1268,6 @@ void printTableAsAscii(const std::shared_ptr<arrow::Table>& table) {
     column_widths.push_back(name.length() + 2);  // Add padding
   }
 
-  // Update column widths based on data
   for (int i = 0; i < table->num_columns(); i++) {
     auto column = table->column(i);
     for (int64_t j = 0; j < column->length(); j++) {
@@ -1668,7 +1591,6 @@ bool executeScriptFile(const std::string& script_path, tundradb::Database& db) {
 }
 
 int main(int argc, char* argv[]) {
-  // Parse command-line arguments
   std::string db_path = "./test-db";
   std::string script_file = "";
   std::string output_file = "";
@@ -1676,7 +1598,6 @@ int main(int argc, char* argv[]) {
   bool detach_mode = false;
   bool debug_mode = false;
 
-  // Simple argument parsing
   for (int i = 1; i < argc; i++) {
     std::string arg = argv[i];
     if (arg == "--db-path" || arg == "-d") {
@@ -1729,7 +1650,6 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  // Set up logging level based on debug mode
   if (debug_mode) {
     tundradb::Logger::get_instance().set_level(tundradb::LogLevel::DEBUG);
     std::cout << "Debug logging enabled\n";
@@ -1737,7 +1657,6 @@ int main(int argc, char* argv[]) {
     tundradb::Logger::get_instance().set_level(tundradb::LogLevel::INFO);
   }
 
-  // Create unique database path if requested
   if (unique_db) {
     auto now = std::chrono::system_clock::now();
     auto time_t = std::chrono::system_clock::to_time_t(now);
@@ -1753,7 +1672,6 @@ int main(int argc, char* argv[]) {
     std::cout << "Using unique database path: " << db_path << std::endl;
   }
 
-  // Initialize database with the specified path
   auto config = tundradb::make_config()
                     .with_db_path(db_path)
                     .with_shard_capacity(1000)
@@ -1771,19 +1689,14 @@ int main(int argc, char* argv[]) {
   std::cout << "TundraDB Shell\n";
   std::cout << "Type 'exit' to quit\n";
   std::cout << "Database path: " << db_path << "\n";
-
-  // Set up output redirection if specified
   setOutputStream(output_file);
 
-  // Execute script file if provided
   if (!script_file.empty()) {
     std::cout << "\n";
     if (!executeScriptFile(script_file, db)) {
       std::cerr << "Script execution failed, but continuing with interactive "
                    "shell...\n";
     }
-
-    // If detach mode is enabled, exit after script execution
     if (detach_mode) {
       if (g_output_file.is_open()) {
         g_output_file.close();
@@ -1797,57 +1710,42 @@ int main(int argc, char* argv[]) {
     std::cout << "Type 'exit' to quit\n\n";
   }
 
-  // Set up linenoise
   linenoiseSetCompletionCallback(completionCallback);
   linenoiseSetHintsCallback(hintsCallback);
   linenoiseHistorySetMaxLen(1000);
 
-  // Load history from file if exists
   std::string history_file = db_path + "/tundra_history.txt";
   linenoiseHistoryLoad(history_file.c_str());
 
-  // Define multi-line mode state
-  bool multi_line_mode = false;
   std::string input;
 
-  // Main input loop
   char* line;
   while ((line = linenoise("tundra> ")) != nullptr) {
-    // Skip empty lines
     if (strlen(line) == 0) {
       free(line);
       continue;
     }
 
-    // Handle exit command
     if (strcmp(line, "exit") == 0) {
       free(line);
       break;
     }
 
-    // Add line to history
     linenoiseHistoryAdd(line);
     linenoiseHistorySave(history_file.c_str());
-
-    // Process the line
     std::string line_str(line);
     free(line);
 
-    // Accumulate input until we get a semicolon
     input += line_str;
 
-    // Check if the query is complete (ends with semicolon)
     if (input.find(';') != std::string::npos) {
       executeStatement(input, db);
-      // Clear input for next command
       input.clear();
     } else {
-      // Incomplete query, add a space for continuation
       input += " ";
     }
   }
 
-  // Clean up output file if it was opened
   if (g_output_file.is_open()) {
     g_output_file.close();
   }
