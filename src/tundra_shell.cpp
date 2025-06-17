@@ -1668,13 +1668,13 @@ bool executeScriptFile(const std::string& script_path, tundradb::Database& db) {
 }
 
 int main(int argc, char* argv[]) {
-  tundradb::Logger::get_instance().set_level(tundradb::LogLevel::INFO);
   // Parse command-line arguments
   std::string db_path = "./test-db";
   std::string script_file = "";
   std::string output_file = "";
   bool unique_db = false;
   bool detach_mode = false;
+  bool debug_mode = false;
 
   // Simple argument parsing
   for (int i = 1; i < argc; i++) {
@@ -1704,6 +1704,8 @@ int main(int argc, char* argv[]) {
       unique_db = true;
     } else if (arg == "--detach" || arg == "--batch") {
       detach_mode = true;
+    } else if (arg == "--debug") {
+      debug_mode = true;
     } else if (arg == "--help" || arg == "-h") {
       std::cout
           << "Usage: tundra_shell [OPTIONS]\n"
@@ -1717,6 +1719,7 @@ int main(int argc, char* argv[]) {
           << "      --temp-db        (alias for --unique-db)\n"
           << "      --detach         Exit after script execution (batch mode)\n"
           << "      --batch          (alias for --detach)\n"
+          << "      --debug          Enable debug logging\n"
           << "  -h, --help           Show this help message\n";
       return 0;
     } else {
@@ -1724,6 +1727,14 @@ int main(int argc, char* argv[]) {
       std::cerr << "Use --help for usage information\n";
       return 1;
     }
+  }
+
+  // Set up logging level based on debug mode
+  if (debug_mode) {
+    tundradb::Logger::get_instance().set_level(tundradb::LogLevel::DEBUG);
+    std::cout << "Debug logging enabled\n";
+  } else {
+    tundradb::Logger::get_instance().set_level(tundradb::LogLevel::INFO);
   }
 
   // Create unique database path if requested
