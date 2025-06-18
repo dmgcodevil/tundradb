@@ -131,234 +131,6 @@ class WhereExpr {
   virtual bool can_inline(const std::string& variable) const = 0;
 };
 
-class Where : public Clause {
- private:
-  std::string field_;
-  CompareOp op_;
-  Value value_;
-  bool inlined_ = false;
-
- public:
-  Where(std::string field, CompareOp op, Value value)
-      : field_(std::move(field)), op_(op), value_(std::move(value)) {}
-
-  [[nodiscard]] Type type() const override { return Type::WHERE; }
-
-  [[nodiscard]] const std::string& field() const { return field_; }
-  [[nodiscard]] CompareOp op() const { return op_; }
-  [[nodiscard]] const Value& value() const { return value_; }
-
-  [[nodiscard]] bool inlined() const { return inlined_; }
-  void set_inlined(bool p) { inlined_ = p; }
-
-  [[nodiscard]] std::string toString() const {
-    std::stringstream ss;
-    ss << "WHERE " << field_;
-
-    switch (op_) {
-      case CompareOp::Eq:
-        ss << " = ";
-        break;
-      case CompareOp::NotEq:
-        ss << " != ";
-        break;
-      case CompareOp::Gt:
-        ss << " > ";
-        break;
-      case CompareOp::Lt:
-        ss << " < ";
-        break;
-      case CompareOp::Gte:
-        ss << " >= ";
-        break;
-      case CompareOp::Lte:
-        ss << " <= ";
-        break;
-      case CompareOp::Contains:
-        ss << " CONTAINS ";
-        break;
-      case CompareOp::StartsWith:
-        ss << " STARTS_WITH ";
-        break;
-      case CompareOp::EndsWith:
-        ss << " ENDS_WITH ";
-        break;
-    }
-
-    // convert value to string based on its type
-    switch (value_.type()) {
-      case ValueType::Null:
-        ss << "NULL";
-        break;
-      case ValueType::Int64:
-        ss << value_.get<int64_t>();
-        break;
-      case ValueType::Double:
-        ss << value_.get<double>();
-        break;
-      case ValueType::String:
-        ss << "'" << value_.get<std::string>() << "'";
-        break;
-      case ValueType::Bool:
-        ss << (value_.get<bool>() ? "true" : "false");
-        break;
-    }
-
-    if (inlined_) {
-      ss << " (inlined)";
-    }
-
-    return ss.str();
-  }
-
-  friend std::ostream& operator<<(std::ostream& os, const Where& where) {
-    os << where.toString();
-    return os;
-  }
-
-  arrow::Result<bool> matches(const std::shared_ptr<Node>& node) const {
-    if (!node) {
-      return arrow::Status::Invalid("Node is null");
-    }
-
-    // parse field name to extract variable and field parts
-    // expected format: "variable.field" (e.g., "user.age", "company.name")
-    size_t dot_pos = field_.find('.');
-    std::string field_name;
-
-    if (dot_pos != std::string::npos) {
-      field_name = field_.substr(dot_pos + 1);
-    } else {
-      field_name = field_;
-    }
-
-    ARROW_ASSIGN_OR_RAISE(auto field_array, node->get_field(field_name));
-
-    if (!field_array || field_array->length() == 0) {
-      return arrow::Status::Invalid("Field '", field_name, "' is empty");
-    }
-
-    if (field_array->IsNull(0)) {
-      switch (op_) {
-        case CompareOp::Eq:
-          return value_.type() == ValueType::Null;
-        case CompareOp::NotEq:
-          return value_.type() != ValueType::Null;
-        default:
-          return false;
-      }
-    }
-    return compare_values(field_array, value_, op_);
-  }
-
- private:
-  static arrow::Result<bool> compare_values(
-      const std::shared_ptr<arrow::Array>& field_array,
-      const Value& where_value, CompareOp op) {
-    switch (field_array->type_id()) {
-      case arrow::Type::INT64: {
-        auto int_array =
-            std::static_pointer_cast<arrow::Int64Array>(field_array);
-        int64_t field_val = int_array->Value(0);
-
-        if (where_value.type() != ValueType::Int64) {
-          return arrow::Status::Invalid(
-              "Type mismatch: field is Int64 but WHERE value is not");
-        }
-
-        int64_t where_val = where_value.get<int64_t>();
-        return apply_comparison(field_val, where_val, op);
-      }
-
-      case arrow::Type::STRING: {
-        auto str_array =
-            std::static_pointer_cast<arrow::StringArray>(field_array);
-        std::string field_val = str_array->GetString(0);
-
-        if (where_value.type() != ValueType::String) {
-          return arrow::Status::Invalid(
-              "Type mismatch: field is String but WHERE value is not");
-        }
-
-        std::string where_val = where_value.get<std::string>();
-        return apply_comparison(field_val, where_val, op);
-      }
-
-      case arrow::Type::DOUBLE: {
-        auto double_array =
-            std::static_pointer_cast<arrow::DoubleArray>(field_array);
-        double field_val = double_array->Value(0);
-
-        if (where_value.type() != ValueType::Double) {
-          return arrow::Status::Invalid(
-              "Type mismatch: field is Double but WHERE value is not");
-        }
-
-        double where_val = where_value.get<double>();
-        return apply_comparison(field_val, where_val, op);
-      }
-
-      case arrow::Type::BOOL: {
-        auto bool_array =
-            std::static_pointer_cast<arrow::BooleanArray>(field_array);
-        bool field_val = bool_array->Value(0);
-
-        if (where_value.type() != ValueType::Bool) {
-          return arrow::Status::Invalid(
-              "Type mismatch: field is Bool but WHERE value is not");
-        }
-
-        bool where_val = where_value.get<bool>();
-        return apply_comparison(field_val, where_val, op);
-      }
-
-      default:
-        return arrow::Status::NotImplemented("Unsupported field type: ",
-                                             field_array->type()->ToString());
-    }
-  }
-
-  template <typename T>
-  static bool apply_comparison(const T& field_val, const T& where_val,
-                               CompareOp op) {
-    switch (op) {
-      case CompareOp::Eq:
-        return field_val == where_val;
-      case CompareOp::NotEq:
-        return field_val != where_val;
-      case CompareOp::Gt:
-        return field_val > where_val;
-      case CompareOp::Lt:
-        return field_val < where_val;
-      case CompareOp::Gte:
-        return field_val >= where_val;
-      case CompareOp::Lte:
-        return field_val <= where_val;
-      case CompareOp::Contains:
-        if constexpr (std::is_same_v<T, std::string>) {
-          return field_val.find(where_val) != std::string::npos;
-        } else {
-          return false;
-        }
-      case CompareOp::StartsWith:
-        if constexpr (std::is_same_v<T, std::string>) {
-          return field_val.find(where_val) == 0;
-        } else {
-          return false;
-        }
-      case CompareOp::EndsWith:
-        if constexpr (std::is_same_v<T, std::string>) {
-          return field_val.size() >= where_val.size() &&
-                 field_val.substr(field_val.size() - where_val.size()) ==
-                     where_val;
-        } else {
-          return false;
-        }
-    }
-    return false;
-  }
-};
-
 enum class TraverseType { Inner, Left, Right, Full };
 
 class Traverse final : public Clause {
@@ -404,6 +176,128 @@ class ComparisonExpr : public Clause, public WhereExpr {
   CompareOp op_;
   Value value_;
   bool inlined_ = false;
+
+  static arrow::Result<bool> compare_values(const Value& value, CompareOp op,
+                                            const Value& where_value) {
+    if (value.type() == ValueType::Null ||
+        where_value.type() == ValueType::Null) {
+      switch (op) {
+        case CompareOp::Eq:
+          return value.type() == ValueType::Null &&
+                 where_value.type() == ValueType::Null;
+        case CompareOp::NotEq:
+          return value.type() != ValueType::Null ||
+                 where_value.type() != ValueType::Null;
+        default:
+          return arrow::Status::Invalid(
+              "Null values can only be compared with == or !=");
+      }
+    }
+
+    if (op == CompareOp::Contains || op == CompareOp::StartsWith ||
+        op == CompareOp::EndsWith) {
+      if (value.type() != ValueType::String ||
+          where_value.type() != ValueType::String) {
+        return arrow::Status::Invalid(
+            "String operations (CONTAINS, STARTS_WITH, ENDS_WITH) can only be "
+            "applied to string values");
+      }
+    }
+
+    if (value.type() == ValueType::Bool ||
+        where_value.type() == ValueType::Bool) {
+      if (value.type() != ValueType::Bool ||
+          where_value.type() != ValueType::Bool) {
+        return arrow::Status::Invalid(
+            "Boolean values can only be compared with other boolean values");
+      }
+      if (op != CompareOp::Eq && op != CompareOp::NotEq) {
+        return arrow::Status::Invalid(
+            "Boolean values can only be compared with == or !=");
+      }
+    }
+
+    if (value.type() != where_value.type()) {
+      return arrow::Status::Invalid("Type mismatch: field is ", value.type(),
+                                    " but WHERE value is ", where_value.type());
+    }
+
+    switch (value.type()) {
+      case ValueType::Int32: {
+        int32_t field_val = value.get<int32_t>();
+        int32_t where_val = where_value.get<int32_t>();
+        return apply_comparison(field_val, op, where_val);
+      }
+      case ValueType::Int64: {
+        int64_t field_val = value.get<int64_t>();
+        int64_t where_val = where_value.get<int64_t>();
+        return apply_comparison(field_val, op, where_val);
+      }
+      case ValueType::Float: {
+        float field_val = value.get<float>();
+        float where_val = where_value.get<float>();
+        return apply_comparison(field_val, op, where_val);
+      }
+      case ValueType::Double: {
+        double field_val = value.get<double>();
+        double where_val = where_value.get<double>();
+        return apply_comparison(field_val, op, where_val);
+      }
+      case ValueType::String: {
+        const std::string& field_val = value.get<std::string>();
+        const std::string& where_val = where_value.get<std::string>();
+        return apply_comparison(field_val, op, where_val);
+      }
+      case ValueType::Bool: {
+        bool field_val = value.get<bool>();
+        bool where_val = where_value.get<bool>();
+        return apply_comparison(field_val, op, where_val);
+      }
+      case ValueType::Null:
+        return arrow::Status::Invalid("Unexpected null value in comparison");
+      default:
+        return arrow::Status::NotImplemented(
+            "Unsupported value type for comparison: ", value.type());
+    }
+  }
+
+  template <typename T>
+  static bool apply_comparison(const T& field_val, const CompareOp op,
+                               const T& where_val) {
+    switch (op) {
+      case CompareOp::Eq:
+        return field_val == where_val;
+      case CompareOp::NotEq:
+        return field_val != where_val;
+      case CompareOp::Gt:
+        return field_val > where_val;
+      case CompareOp::Lt:
+        return field_val < where_val;
+      case CompareOp::Gte:
+        return field_val >= where_val;
+      case CompareOp::Lte:
+        return field_val <= where_val;
+      case CompareOp::Contains:
+        if constexpr (std::is_same_v<T, std::string>) {
+          return field_val.contains(where_val);
+        } else {
+          return false;
+        }
+      case CompareOp::StartsWith:
+        if constexpr (std::is_same_v<T, std::string>) {
+          return field_val.starts_with(where_val);
+        } else {
+          return false;
+        }
+      case CompareOp::EndsWith:
+        if constexpr (std::is_same_v<T, std::string>) {
+          return field_val.ends_with(where_val);
+        } else {
+          return false;
+        }
+    }
+    return false;
+  }
 
  public:
   ComparisonExpr(std::string field, CompareOp op, Value value)
@@ -455,8 +349,14 @@ class ComparisonExpr : public Clause, public WhereExpr {
       case ValueType::Null:
         ss << "NULL";
         break;
+      case ValueType::Int32:
+        ss << value_.get<int32_t>();
+        break;
       case ValueType::Int64:
         ss << value_.get<int64_t>();
+        break;
+      case ValueType::Float:
+        ss << value_.get<float>();
         break;
       case ValueType::Double:
         ss << value_.get<double>();
@@ -499,23 +399,8 @@ class ComparisonExpr : public Clause, public WhereExpr {
       field_name = field_;
     }
 
-    ARROW_ASSIGN_OR_RAISE(auto field_array, node->get_field(field_name));
-
-    if (!field_array || field_array->length() == 0) {
-      return arrow::Status::Invalid("Field '", field_name, "' is empty");
-    }
-
-    if (field_array->IsNull(0)) {
-      switch (op_) {
-        case CompareOp::Eq:
-          return value_.type() == ValueType::Null;
-        case CompareOp::NotEq:
-          return value_.type() != ValueType::Null;
-        default:
-          return false;
-      }
-    }
-    return compare_values(field_array, value_, op_);
+    ARROW_ASSIGN_OR_RAISE(auto field_value, node->get_field(field_name));
+    return compare_values(field_value, op_, value_);
   }
 
   arrow::compute::Expression to_arrow_expression(
@@ -574,60 +459,6 @@ class ComparisonExpr : public Clause, public WhereExpr {
   }
 
  private:
-  static arrow::Result<bool> compare_values(
-      const std::shared_ptr<arrow::Array>& field_array,
-      const Value& where_value, CompareOp op) {
-    switch (field_array->type_id()) {
-      case arrow::Type::INT64: {
-        auto int_array =
-            std::static_pointer_cast<arrow::Int64Array>(field_array);
-        int64_t field_val = int_array->Value(0);
-        if (where_value.type() != ValueType::Int64) {
-          return arrow::Status::Invalid(
-              "Type mismatch: field is Int64 but WHERE value is not");
-        }
-        int64_t where_val = where_value.get<int64_t>();
-        return apply_comparison(field_val, where_val, op);
-      }
-      case arrow::Type::STRING: {
-        auto str_array =
-            std::static_pointer_cast<arrow::StringArray>(field_array);
-        std::string field_val = str_array->GetString(0);
-        if (where_value.type() != ValueType::String) {
-          return arrow::Status::Invalid(
-              "Type mismatch: field is String but WHERE value is not");
-        }
-        std::string where_val = where_value.get<std::string>();
-        return apply_comparison(field_val, where_val, op);
-      }
-      case arrow::Type::DOUBLE: {
-        auto double_array =
-            std::static_pointer_cast<arrow::DoubleArray>(field_array);
-        double field_val = double_array->Value(0);
-        if (where_value.type() != ValueType::Double) {
-          return arrow::Status::Invalid(
-              "Type mismatch: field is Double but WHERE value is not");
-        }
-        double where_val = where_value.get<double>();
-        return apply_comparison(field_val, where_val, op);
-      }
-      case arrow::Type::BOOL: {
-        auto bool_array =
-            std::static_pointer_cast<arrow::BooleanArray>(field_array);
-        bool field_val = bool_array->Value(0);
-        if (where_value.type() != ValueType::Bool) {
-          return arrow::Status::Invalid(
-              "Type mismatch: field is Bool but WHERE value is not");
-        }
-        bool where_val = where_value.get<bool>();
-        return apply_comparison(field_val, where_val, op);
-      }
-      default:
-        return arrow::Status::NotImplemented("Unsupported field type: ",
-                                             field_array->type()->ToString());
-    }
-  }
-
   template <typename T>
   static bool apply_comparison(const T& field_val, const T& where_val,
                                CompareOp op) {

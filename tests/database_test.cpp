@@ -53,20 +53,9 @@ class DatabaseTest : public ::testing::Test {
   std::vector<std::shared_ptr<Node>> createUsers(Database& db, int count) {
     std::vector<std::shared_ptr<Node>> nodes;
     for (int i = 0; i < count; i++) {
-      // Create name array
-      arrow::StringBuilder name_builder;
-      EXPECT_TRUE(name_builder.Append("user" + std::to_string(i)).ok());
-      std::shared_ptr<arrow::Array> name_array;
-      EXPECT_TRUE(name_builder.Finish(&name_array).ok());
-
-      // Create age array
-      arrow::Int64Builder age_builder;
-      EXPECT_TRUE(age_builder.Append(20 + i).ok());
-      std::shared_ptr<arrow::Array> age_array;
-      EXPECT_TRUE(age_builder.Finish(&age_array).ok());
-
-      std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
-          {"name", name_array}, {"age", age_array}};
+      std::unordered_map<std::string, Value> data = {
+          {"name", Value{"user" + std::to_string(i)}},
+          {"age", Value{int64_t(20 + i)}}};
 
       auto node = db.create_node("users", data).ValueOrDie();
       nodes.push_back(node);
@@ -614,18 +603,7 @@ TEST_F(DatabaseTest, VerifyUpdatedFlag) {
   EXPECT_TRUE(is_clean) << "Shard should be marked as clean after snapshot";
 
   // Update a node
-  arrow::Int64Builder age_builder;
-  EXPECT_TRUE(age_builder.Append(30).ok());
-  std::shared_ptr<arrow::Array> age_array;
-  EXPECT_TRUE(age_builder.Finish(&age_array).ok());
-
-  std::unordered_map<std::string, std::shared_ptr<arrow::Array>> new_data = {
-      {"age", age_array}};
-
-  // Use SetOperation instead of BaseOperation
-  auto update = std::make_shared<SetOperation>(
-      0, std::vector<std::string>{"age"}, age_array);
-  db->update_node(update).ValueOrDie();
+  db->update_node(0, "age", int64_t(30), SET).ValueOrDie();
 
   // Verify shard is marked as updated again
   is_clean = shard_manager->is_shard_clean("users", 0).ValueOrDie();

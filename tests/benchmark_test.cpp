@@ -13,6 +13,7 @@
 #include "../include/logger.hpp"
 #include "../include/metadata.hpp"
 #include "../include/query.hpp"
+#include "../include/types.hpp"
 
 // Helper macro for Arrow operations
 #define ASSERT_OK(expr) ASSERT_TRUE((expr).ok())
@@ -84,19 +85,9 @@ class BenchmarkFixture {
       std::string name = names[rng_() % names.size()] + "_" + std::to_string(i);
       int64_t age = 18 + (rng_() % 62);  // Ages 18-80
 
-      // Create Arrow arrays
-      arrow::StringBuilder name_builder;
-      arrow::Int64Builder age_builder;
-
-      ASSERT_OK(name_builder.Append(name));
-      ASSERT_OK(age_builder.Append(age));
-
-      std::shared_ptr<arrow::Array> name_array, age_array;
-      ASSERT_OK(name_builder.Finish(&name_array));
-      ASSERT_OK(age_builder.Finish(&age_array));
-
-      std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
-          {"name", name_array}, {"age", age_array}};
+      // Create data using Value objects
+      std::unordered_map<std::string, Value> data = {{"name", Value(name)},
+                                                     {"age", Value(age)}};
 
       db_->create_node("User", data).ValueOrDie();
     }
@@ -114,22 +105,11 @@ class BenchmarkFixture {
       int64_t size = 10 + (rng_() % 9990);  // Size 10-10000
       std::string industry = industries[rng_() % industries.size()];
 
-      arrow::StringBuilder name_builder, industry_builder;
-      arrow::Int64Builder size_builder;
-
-      ASSERT_OK(name_builder.Append(name));
-      ASSERT_OK(size_builder.Append(size));
-      ASSERT_OK(industry_builder.Append(industry));
-
-      std::shared_ptr<arrow::Array> name_array, size_array, industry_array;
-      ASSERT_OK(name_builder.Finish(&name_array));
-      ASSERT_OK(size_builder.Finish(&size_array));
-      ASSERT_OK(industry_builder.Finish(&industry_array));
-
-      std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
-          {"name", name_array},
-          {"size", size_array},
-          {"industry", industry_array}};
+      // Create data using Value objects
+      std::unordered_map<std::string, Value> data = {
+          {"name", Value(name)},
+          {"size", Value(size)},
+          {"industry", Value(industry)}};
 
       db_->create_node("Company", data).ValueOrDie();
     }
@@ -147,22 +127,11 @@ class BenchmarkFixture {
       int64_t price = 10 + (rng_() % 1990);  // Price $10-$2000
       std::string category = categories[rng_() % categories.size()];
 
-      arrow::StringBuilder name_builder, category_builder;
-      arrow::Int64Builder price_builder;
-
-      ASSERT_OK(name_builder.Append(name));
-      ASSERT_OK(price_builder.Append(price));
-      ASSERT_OK(category_builder.Append(category));
-
-      std::shared_ptr<arrow::Array> name_array, price_array, category_array;
-      ASSERT_OK(name_builder.Finish(&name_array));
-      ASSERT_OK(price_builder.Finish(&price_array));
-      ASSERT_OK(category_builder.Finish(&category_array));
-
-      std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
-          {"name", name_array},
-          {"price", price_array},
-          {"category", category_array}};
+      // Create data using Value objects
+      std::unordered_map<std::string, Value> data = {
+          {"name", Value(name)},
+          {"price", Value(price)},
+          {"category", Value(category)}};
 
       db_->create_node("Product", data).ValueOrDie();
     }

@@ -4,8 +4,8 @@
 #include <tuple>
 #include <vector>
 
+#include "../include/arrow_utils.hpp"
 #include "../include/core.hpp"
-
 using namespace tundradb;
 
 class ShardingTest : public ::testing::Test {
@@ -40,9 +40,8 @@ class ShardingTest : public ::testing::Test {
   // Create a test node with specified name and count
   std::shared_ptr<Node> create_test_node(const std::string& name,
                                          int64_t count) {
-    std::unordered_map<std::string, std::shared_ptr<arrow::Array>> fields = {
-        {"name", create_str_array(name).ValueOrDie()},
-        {"count", create_int64_array(count).ValueOrDie()}};
+    std::unordered_map<std::string, Value> fields = {{"name", Value{name}},
+                                                     {"count", Value{count}}};
 
     auto result = db->create_node("test-schema", fields);
     EXPECT_TRUE(result.ok())
@@ -92,13 +91,7 @@ TEST_F(ShardingTest, AddAndRetrieveNodes) {
 TEST_F(ShardingTest, UpdateNodes) {
   // Create a node
   auto node = create_test_node("Original", 0);
-
-  // Update the node
-  auto update =
-      std::make_shared<SetOperation>(node->id, std::vector<std::string>{"name"},
-                                     create_str_array("Updated").ValueOrDie());
-
-  auto update_result = db->update_node(update);
+  auto update_result = db->update_node(node->id, "name", Value{"Updated"}, SET);
   ASSERT_TRUE(update_result.ok())
       << "Failed to update node: " << update_result.status().ToString();
 
@@ -122,12 +115,7 @@ TEST_F(ShardingTest, Compaction) {
   }
 
   // Now remove some nodes to create gaps
-  auto update =
-      std::make_shared<SetOperation>(1,  // Remove node with ID 1
-                                     std::vector<std::string>{"name"},
-                                     create_str_array("Removed").ValueOrDie());
-
-  auto update_result = db->update_node(update);
+  auto update_result = db->update_node(1, "name", Value{"Removed"}, SET);
   ASSERT_TRUE(update_result.ok());
 
   // Compact the schema
@@ -220,8 +208,8 @@ class CompactionTest : public ::testing::TestWithParam<CompactionScenario> {
 
   // Create a test node with a counter value
   std::shared_ptr<Node> create_node(int64_t counter) {
-    std::unordered_map<std::string, std::shared_ptr<arrow::Array>> fields = {
-        {"counter", create_int64_array(counter).ValueOrDie()}};
+    std::unordered_map<std::string, Value> fields = {
+        {"counter", Value{counter}}};
 
     auto result = db->create_node("test-schema", fields);
     EXPECT_TRUE(result.ok())

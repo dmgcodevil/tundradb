@@ -107,39 +107,73 @@ arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(
   TableInfo table_info(table);
 
   for (int64_t row_idx = 0; row_idx < table->num_rows(); ++row_idx) {
-    std::unordered_map<std::string, std::shared_ptr<arrow::Array>> node_data;
+    std::unordered_map<std::string, Value> node_data;
+    int64_t node_id = -1;
+
     for (int col_idx = 0; col_idx < table->num_columns(); ++col_idx) {
       auto column_name = table->schema()->field(col_idx)->name();
       auto column = table->column(col_idx);
       auto chunk_loc = table_info.get_chunk_info(col_idx, row_idx);
       auto chunk = column->chunk(chunk_loc.chunk_index);
-      std::shared_ptr<arrow::Array> value_array;
 
       switch (chunk->type_id()) {
         case arrow::Type::INT64: {
-          arrow::Int64Builder builder;
-          if (auto typed_chunk =
-                  std::static_pointer_cast<arrow::Int64Array>(chunk);
-              typed_chunk->IsNull(chunk_loc.offset_in_chunk)) {
-            ARROW_RETURN_NOT_OK(builder.AppendNull());
+          auto typed_chunk = std::static_pointer_cast<arrow::Int64Array>(chunk);
+          if (typed_chunk->IsNull(chunk_loc.offset_in_chunk)) {
+            node_data[column_name] = Value();  // Null value
           } else {
-            ARROW_RETURN_NOT_OK(
-                builder.Append(typed_chunk->Value(chunk_loc.offset_in_chunk)));
+            int64_t value = typed_chunk->Value(chunk_loc.offset_in_chunk);
+            node_data[column_name] = Value(value);
+
+            // Store node ID if this is the ID column
+            if (column_name == "id") {
+              node_id = value;
+            }
           }
-          ARROW_RETURN_NOT_OK(builder.Finish(&value_array));
           break;
         }
         case arrow::Type::STRING: {
-          arrow::StringBuilder builder;
           auto typed_chunk =
               std::static_pointer_cast<arrow::StringArray>(chunk);
           if (typed_chunk->IsNull(chunk_loc.offset_in_chunk)) {
-            ARROW_RETURN_NOT_OK(builder.AppendNull());
+            node_data[column_name] = Value();
           } else {
-            ARROW_RETURN_NOT_OK(builder.Append(
-                typed_chunk->GetString(chunk_loc.offset_in_chunk)));
+            std::string value =
+                typed_chunk->GetString(chunk_loc.offset_in_chunk);
+            node_data[column_name] = Value(value);
           }
-          ARROW_RETURN_NOT_OK(builder.Finish(&value_array));
+          break;
+        }
+        case arrow::Type::DOUBLE: {
+          auto typed_chunk =
+              std::static_pointer_cast<arrow::DoubleArray>(chunk);
+          if (typed_chunk->IsNull(chunk_loc.offset_in_chunk)) {
+            node_data[column_name] = Value();
+          } else {
+            double value = typed_chunk->Value(chunk_loc.offset_in_chunk);
+            node_data[column_name] = Value(value);
+          }
+          break;
+        }
+        case arrow::Type::BOOL: {
+          auto typed_chunk =
+              std::static_pointer_cast<arrow::BooleanArray>(chunk);
+          if (typed_chunk->IsNull(chunk_loc.offset_in_chunk)) {
+            node_data[column_name] = Value();
+          } else {
+            bool value = typed_chunk->Value(chunk_loc.offset_in_chunk);
+            node_data[column_name] = Value(value);
+          }
+          break;
+        }
+        case arrow::Type::INT32: {
+          auto typed_chunk = std::static_pointer_cast<arrow::Int32Array>(chunk);
+          if (typed_chunk->IsNull(chunk_loc.offset_in_chunk)) {
+            node_data[column_name] = Value();
+          } else {
+            int32_t value = typed_chunk->Value(chunk_loc.offset_in_chunk);
+            node_data[column_name] = Value(value);
+          }
           break;
         }
         // Add more types as needed
@@ -147,13 +181,11 @@ arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(
           return arrow::Status::NotImplemented("Unsupported column type: ",
                                                chunk->type()->ToString());
       }
-
-      node_data[column_name] = value_array;
     }
 
-    auto id_array =
-        std::static_pointer_cast<arrow::Int64Array>(node_data["id"]);
-    int64_t node_id = id_array->Value(0);
+    if (node_id == -1) {
+      return arrow::Status::Invalid("Node missing required 'id' field");
+    }
 
     auto node =
         std::make_shared<Node>(node_id, shard_metadata.schema_name, node_data);

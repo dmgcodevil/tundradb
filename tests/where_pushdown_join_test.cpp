@@ -27,11 +27,11 @@ class WherePushdownJoinTest : public ::testing::Test {
  protected:
   void SetUp() override {
     auto user_name_field = arrow::field("name", arrow::utf8());
-    auto user_age_field = arrow::field("age", arrow::int64());
+    auto user_age_field = arrow::field("age", arrow::int32());
     user_schema_ = arrow::schema({user_name_field, user_age_field});
 
     auto company_name_field = arrow::field("name", arrow::utf8());
-    auto company_size_field = arrow::field("size", arrow::int64());
+    auto company_size_field = arrow::field("size", arrow::int32());
     company_schema_ = arrow::schema({company_name_field, company_size_field});
 
     auto db_path_ = "benchmark_db_" + std::to_string(now_millis());
@@ -46,25 +46,14 @@ class WherePushdownJoinTest : public ::testing::Test {
     db_->get_schema_registry()->create("Company", company_schema_).ValueOrDie();
   }
 
-  void create_users(int64_t count) {
+  void create_users(int count) {
     for (int i = 0; i < count; ++i) {
       // Generate user data
       std::string name = "user-" + std::to_string(i);
-      int64_t age = 18 + (rng_() % 62);  // Ages 18-80
+      int32_t age = 18 + (rng_() % 62);  // Ages 18-80
 
-      // Create Arrow arrays
-      arrow::StringBuilder name_builder;
-      arrow::Int64Builder age_builder;
-
-      ASSERT_OK(name_builder.Append(name));
-      ASSERT_OK(age_builder.Append(age));
-
-      std::shared_ptr<arrow::Array> name_array, age_array;
-      ASSERT_OK(name_builder.Finish(&name_array));
-      ASSERT_OK(age_builder.Finish(&age_array));
-
-      std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
-          {"name", name_array}, {"age", age_array}};
+      std::unordered_map<std::string, Value> data = {{"name", Value{name}},
+                                                     {"age", Value{age}}};
 
       db_->create_node("User", data).ValueOrDie();
     }
@@ -72,20 +61,10 @@ class WherePushdownJoinTest : public ::testing::Test {
 
   void create_companies(std::vector<std::string> names) {
     for (const auto& name : names) {
-      int64_t size = 10 + (rng_() % 9990);  // Size 10-10000
+      int32_t size = 10 + (rng_() % 9990);  // Size 10-10000
 
-      arrow::StringBuilder name_builder;
-      arrow::Int64Builder size_builder;
-
-      ASSERT_OK(name_builder.Append(name));
-      ASSERT_OK(size_builder.Append(size));
-
-      std::shared_ptr<arrow::Array> name_array, size_array;
-      ASSERT_OK(name_builder.Finish(&name_array));
-      ASSERT_OK(size_builder.Finish(&size_array));
-
-      std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
-          {"name", name_array}, {"size", size_array}};
+      std::unordered_map<std::string, Value> data = {{"name", Value{name}},
+                                                     {"size", Value{size}}};
 
       db_->create_node("Company", data).ValueOrDie();
     }
@@ -124,11 +103,11 @@ TEST_F(WherePushdownJoinTest, WhereInJoin) {
 
   auto all_friends = result.ValueOrDie()->table();
   auto friends_age =
-      get_column_values<int64_t>(all_friends, "f.age").ValueOrDie();
+      get_column_values<int32_t>(all_friends, "f.age").ValueOrDie();
 
   std::cout << "users with friends: " << all_friends->num_rows() << std::endl;
 
-  int64_t older_than_50 = 0;
+  int32_t older_than_50 = 0;
 
   for (const auto& age : friends_age) {
     if (age > 50) {

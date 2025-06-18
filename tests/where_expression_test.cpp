@@ -23,15 +23,15 @@ class WhereExpressionTest : public ::testing::Test {
   void SetUp() override {
     // Create User schema
     auto user_name_field = arrow::field("name", arrow::utf8());
-    auto user_age_field = arrow::field("age", arrow::int64());
+    auto user_age_field = arrow::field("age", arrow::int32());
     auto user_city_field = arrow::field("city", arrow::utf8());
-    auto user_salary_field = arrow::field("salary", arrow::int64());
+    auto user_salary_field = arrow::field("salary", arrow::int32());
     user_schema_ = arrow::schema(
         {user_name_field, user_age_field, user_city_field, user_salary_field});
 
     // Create Company schema
     auto company_name_field = arrow::field("name", arrow::utf8());
-    auto company_size_field = arrow::field("size", arrow::int64());
+    auto company_size_field = arrow::field("size", arrow::int32());
     auto company_city_field = arrow::field("city", arrow::utf8());
     company_schema_ = arrow::schema(
         {company_name_field, company_size_field, company_city_field});
@@ -55,9 +55,9 @@ class WhereExpressionTest : public ::testing::Test {
     // Create users with diverse data for testing
     struct UserData {
       std::string name;
-      int64_t age;
+      int32_t age;
       std::string city;
-      int64_t salary;
+      int32_t salary;
     };
 
     std::vector<UserData> users = {
@@ -74,29 +74,11 @@ class WhereExpressionTest : public ::testing::Test {
     };
 
     for (const auto& user : users) {
-      // Create Arrow arrays
-      arrow::StringBuilder name_builder;
-      arrow::Int64Builder age_builder;
-      arrow::StringBuilder city_builder;
-      arrow::Int64Builder salary_builder;
-
-      static_cast<void>(name_builder.Append(user.name));
-      static_cast<void>(age_builder.Append(user.age));
-      static_cast<void>(city_builder.Append(user.city));
-      static_cast<void>(salary_builder.Append(user.salary));
-
-      std::shared_ptr<arrow::Array> name_array, age_array, city_array,
-          salary_array;
-      ASSERT_OK(name_builder.Finish(&name_array));
-      ASSERT_OK(age_builder.Finish(&age_array));
-      ASSERT_OK(city_builder.Finish(&city_array));
-      ASSERT_OK(salary_builder.Finish(&salary_array));
-
-      std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
-          {"name", name_array},
-          {"age", age_array},
-          {"city", city_array},
-          {"salary", salary_array}};
+      std::unordered_map<std::string, Value> data = {
+          {"name", Value{user.name}},
+          {"age", Value{user.age}},
+          {"city", Value{user.city}},
+          {"salary", Value{user.salary}}};
 
       auto node = db_->create_node("User", data).ValueOrDie();
       user_nodes_.push_back(node);
@@ -105,7 +87,7 @@ class WhereExpressionTest : public ::testing::Test {
     // Create companies
     struct CompanyData {
       std::string name;
-      int64_t size;
+      int32_t size;
       std::string city;
     };
 
@@ -114,21 +96,10 @@ class WhereExpressionTest : public ::testing::Test {
                                           {"BigCorp", 10000, "LA"}};
 
     for (const auto& company : companies) {
-      arrow::StringBuilder name_builder;
-      arrow::Int64Builder size_builder;
-      arrow::StringBuilder city_builder;
-
-      static_cast<void>(name_builder.Append(company.name));
-      static_cast<void>(size_builder.Append(company.size));
-      static_cast<void>(city_builder.Append(company.city));
-
-      std::shared_ptr<arrow::Array> name_array, size_array, city_array;
-      ASSERT_OK(name_builder.Finish(&name_array));
-      ASSERT_OK(size_builder.Finish(&size_array));
-      ASSERT_OK(city_builder.Finish(&city_array));
-
-      std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
-          {"name", name_array}, {"size", size_array}, {"city", city_array}};
+      std::unordered_map<std::string, Value> data = {
+          {"name", Value{company.name}},
+          {"size", Value{company.size}},
+          {"city", Value{company.city}}};
 
       auto node = db_->create_node("Company", data).ValueOrDie();
       company_nodes_.push_back(node);
@@ -171,7 +142,7 @@ TEST_F(WhereExpressionTest, SimpleWhereCondition) {
   ASSERT_EQ(table->num_rows(), 4);  // Charlie(45), Eve(55), Henry(60), Jack(42)
 
   // Verify all results have age > 40
-  auto ages = get_column_values<int64_t>(table, "u.age").ValueOrDie();
+  auto ages = get_column_values<int32_t>(table, "u.age").ValueOrDie();
   for (auto age : ages) {
     EXPECT_GT(age, 40);
   }
@@ -192,7 +163,7 @@ TEST_F(WhereExpressionTest, CompoundWhereAndFluent) {
   ASSERT_EQ(table->num_rows(), 3);  // Bob(35,NYC), Eve(55,NYC), Henry(60,NYC)
 
   // Verify conditions
-  auto ages = get_column_values<int64_t>(table, "u.age").ValueOrDie();
+  auto ages = get_column_values<int32_t>(table, "u.age").ValueOrDie();
   auto cities = get_column_values<std::string>(table, "u.city").ValueOrDie();
 
   for (size_t i = 0; i < ages.size(); ++i) {
@@ -220,7 +191,7 @@ TEST_F(WhereExpressionTest, CompoundWhereOrFluent) {
 
   // Verify conditions (each row should satisfy at least one condition)
   auto cities = get_column_values<std::string>(table, "u.city").ValueOrDie();
-  auto salaries = get_column_values<int64_t>(table, "u.salary").ValueOrDie();
+  auto salaries = get_column_values<int32_t>(table, "u.salary").ValueOrDie();
 
   for (size_t i = 0; i < cities.size(); ++i) {
     EXPECT_TRUE(cities[i] == "SF" || salaries[i] > 150000)
@@ -256,9 +227,9 @@ TEST_F(WhereExpressionTest, ComplexExpressionWithPrecedence) {
   ASSERT_EQ(table->num_rows(), 3);  // Bob, Eve, Henry
 
   // Verify precedence is correct
-  auto ages = get_column_values<int64_t>(table, "u.age").ValueOrDie();
+  auto ages = get_column_values<int32_t>(table, "u.age").ValueOrDie();
   auto cities = get_column_values<std::string>(table, "u.city").ValueOrDie();
-  auto salaries = get_column_values<int64_t>(table, "u.salary").ValueOrDie();
+  auto salaries = get_column_values<int32_t>(table, "u.salary").ValueOrDie();
 
   for (size_t i = 0; i < ages.size(); ++i) {
     EXPECT_GT(ages[i], 30);  // age > 30 (always true due to AND)
@@ -286,7 +257,7 @@ TEST_F(WhereExpressionTest, InlineWhereSimple) {
   ASSERT_EQ(table->num_rows(), 3);
 
   // Verify all friends have age > 40
-  auto friend_ages = get_column_values<int64_t>(table, "f.age").ValueOrDie();
+  auto friend_ages = get_column_values<int32_t>(table, "f.age").ValueOrDie();
   for (auto age : friend_ages) {
     EXPECT_GT(age, 40);
   }
@@ -311,7 +282,7 @@ TEST_F(WhereExpressionTest, InlineWhereCompound) {
   ASSERT_EQ(table->num_rows(), 2);
 
   // Verify all friends satisfy both conditions
-  auto friend_ages = get_column_values<int64_t>(table, "f.age").ValueOrDie();
+  auto friend_ages = get_column_values<int32_t>(table, "f.age").ValueOrDie();
   auto friend_cities =
       get_column_values<std::string>(table, "f.city").ValueOrDie();
 
@@ -459,28 +430,11 @@ TEST_F(WhereExpressionTest, MultipleVariablesNotInlined) {
 TEST_F(WhereExpressionTest, PerformanceComparison) {
   // Create more test data for performance testing
   for (int i = 0; i < 1000; ++i) {
-    arrow::StringBuilder name_builder;
-    arrow::Int64Builder age_builder;
-    arrow::StringBuilder city_builder;
-    arrow::Int64Builder salary_builder;
-
-    static_cast<void>(name_builder.Append("User" + std::to_string(i)));
-    static_cast<void>(age_builder.Append(20 + (i % 50)));
-    static_cast<void>(city_builder.Append(i % 2 == 0 ? "NYC" : "SF"));
-    static_cast<void>(salary_builder.Append(50000 + (i * 100)));
-
-    std::shared_ptr<arrow::Array> name_array, age_array, city_array,
-        salary_array;
-    ASSERT_OK(name_builder.Finish(&name_array));
-    ASSERT_OK(age_builder.Finish(&age_array));
-    ASSERT_OK(city_builder.Finish(&city_array));
-    ASSERT_OK(salary_builder.Finish(&salary_array));
-
-    std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
-        {"name", name_array},
-        {"age", age_array},
-        {"city", city_array},
-        {"salary", salary_array}};
+    std::unordered_map<std::string, Value> data = {
+        {"name", Value("User" + std::to_string(i))},
+        {"age", Value(20 + (i % 50))},
+        {"city", Value(i % 2 == 0 ? "NYC" : "SF")},
+        {"salary", Value(50000 + (i * 100))}};
 
     db_->create_node("User", data).ValueOrDie();
   }
@@ -511,53 +465,22 @@ TEST_F(WhereExpressionTest, PerformanceComparison) {
 TEST_F(WhereExpressionTest, OrWithMultipleVariablesNotInlined) {
   Logger::get_instance().set_level(LogLevel::DEBUG);
   // Create test data with specific values to test the condition
-  arrow::StringBuilder name_builder;
-  arrow::Int64Builder age_builder;
-  arrow::StringBuilder city_builder;
-  arrow::Int64Builder salary_builder;
 
   // Create a user that will match the first part but not the second part of the
   // OR
-  static_cast<void>(name_builder.Append("TestUser"));
-  static_cast<void>(age_builder.Append(30));  // This will match a.age == 30
-  static_cast<void>(
-      city_builder.Append("LA"));  // This will NOT match a.city == "NYC"
-  static_cast<void>(salary_builder.Append(50000));
-
-  std::shared_ptr<arrow::Array> name_array, age_array, city_array, salary_array;
-  ASSERT_OK(name_builder.Finish(&name_array));
-  ASSERT_OK(age_builder.Finish(&age_array));
-  ASSERT_OK(city_builder.Finish(&city_array));
-  ASSERT_OK(salary_builder.Finish(&salary_array));
-
-  std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
-      {"name", name_array},
-      {"age", age_array},
-      {"city", city_array},
-      {"salary", salary_array}};
+  std::unordered_map<std::string, Value> data = {
+      {"name", Value{"TestUser"}},
+      {"age", Value(30)},     // This will match a.age == 30
+      {"city", Value{"LA"}},  // This will NOT match a.city == "NYC"
+      {"salary", Value(50000)}};
 
   auto user_node = db_->create_node("User", data).ValueOrDie();
 
   // Create a company that will match the second part of the OR
-  arrow::StringBuilder company_name_builder;
-  arrow::Int64Builder company_size_builder;
-  arrow::StringBuilder company_city_builder;
-
-  static_cast<void>(company_name_builder.Append("TestCompany"));
-  static_cast<void>(
-      company_size_builder.Append(2000));  // This will match c.size > 1000
-  static_cast<void>(company_city_builder.Append("NYC"));
-
-  std::shared_ptr<arrow::Array> company_name_array, company_size_array,
-      company_city_array;
-  ASSERT_OK(company_name_builder.Finish(&company_name_array));
-  ASSERT_OK(company_size_builder.Finish(&company_size_array));
-  ASSERT_OK(company_city_builder.Finish(&company_city_array));
-
-  std::unordered_map<std::string, std::shared_ptr<arrow::Array>> company_data =
-      {{"name", company_name_array},
-       {"size", company_size_array},
-       {"city", company_city_array}};
+  std::unordered_map<std::string, Value> company_data = {
+      {"name", Value{"TestCompany"}},
+      {"size", Value(2000)},  // This will match c.size > 1000
+      {"city", Value{"NYC"}}};
 
   auto company_node = db_->create_node("Company", company_data).ValueOrDie();
 
@@ -600,9 +523,9 @@ TEST_F(WhereExpressionTest, OrWithMultipleVariablesNotInlined) {
   ASSERT_EQ(table->num_rows(), 1) << "Query should match one row";
 
   // Verify the matched row has the correct values
-  auto ages = get_column_values<int64_t>(table, "a.age").ValueOrDie();
+  auto ages = get_column_values<int32_t>(table, "a.age").ValueOrDie();
   auto cities = get_column_values<std::string>(table, "a.city").ValueOrDie();
-  auto sizes = get_column_values<int64_t>(table, "c.size").ValueOrDie();
+  auto sizes = get_column_values<int32_t>(table, "c.size").ValueOrDie();
 
   EXPECT_EQ(ages[0], 30);
   EXPECT_EQ(cities[0], "LA");

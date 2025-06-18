@@ -8,136 +8,36 @@
 #include <vector>
 
 #include "schema.hpp"
+#include "types.hpp"
 
 namespace tundradb {
 
-static arrow::Result<std::shared_ptr<arrow::Array>> create_int64_array(
-    const int64_t value) {
-  arrow::Int64Builder int64_builder;
-  ARROW_RETURN_NOT_OK(int64_builder.Reserve(1));
-  ARROW_RETURN_NOT_OK(int64_builder.Append(value));
-  std::shared_ptr<arrow::Array> int64_array;
-  ARROW_RETURN_NOT_OK(int64_builder.Finish(&int64_array));
-  return int64_array;
-}
-
-static arrow::Result<std::shared_ptr<arrow::Array>> create_str_array(
-    const std::string &value) {
-  arrow::StringBuilder builder;
-  ARROW_RETURN_NOT_OK(builder.Append(value));
-  std::shared_ptr<arrow::Array> string_arr;
-  ARROW_RETURN_NOT_OK(builder.Finish(&string_arr));
-  return string_arr;
-}
-
-static arrow::Result<std::shared_ptr<arrow::Array>> create_null_array(
-    const std::shared_ptr<arrow::DataType> &type) {
-  switch (type->id()) {
-    case arrow::Type::INT64: {
-      arrow::Int64Builder builder;
-      ARROW_RETURN_NOT_OK(builder.AppendNull());
-      std::shared_ptr<arrow::Array> array;
-      ARROW_RETURN_NOT_OK(builder.Finish(&array));
-      return array;
-    }
-    case arrow::Type::STRING: {
-      arrow::StringBuilder builder;
-      ARROW_RETURN_NOT_OK(builder.AppendNull());
-      std::shared_ptr<arrow::Array> array;
-      ARROW_RETURN_NOT_OK(builder.Finish(&array));
-      return array;
-    }
-    default:
-      return arrow::Status::NotImplemented("Unsupported type: ",
-                                           type->ToString());
-  }
-}
-
-enum OperationType { SET };
-
-struct BaseOperation {
-  int64_t node_id;
-  std::vector<std::string> field_name;
-
-  BaseOperation(const int64_t id, const std::vector<std::string> &field)
-      : node_id(id), field_name(field) {}
-
-  virtual arrow::Result<bool> apply(const std::shared_ptr<arrow::Array> &array,
-                                    int64_t row_index) const = 0;
-
-  [[nodiscard]] virtual OperationType op_type() const = 0;
-
-  [[nodiscard]] virtual bool should_replace_array() const { return false; }
-  [[nodiscard]] virtual std::shared_ptr<arrow::Array> get_replacement_array()
-      const {
-    return nullptr;
-  }
-
-  virtual ~BaseOperation() = default;
-};
-
-struct SetOperation final : public BaseOperation {
-  std::shared_ptr<arrow::Array> value;
-
-  SetOperation(const int64_t id, const std::vector<std::string> &field,
-               const std::shared_ptr<arrow::Array> &v)
-      : BaseOperation(id, field), value(v) {}
-
-  ~SetOperation() override { value.reset(); }
-
-  arrow::Result<bool> apply(const std::shared_ptr<arrow::Array> &array,
-                            const int64_t row_index) const override {
-    const auto array_data = array->data()->Copy();
-    switch (array->type_id()) {
-      case arrow::Type::INT64: {
-        const auto raw_values = array_data->GetMutableValues<int64_t>(1);
-        raw_values[row_index] =
-            std::static_pointer_cast<arrow::Int64Array>(value)->Value(0);
-        return {true};
-      }
-      default:
-        return arrow::Status::Invalid("not implemented");
-    }
-  }
-
-  [[nodiscard]] OperationType op_type() const override {
-    return OperationType::SET;
-  }
-
-  [[nodiscard]] bool should_replace_array() const override {
-    return value->type_id() == arrow::Type::STRING;
-  }
-
-  [[nodiscard]] std::shared_ptr<arrow::Array> get_replacement_array()
-      const override {
-    return value;
-  }
+enum UpdateType {
+  SET,
+  // todo APPEND for List/Array
 };
 
 class Node {
  private:
-  std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data_;
+  std::unordered_map<std::string, Value> data_;
 
  public:
   int64_t id;
   std::string schema_name;
 
   explicit Node(const int64_t id, std::string schema_name,
-                std::unordered_map<std::string, std::shared_ptr<arrow::Array>>
-                    initial_data)
+                std::unordered_map<std::string, Value> initial_data)
       : data_(std::move(initial_data)),
         id(id),
         schema_name(std::move(schema_name)) {}
 
   ~Node() { data_.clear(); }
 
-  void add_field(const std::string &field_name,
-                 const std::shared_ptr<arrow::Array> &value) {
-    data_.insert(std::make_pair(field_name, value));
+  void add_field(const std::string &field_name, Value value) {
+    data_[field_name] = std::move(value);
   }
 
-  arrow::Result<std::shared_ptr<arrow::Array>> get_field(
-      const std::string &field_name) const {
+  arrow::Result<Value> get_field(const std::string &field_name) const {
     const auto it = data_.find(field_name);
     if (it == data_.end()) {
       return arrow::Status::KeyError("Field not found: ", field_name);
@@ -145,27 +45,28 @@ class Node {
     return it->second;
   }
 
-  [[nodiscard]] const std::unordered_map<std::string,
-                                         std::shared_ptr<arrow::Array>> &
-  data() const {
+  [[nodiscard]] const std::unordered_map<std::string, Value> &data() const {
     return data_;
   }
 
-  arrow::Result<bool> update(const std::shared_ptr<BaseOperation> &update) {
-    if (update->field_name.empty()) {
-      return arrow::Status::Invalid("Field name vector is empty");
+  arrow::Result<bool> update(const std::string &field_name, Value value,
+                             UpdateType update_type) {
+    if (const auto it = data_.find(field_name); it == data_.end()) {
+      return arrow::Status::KeyError("Field not found: ", field_name);
     }
 
-    const auto it = data_.find(update->field_name[0]);
-    if (it == data_.end()) {
-      return arrow::Status::KeyError("Field not found: ",
-                                     update->field_name[0]);
+    switch (update_type) {
+      case SET:
+        data_[field_name] = std::move(value);
+        break;
     }
-    if (update->should_replace_array()) {
-      data_[update->field_name[0]] = update->get_replacement_array();
-      return true;
-    }
-    return update->apply(it->second, 0);
+
+    return true;
+  }
+
+  arrow::Result<bool> set_value(const std::string &field_name,
+                                const Value &value) {
+    return update(field_name, value, SET);
   }
 };
 
@@ -187,9 +88,8 @@ class NodeManager {
 
   arrow::Result<std::shared_ptr<Node>> create_node(
       const std::string &schema_name,
-      const std::unordered_map<std::string, std::shared_ptr<arrow::Array>>
-          &data,
-      std::shared_ptr<SchemaRegistry> schema_registry) {
+      const std::unordered_map<std::string, Value> &data,
+      const std::shared_ptr<SchemaRegistry> &schema_registry) {
     if (schema_name.empty()) {
       return arrow::Status::Invalid("Schema name cannot be empty");
     }
@@ -199,32 +99,29 @@ class NodeManager {
       return arrow::Status::Invalid("'id' column is auto generated");
     }
 
-    std::unordered_map<std::string, std::shared_ptr<arrow::Array>>
-        normalized_data;
+    std::unordered_map<std::string, Value> normalized_data;
     for (const auto &field : schema->fields()) {
       if (field->name() != "id" && !field->nullable() &&
           (!data.contains(field->name()) ||
-           data.find(field->name())->second->IsNull(0))) {
+           data.find(field->name())->second.is_null())) {
         return arrow::Status::Invalid("Field '", field->name(),
                                       "' is required");
       }
       if (!data.contains(field->name())) {
-        normalized_data[field->name()] =
-            create_null_array(field->type()).ValueOrDie();
+        normalized_data[field->name()] = Value();
       } else {
-        const auto array = data.find(field->name())->second;
-        if (!array->type()->Equals(field->type())) {
-          return arrow::Status::Invalid("Type mismatch for field '",
-                                        field->name(), "'. Expected ",
-                                        field->type()->ToString(), " but got ",
-                                        array->type()->ToString());
+        const auto value = data.find(field->name())->second;
+        if (arrow_type_to_value_type(field->type()) != value.type()) {
+          return arrow::Status::Invalid(
+              "Type mismatch for field '", field->name(), "'. Expected ",
+              field->type()->ToString(), " but got ", to_string(value.type()));
         }
-        normalized_data[field->name()] = array;
+        normalized_data[field->name()] = value;
       }
     }
 
     auto id = id_counter.fetch_add(1);
-    normalized_data["id"] = create_int64_array(id).ValueOrDie();
+    normalized_data["id"] = Value{id};
     auto node = std::make_shared<Node>(id, schema_name, normalized_data);
     nodes[id] = node;
     return node;

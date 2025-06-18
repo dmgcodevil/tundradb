@@ -22,9 +22,8 @@ std::string get_test_dir_name() {
 // Helper function to create a user node with given name and age
 std::shared_ptr<Node> create_user_node(Database& db, const std::string& name,
                                        int64_t age) {
-  std::unordered_map<std::string, std::shared_ptr<arrow::Array>> fields = {
-      {"name", create_str_array(name).ValueOrDie()},
-      {"age", create_int64_array(age).ValueOrDie()}};
+  std::unordered_map<std::string, Value> fields = {{"name", Value{name}},
+                                                   {"age", Value{age}}};
 
   return db.create_node("users", fields).ValueOrDie();
 }

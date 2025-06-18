@@ -28,6 +28,7 @@
 #include "core.hpp"
 #include "linenoise.h"
 #include "logger.hpp"
+#include "types.hpp"
 #include "utils.hpp"
 
 // Tee stream class that outputs to both console and file
@@ -180,7 +181,7 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
     auto schema_registry = db.get_schema_registry();
     auto schema = schema_registry->get(node_type).ValueOrDie();
 
-    std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data;
+    std::unordered_map<std::string, tundradb::Value> data;
 
     for (const auto& field : schema->fields()) {
       const auto& field_name = field->name();
@@ -202,22 +203,9 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
                 << value_str << "'" << std::endl;
 
       if (field_type->id() == arrow::Type::STRING) {
-        arrow::StringBuilder builder;
-        auto status = builder.Append(value_str);
-        if (!status.ok()) {
-          throw std::runtime_error("Failed to append string: " +
-                                   status.ToString());
-        }
-        std::shared_ptr<arrow::Array> array;
-        status = builder.Finish(&array);
-        if (!status.ok()) {
-          throw std::runtime_error("Failed to finish string array: " +
-                                   status.ToString());
-        }
-        data[field_name] = array;
+        data[field_name] = tundradb::Value(value_str);
       } else if (field_type->id() == arrow::Type::INT64) {
         try {
-          arrow::Int64Builder builder;
           // Trim any whitespace and quotes that may be present
           std::string cleaned_value = value_str;
           cleaned_value.erase(0, cleaned_value.find_first_not_of(" \t\n\r\""));
@@ -237,25 +225,13 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
 
           int64_t int_value = std::stoll(cleaned_value);
           std::cout << "DEBUG: Converted int value: " << int_value << std::endl;
-          auto status = builder.Append(int_value);
-          if (!status.ok()) {
-            throw std::runtime_error("Failed to append int64: " +
-                                     status.ToString());
-          }
-          std::shared_ptr<arrow::Array> array;
-          status = builder.Finish(&array);
-          if (!status.ok()) {
-            throw std::runtime_error("Failed to finish int64 array: " +
-                                     status.ToString());
-          }
-          data[field_name] = array;
+          data[field_name] = tundradb::Value(int_value);
         } catch (const std::exception& e) {
           throw std::runtime_error("Error converting '" + value_str +
                                    "' to int64: " + e.what());
         }
       } else if (field_type->id() == arrow::Type::DOUBLE) {
         try {
-          arrow::DoubleBuilder builder;
           // Trim any whitespace and quotes that may be present
           std::string cleaned_value = value_str;
           cleaned_value.erase(0, cleaned_value.find_first_not_of(" \t\n\r\""));
@@ -277,21 +253,68 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
           double double_value = std::stod(cleaned_value);
           std::cout << "DEBUG: Converted double value: " << double_value
                     << std::endl;
-          auto status = builder.Append(double_value);
-          if (!status.ok()) {
-            throw std::runtime_error("Failed to append double: " +
-                                     status.ToString());
-          }
-          std::shared_ptr<arrow::Array> array;
-          status = builder.Finish(&array);
-          if (!status.ok()) {
-            throw std::runtime_error("Failed to finish double array: " +
-                                     status.ToString());
-          }
-          data[field_name] = array;
+          data[field_name] = tundradb::Value(double_value);
         } catch (const std::exception& e) {
           throw std::runtime_error("Error converting '" + value_str +
                                    "' to double: " + e.what());
+        }
+      } else if (field_type->id() == arrow::Type::BOOL) {
+        try {
+          // Trim any whitespace and quotes that may be present
+          std::string cleaned_value = value_str;
+          cleaned_value.erase(0, cleaned_value.find_first_not_of(" \t\n\r\""));
+          cleaned_value.erase(cleaned_value.find_last_not_of(" \t\n\r\"") + 1);
+
+          if (cleaned_value.empty()) {
+            throw std::runtime_error("Empty value for BOOL field");
+          }
+
+          // Convert to lowercase for comparison
+          std::transform(cleaned_value.begin(), cleaned_value.end(),
+                         cleaned_value.begin(), ::tolower);
+
+          bool bool_value;
+          if (cleaned_value == "true" || cleaned_value == "1") {
+            bool_value = true;
+          } else if (cleaned_value == "false" || cleaned_value == "0") {
+            bool_value = false;
+          } else {
+            throw std::runtime_error("Invalid boolean value: " + cleaned_value);
+          }
+
+          std::cout << "DEBUG: Converted bool value: " << bool_value
+                    << std::endl;
+          data[field_name] = tundradb::Value(bool_value);
+        } catch (const std::exception& e) {
+          throw std::runtime_error("Error converting '" + value_str +
+                                   "' to bool: " + e.what());
+        }
+      } else if (field_type->id() == arrow::Type::INT32) {
+        try {
+          // Trim any whitespace and quotes that may be present
+          std::string cleaned_value = value_str;
+          cleaned_value.erase(0, cleaned_value.find_first_not_of(" \t\n\r\""));
+          cleaned_value.erase(cleaned_value.find_last_not_of(" \t\n\r\"") + 1);
+
+          if (cleaned_value.empty()) {
+            throw std::runtime_error("Empty value for INT32 field");
+          }
+
+          // Check if all characters are digits
+          bool is_numeric = !cleaned_value.empty() &&
+                            cleaned_value.find_first_not_of("0123456789") ==
+                                std::string::npos;
+          if (!is_numeric) {
+            throw std::runtime_error("Value contains non-digit characters");
+          }
+
+          int32_t int_value = std::stoi(cleaned_value);
+          std::cout << "DEBUG: Converted int32 value: " << int_value
+                    << std::endl;
+          data[field_name] = tundradb::Value(int_value);
+        } catch (const std::exception& e) {
+          throw std::runtime_error("Error converting '" + value_str +
+                                   "' to int32: " + e.what());
         }
       }
     }

@@ -42,10 +42,14 @@ std::string join_container(const Container& container,
 // Convert Value to Arrow compute scalar for expressions
 arrow::compute::Expression value_to_expression(const Value& value) {
   switch (value.type()) {
+    case ValueType::Int32:
+      return arrow::compute::literal(value.get<int32_t>());
     case ValueType::Int64:
       return arrow::compute::literal(value.get<int64_t>());
     case ValueType::String:
       return arrow::compute::literal(value.get<std::string>());
+    case ValueType::Float:
+      return arrow::compute::literal(value.get<float>());
     case ValueType::Double:
       return arrow::compute::literal(value.get<double>());
     case ValueType::Bool:
@@ -55,6 +59,29 @@ arrow::compute::Expression value_to_expression(const Value& value) {
           arrow::Datum(arrow::MakeNullScalar(arrow::null())));
     default:
       throw std::runtime_error("Unsupported value type for Arrow expression");
+  }
+}
+
+// Convert Value to Arrow scalar for builders
+arrow::Result<std::shared_ptr<arrow::Scalar>> value_to_arrow_scalar(
+    const Value& value) {
+  switch (value.type()) {
+    case ValueType::Int32:
+      return arrow::MakeScalar(value.as_int32());
+    case ValueType::Int64:
+      return arrow::MakeScalar(value.as_int64());
+    case ValueType::Double:
+      return arrow::MakeScalar(value.as_double());
+    case ValueType::String:
+      return arrow::MakeScalar(value.as_string());
+    case ValueType::Bool:
+      return arrow::MakeScalar(value.as_bool());
+    case ValueType::Null:
+      return arrow::MakeNullScalar(arrow::null());
+    default:
+      return arrow::Status::NotImplemented(
+          "Unsupported Value type for Arrow scalar conversion: ",
+          tundradb::to_string(value.type()));
   }
 }
 
@@ -133,15 +160,15 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
     for (int i = 0; i < schema->num_fields(); i++) {
       const auto& field_name = schema->field(i)->name();
 
-      // Find the array in the node's data
+      // Find the value in the node's data
       auto res = node->get_field(field_name);
       if (res.ok()) {
-        // Extract the first value from the array and append to builder
-        auto array = res.ValueOrDie();
-        if (array->length() > 0) {
-          auto scalar_result = array->GetScalar(0);
+        // Convert Value to Arrow scalar and append to builder
+        auto value = res.ValueOrDie();
+        if (!value.is_null()) {
+          auto scalar_result = value_to_arrow_scalar(value);
           if (!scalar_result.ok()) {
-            log_error("Failed to get scalar from array for field '{}': {}",
+            log_error("Failed to convert value to scalar for field '{}': {}",
                       field_name, scalar_result.status().ToString());
             return scalar_result.status();
           }
@@ -154,7 +181,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
             return status;
           }
         } else {
-          log_debug("Empty array for field '{}', appending null", field_name);
+          log_debug("Null value for field '{}', appending null", field_name);
           auto status = builders[i]->AppendNull();
           if (!status.ok()) {
             log_error("Failed to append null for field '{}': {}", field_name,
@@ -573,6 +600,20 @@ struct Row {
       auto full_name = schema_ref.value() + "." + name;
       this->set_cell(full_name, value);
     }
+  }
+
+  // New set_cell method for Value objects
+  void set_cell(const std::string& name, const Value& value) {
+    if (!value.is_null()) {
+      auto scalar_result = value_to_arrow_scalar(value);
+      if (scalar_result.ok()) {
+        cells[name] = scalar_result.ValueOrDie();
+        return;
+      }
+    }
+
+    // Default to null if value is null or conversion fails
+    cells[name] = nullptr;
   }
 
   void set_cell(const std::string& name, std::shared_ptr<arrow::Array> array) {

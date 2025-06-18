@@ -191,7 +191,7 @@ class Shard {
   }
 
   arrow::Result<std::shared_ptr<Node>> remove(int64_t id) {
-    auto it = nodes_.find(id);
+    const auto it = nodes_.find(id);
     if (it == nodes_.end()) {
       return arrow::Status::Invalid("Node not found: ", id);
     }
@@ -223,15 +223,17 @@ class Shard {
     return node;
   }
 
-  arrow::Result<bool> update(const std::shared_ptr<BaseOperation> &update) {
+  arrow::Result<bool> update(const int64_t node_id,
+                             const std::string &field_name, const Value &value,
+                             const UpdateType update_type) {
     updated_ = true;
-    if (!nodes_.contains(update->node_id)) {
-      return arrow::Status::KeyError("Node not found: ", update->node_id);
+    if (!nodes_.contains(node_id)) {
+      return arrow::Status::KeyError("Node not found: ", node_id);
     }
     dirty_ = true;
     updated_ = true;
     updated_ts_ = now_millis();
-    return nodes_[update->node_id]->update(update);
+    return nodes_[node_id]->update(field_name, value, update_type);
   }
 
   arrow::Result<std::shared_ptr<arrow::Table>> get_table() {
@@ -315,16 +317,16 @@ class ShardManager {
         chunk_size_(config.get_chunk_size()),
         config_(config) {}
 
-  void set_id_counter(int64_t value) { id_counter_.store(value); }
+  void set_id_counter(const int64_t value) { id_counter_.store(value); }
   int64_t get_id_counter() const { return id_counter_.load(); }
 
-  void set_index_counter(const std::string &schema_name, int64_t value) {
+  void set_index_counter(const std::string &schema_name, const int64_t value) {
     std::lock_guard lock(index_counter_mutex_);
     index_counters_[schema_name].store(value);
   }
 
   arrow::Result<std::shared_ptr<Shard>> get_shard(
-      const std::string &schema_name, int64_t id) {
+      const std::string &schema_name, const int64_t id) {
     return shards_[schema_name][id];
   }
 
@@ -488,13 +490,12 @@ class ShardManager {
 
   arrow::Result<bool> remove_node(const std::string &schema_name,
                                   int64_t node_id) {
-    auto schema_it = shards_.find(schema_name);
-    if (schema_it == shards_.end()) {
+    if (!shards_.contains(schema_name)) {
       return arrow::Status::KeyError("Schema '", schema_name,
                                      "' not found in shards");
     }
 
-    for (const auto &shard : schema_it->second) {
+    for (const auto &shard : shards_[schema_name]) {
       if (node_id >= shard->min_id && node_id <= shard->max_id) {
         if (auto remove_result = shard->remove(node_id); remove_result.ok()) {
           return true;
@@ -506,21 +507,19 @@ class ShardManager {
                                    " not found in schema '", schema_name, "'");
   }
 
-  arrow::Result<bool> update_node(
-      const std::shared_ptr<BaseOperation> &update) {
+  arrow::Result<bool> update_node(const int64_t id,
+                                  const std::string &field_name,
+                                  const Value &value,
+                                  const UpdateType update_type) {
     for (auto &schema_shards : shards_ | std::views::values) {
       for (const auto &shard : schema_shards) {
-        if (update->node_id >= shard->min_id &&
-            update->node_id <= shard->max_id) {
-          auto update_result = shard->update(update);
-          if (update_result.ok()) {
-            return true;
-          }
+        if (id >= shard->min_id && id <= shard->max_id) {
+          return shard->update(id, field_name, value, update_type);
         }
       }
     }
 
-    return arrow::Status::KeyError("Node with id ", update->node_id,
+    return arrow::Status::KeyError("Node with id ", id,
                                    " not found in any schema");
   }
 
@@ -699,7 +698,7 @@ class Database {
 
   arrow::Result<std::shared_ptr<Node>> create_node(
       const std::string &schema_name,
-      std::unordered_map<std::string, std::shared_ptr<arrow::Array>> &data) {
+      std::unordered_map<std::string, Value> &data) {
     if (schema_name.empty()) {
       return arrow::Status::Invalid("Schema name cannot be empty");
     }
@@ -709,9 +708,11 @@ class Database {
     return node;
   }
 
-  arrow::Result<bool> update_node(
-      const std::shared_ptr<BaseOperation> &update) {
-    return shard_manager_->update_node(update);
+  arrow::Result<bool> update_node(const int64_t id,
+                                  const std::string &field_name,
+                                  const Value &value,
+                                  const UpdateType update_type) {
+    return shard_manager_->update_node(id, field_name, value, update_type);
   }
 
   arrow::Result<bool> remove_node(const std::string &schema_name,

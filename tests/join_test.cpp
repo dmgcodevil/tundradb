@@ -31,33 +31,8 @@ std::vector<std::shared_ptr<Node>> create_users(
     const std::shared_ptr<Database>& db, const std::vector<User>& users) {
   std::vector<std::shared_ptr<Node>> nodes;
   for (auto user : users) {
-    arrow::StringBuilder name_builder;
-    std::shared_ptr<arrow::Array> name_array;
-    auto status = name_builder.Append(user.name);
-    if (!status.ok()) {
-      throw std::runtime_error("Failed to append name: " + status.ToString());
-    }
-    status = name_builder.Finish(&name_array);
-    if (!status.ok()) {
-      throw std::runtime_error("Failed to finish name array: " +
-                               status.ToString());
-    }
-
-    // Create age array
-    arrow::Int64Builder age_builder;
-    std::shared_ptr<arrow::Array> age_array;
-    status = age_builder.Append(user.age);
-    if (!status.ok()) {
-      throw std::runtime_error("Failed to append age: " + status.ToString());
-    }
-    status = age_builder.Finish(&age_array);
-    if (!status.ok()) {
-      throw std::runtime_error("Failed to finish age array: " +
-                               status.ToString());
-    }
-
-    std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
-        {"name", name_array}, {"age", age_array}};
+    std::unordered_map<std::string, Value> data = {{"name", Value{user.name}},
+                                                   {"age", Value{user.age}}};
 
     auto node = db->create_node("users", data).ValueOrDie();
     nodes.push_back(node);
@@ -71,35 +46,8 @@ std::vector<std::shared_ptr<Node>> create_companies(
     const std::vector<Company>& companies) {
   std::vector<std::shared_ptr<Node>> nodes;
   for (auto company : companies) {
-    arrow::StringBuilder name_builder;
-    std::shared_ptr<arrow::Array> name_array;
-    auto status = name_builder.Append(company.name);
-    if (!status.ok()) {
-      throw std::runtime_error("Failed to append company name: " +
-                               status.ToString());
-    }
-    status = name_builder.Finish(&name_array);
-    if (!status.ok()) {
-      throw std::runtime_error("Failed to finish company name array: " +
-                               status.ToString());
-    }
-
-    // Create age array
-    arrow::Int64Builder size_builder;
-    std::shared_ptr<arrow::Array> size_array;
-    status = size_builder.Append(company.size);
-    if (!status.ok()) {
-      throw std::runtime_error("Failed to append company size: " +
-                               status.ToString());
-    }
-    status = size_builder.Finish(&size_array);
-    if (!status.ok()) {
-      throw std::runtime_error("Failed to finish company size array: " +
-                               status.ToString());
-    }
-
-    std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
-        {"name", name_array}, {"size", size_array}};
+    std::unordered_map<std::string, Value> data = {
+        {"name", Value{company.name}}, {"size", Value{company.size}}};
 
     auto node = db->create_node("companies", data).ValueOrDie();
     nodes.push_back(node);
@@ -1513,76 +1461,32 @@ TEST(JoinTest, MultiPatternPathThroughFriends) {
   {
     // Alex - ID 0
     {
-      arrow::StringBuilder name_builder;
-      arrow::Int64Builder age_builder;
-      std::shared_ptr<arrow::Array> name_array, age_array;
-
-      static_cast<void>(name_builder.Append("Alex"));
-      static_cast<void>(name_builder.Finish(&name_array));
-
-      static_cast<void>(age_builder.Append(25));
-      static_cast<void>(age_builder.Finish(&age_array));
-
-      std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
-          {"name", name_array}, {"age", age_array}};
-
+      std::unordered_map<std::string, Value> data = {
+          {"name", Value{"Alex"}}, {"age", Value{int64_t(25)}}};
       auto node = db_custom->create_node("User", data).ValueOrDie();
       user_nodes.push_back(node);
     }
 
     // Bob - ID 1
     {
-      arrow::StringBuilder name_builder;
-      arrow::Int64Builder age_builder;
-      std::shared_ptr<arrow::Array> name_array, age_array;
-
-      static_cast<void>(name_builder.Append("Bob"));
-      static_cast<void>(name_builder.Finish(&name_array));
-
-      static_cast<void>(age_builder.Append(31));
-      static_cast<void>(age_builder.Finish(&age_array));
-
-      std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
-          {"name", name_array}, {"age", age_array}};
-
+      std::unordered_map<std::string, Value> data = {
+          {"name", Value{"Bob"}}, {"age", Value{int64_t(30)}}};
       auto node = db_custom->create_node("User", data).ValueOrDie();
       user_nodes.push_back(node);
     }
 
-    // Jeff - ID 2
+    // Charlie - ID 2
     {
-      arrow::StringBuilder name_builder;
-      arrow::Int64Builder age_builder;
-      std::shared_ptr<arrow::Array> name_array, age_array;
-
-      static_cast<void>(name_builder.Append("Jeff"));
-      static_cast<void>(name_builder.Finish(&name_array));
-
-      static_cast<void>(age_builder.Append(33));
-      static_cast<void>(age_builder.Finish(&age_array));
-
-      std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
-          {"name", name_array}, {"age", age_array}};
-
+      std::unordered_map<std::string, Value> data = {
+          {"name", Value{"Charlie"}}, {"age", Value{int64_t(35)}}};
       auto node = db_custom->create_node("User", data).ValueOrDie();
       user_nodes.push_back(node);
     }
 
     // Sam - ID 3
     {
-      arrow::StringBuilder name_builder;
-      arrow::Int64Builder age_builder;
-      std::shared_ptr<arrow::Array> name_array, age_array;
-
-      static_cast<void>(name_builder.Append("Sam"));
-      static_cast<void>(name_builder.Finish(&name_array));
-
-      static_cast<void>(age_builder.Append(21));
-      static_cast<void>(age_builder.Finish(&age_array));
-
-      std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
-          {"name", name_array}, {"age", age_array}};
-
+      std::unordered_map<std::string, Value> data = {
+          {"name", Value{"Sam"}}, {"age", Value{int64_t(21)}}};
       auto node = db_custom->create_node("User", data).ValueOrDie();
       user_nodes.push_back(node);
     }
@@ -1593,57 +1497,24 @@ TEST(JoinTest, MultiPatternPathThroughFriends) {
   {
     // Google - ID 4
     {
-      arrow::StringBuilder name_builder;
-      arrow::Int64Builder size_builder;
-      std::shared_ptr<arrow::Array> name_array, size_array;
-
-      static_cast<void>(name_builder.Append("Google"));
-      static_cast<void>(name_builder.Finish(&name_array));
-
-      static_cast<void>(size_builder.Append(3000));
-      static_cast<void>(size_builder.Finish(&size_array));
-
-      std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
-          {"name", name_array}, {"size", size_array}};
-
+      std::unordered_map<std::string, Value> data = {
+          {"name", Value{"Google"}}, {"size", Value{int64_t(3000)}}};
       auto node = db_custom->create_node("Company", data).ValueOrDie();
       company_nodes.push_back(node);
     }
 
     // IBM - ID 5
     {
-      arrow::StringBuilder name_builder;
-      arrow::Int64Builder size_builder;
-      std::shared_ptr<arrow::Array> name_array, size_array;
-
-      static_cast<void>(name_builder.Append("IBM"));
-      static_cast<void>(name_builder.Finish(&name_array));
-
-      static_cast<void>(size_builder.Append(1000));
-      static_cast<void>(size_builder.Finish(&size_array));
-
-      std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
-          {"name", name_array}, {"size", size_array}};
-
+      std::unordered_map<std::string, Value> data = {
+          {"name", Value{"IBM"}}, {"size", Value{int64_t(1000)}}};
       auto node = db_custom->create_node("Company", data).ValueOrDie();
       company_nodes.push_back(node);
     }
 
     // AWS - ID 6
     {
-      arrow::StringBuilder name_builder;
-      arrow::Int64Builder size_builder;
-      std::shared_ptr<arrow::Array> name_array, size_array;
-
-      static_cast<void>(name_builder.Append("AWS"));
-      static_cast<void>(name_builder.Finish(&name_array));
-
-      static_cast<void>(size_builder.Append(2000));
-      static_cast<void>(size_builder.Finish(&size_array));
-
-      std::unordered_map<std::string, std::shared_ptr<arrow::Array>> data = {
-          {"name", name_array}, {"size", size_array}};
-
+      std::unordered_map<std::string, Value> data = {
+          {"name", Value{"AWS"}}, {"size", Value{int64_t(2000)}}};
       auto node = db_custom->create_node("Company", data).ValueOrDie();
       company_nodes.push_back(node);
     }

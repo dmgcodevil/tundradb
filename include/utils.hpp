@@ -17,6 +17,7 @@
 #include "logger.hpp"
 #include "node.hpp"
 #include "query.hpp"
+// #include "types.hpp"
 
 namespace tundradb {
 static std::string generate_uuid() {
@@ -33,6 +34,90 @@ static int64_t now_millis() {
              now.time_since_epoch())
       .count();
 }
+
+/*
+static arrow::Result<Value> arrow_scalar_to_value(const
+std::shared_ptr<arrow::Scalar>& scalar) { if (!scalar->is_valid) { return
+Value();  // Null value
+  }
+
+  switch (scalar->type->id()) {
+    case arrow::Type::INT64: {
+      auto typed_scalar = std::static_pointer_cast<arrow::Int64Scalar>(scalar);
+      return Value(typed_scalar->value);
+    }
+    case arrow::Type::INT32: {
+      auto typed_scalar = std::static_pointer_cast<arrow::Int32Scalar>(scalar);
+      return Value(static_cast<int64_t>(typed_scalar->value));
+    }
+    case arrow::Type::INT16: {
+      auto typed_scalar = std::static_pointer_cast<arrow::Int16Scalar>(scalar);
+      return Value(static_cast<int64_t>(typed_scalar->value));
+    }
+    case arrow::Type::INT8: {
+      auto typed_scalar = std::static_pointer_cast<arrow::Int8Scalar>(scalar);
+      return Value(static_cast<int64_t>(typed_scalar->value));
+    }
+    case arrow::Type::UINT64: {
+      auto typed_scalar = std::static_pointer_cast<arrow::UInt64Scalar>(scalar);
+      return Value(static_cast<int64_t>(typed_scalar->value));
+    }
+    case arrow::Type::UINT32: {
+      auto typed_scalar = std::static_pointer_cast<arrow::UInt32Scalar>(scalar);
+      return Value(static_cast<int64_t>(typed_scalar->value));
+    }
+    case arrow::Type::UINT16: {
+      auto typed_scalar = std::static_pointer_cast<arrow::UInt16Scalar>(scalar);
+      return Value(static_cast<int64_t>(typed_scalar->value));
+    }
+    case arrow::Type::UINT8: {
+      auto typed_scalar = std::static_pointer_cast<arrow::UInt8Scalar>(scalar);
+      return Value(static_cast<int64_t>(typed_scalar->value));
+    }
+    case arrow::Type::DOUBLE: {
+      auto typed_scalar = std::static_pointer_cast<arrow::DoubleScalar>(scalar);
+      return Value(typed_scalar->value);
+    }
+    case arrow::Type::FLOAT: {
+      auto typed_scalar = std::static_pointer_cast<arrow::FloatScalar>(scalar);
+      return Value(static_cast<double>(typed_scalar->value));
+    }
+    case arrow::Type::STRING: {
+      auto typed_scalar = std::static_pointer_cast<arrow::StringScalar>(scalar);
+      return Value(typed_scalar->value->ToString());
+    }
+    case arrow::Type::LARGE_STRING: {
+      auto typed_scalar =
+std::static_pointer_cast<arrow::LargeStringScalar>(scalar); return
+Value(typed_scalar->value->ToString());
+    }
+    case arrow::Type::BOOL: {
+      auto typed_scalar =
+std::static_pointer_cast<arrow::BooleanScalar>(scalar); return
+Value(typed_scalar->value);
+    }
+    case arrow::Type::NA:
+      return Value();  // Null value
+    default:
+      return arrow::Status::NotImplemented("Unsupported Arrow type for Value
+conversion: ", scalar->type->ToString());
+  }
+}
+
+static arrow::Result<Value> arrow_array_to_value(const
+std::shared_ptr<arrow::Array>& array, int64_t index = 0) { if (index >=
+array->length()) { return arrow::Status::IndexError("Index out of bounds: ",
+index, " >= ", array->length());
+  }
+
+  if (array->IsNull(index)) {
+    return Value();  // Null value
+  }
+
+  ARROW_ASSIGN_OR_RAISE(auto scalar, array->GetScalar(index));
+  return arrow_scalar_to_value(scalar);
+}
+*/
 
 template <typename SetType>
 static arrow::Result<std::shared_ptr<arrow::Table>> filter_table_by_id(
@@ -112,11 +197,23 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
   std::vector<std::unique_ptr<arrow::ArrayBuilder>> builders;
   for (const auto& field : schema->fields()) {
     switch (field->type()->id()) {
+      case arrow::Type::INT32:
+        builders.push_back(std::make_unique<arrow::Int32Builder>());
+        break;
       case arrow::Type::INT64:
         builders.push_back(std::make_unique<arrow::Int64Builder>());
         break;
+      case arrow::Type::FLOAT:
+        builders.push_back(std::make_unique<arrow::FloatBuilder>());
+        break;
+      case arrow::Type::DOUBLE:
+        builders.push_back(std::make_unique<arrow::DoubleBuilder>());
+        break;
       case arrow::Type::STRING:
         builders.push_back(std::make_unique<arrow::StringBuilder>());
+        break;
+      case arrow::Type::BOOL:
+        builders.push_back(std::make_unique<arrow::BooleanBuilder>());
         break;
       default:
         return arrow::Status::NotImplemented("Unsupported type: ",
@@ -135,29 +232,45 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
       if (!field_result.ok()) {
         ARROW_RETURN_NOT_OK(builders[i]->AppendNull());
       } else {
-        const auto& array = field_result.ValueOrDie();
-        if (array->length() == 0 || array->IsNull(0)) {
+        const auto& value = field_result.ValueOrDie();
+        if (value.is_null()) {
           ARROW_RETURN_NOT_OK(builders[i]->AppendNull());
         } else {
           switch (field->type()->id()) {
+            case arrow::Type::INT32: {
+              ARROW_RETURN_NOT_OK(
+                  dynamic_cast<arrow::Int32Builder*>(builders[i].get())
+                      ->Append(value.as_int32()));
+              break;
+            }
             case arrow::Type::INT64: {
-              auto int_array =
-                  std::static_pointer_cast<arrow::Int64Array>(array);
               ARROW_RETURN_NOT_OK(
                   dynamic_cast<arrow::Int64Builder*>(builders[i].get())
-                      ->Append(int_array->Value(0)));
+                      ->Append(value.as_int64()));
+              break;
+            }
+            case arrow::Type::FLOAT: {
+              ARROW_RETURN_NOT_OK(
+                  dynamic_cast<arrow::FloatBuilder*>(builders[i].get())
+                      ->Append(value.as_float()));
+              break;
+            }
+            case arrow::Type::DOUBLE: {
+              ARROW_RETURN_NOT_OK(
+                  dynamic_cast<arrow::DoubleBuilder*>(builders[i].get())
+                      ->Append(value.as_double()));
+              break;
+            }
+            case arrow::Type::BOOL: {
+              ARROW_RETURN_NOT_OK(
+                  dynamic_cast<arrow::BooleanBuilder*>(builders[i].get())
+                      ->Append(value.as_bool()));
               break;
             }
             case arrow::Type::STRING: {
-              auto str_array =
-                  std::static_pointer_cast<arrow::StringArray>(array);
-              if (str_array->length() > 0 && !str_array->IsNull(0)) {
-                ARROW_RETURN_NOT_OK(
-                    dynamic_cast<arrow::StringBuilder*>(builders[i].get())
-                        ->Append(str_array->GetString(0)));
-              } else {
-                ARROW_RETURN_NOT_OK(builders[i]->AppendNull());
-              }
+              ARROW_RETURN_NOT_OK(
+                  dynamic_cast<arrow::StringBuilder*>(builders[i].get())
+                      ->Append(value.as_string()));
               break;
             }
             default:
@@ -367,7 +480,15 @@ arrow::Result<std::vector<T>> get_column_values(
   for (int chunk_idx = 0; chunk_idx < column->num_chunks(); ++chunk_idx) {
     auto chunk = column->chunk(chunk_idx);
 
-    if constexpr (std::is_same_v<T, int64_t>) {
+    if constexpr (std::is_same_v<T, int32_t>) {
+      const auto typed_array =
+          std::static_pointer_cast<arrow::Int32Array>(chunk);
+      for (int32_t i = 0; i < typed_array->length(); ++i) {
+        if (!typed_array->IsNull(i)) {
+          values.push_back(typed_array->Value(i));
+        }
+      }
+    } else if constexpr (std::is_same_v<T, int64_t>) {
       const auto typed_array =
           std::static_pointer_cast<arrow::Int64Array>(chunk);
       for (int64_t i = 0; i < typed_array->length(); ++i) {
