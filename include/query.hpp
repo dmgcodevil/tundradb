@@ -403,7 +403,7 @@ class ComparisonExpr : public Clause, public WhereExpr {
     return compare_values(field_value, op_, value_);
   }
 
-  arrow::compute::Expression to_arrow_expression(
+  [[nodiscard]] arrow::compute::Expression to_arrow_expression(
       bool strip_var) const override {
     std::string field_name = field_;
     if (strip_var) {
@@ -562,7 +562,7 @@ class LogicalExpr : public Clause, public WhereExpr {
     return arrow::Status::Invalid("Unknown logical operator");
   }
 
-  arrow::compute::Expression to_arrow_expression(
+  [[nodiscard]] arrow::compute::Expression to_arrow_expression(
       bool strip_var) const override {
     if (!left_ || !right_) {
       throw std::runtime_error("LogicalExpr missing left or right operand");
@@ -668,20 +668,55 @@ class LogicalExpr : public Clause, public WhereExpr {
   }
 };
 
+struct ExecutionConfig {
+ private:
+  static size_t get_default_thread_count() {
+    auto hw_threads = std::thread::hardware_concurrency();
+    if (hw_threads <= 4) {
+      return hw_threads;
+    }
+    if (hw_threads <= 16) {
+      return hw_threads - 1;
+    }
+    return hw_threads - 2;
+  }
+
+  static size_t calculate_batch_size(size_t total_items, size_t thread_count) {
+    size_t target_batches = thread_count * BATCHES_PER_THREAD;
+    size_t calculated = total_items / target_batches;
+    return std::clamp(calculated, size_t{100}, size_t{5000});
+  }
+
+ public:
+  static constexpr size_t BATCHES_PER_THREAD = 3;
+  size_t parallel_batch_size = 0;
+  bool parallel_enabled = true;
+  size_t parallel_thread_count = get_default_thread_count();
+
+  [[nodiscard]] size_t calculate_batch_size(size_t total_items) const {
+    const size_t target_batches = parallel_thread_count * BATCHES_PER_THREAD;
+    const size_t calculated = total_items / target_batches;
+    return std::clamp(calculated, size_t{100}, size_t{5000});
+  }
+};
+
 class Query {
  private:
   SchemaRef from_;
   std::vector<std::shared_ptr<Clause>> clauses_;
   std::shared_ptr<Select> select_;
   bool inline_where_;
+  ExecutionConfig execution_config_;
 
  public:
   Query(SchemaRef from, std::vector<std::shared_ptr<Clause>> clauses,
-        std::shared_ptr<Select> select, bool optimize_where)
+        std::shared_ptr<Select> select, bool optimize_where,
+        ExecutionConfig execution_config)
       : from_(std::move(from)),
         clauses_(std::move(clauses)),
         select_(std::move(select)),
-        inline_where_(optimize_where) {}
+        inline_where_(optimize_where),
+        execution_config_(execution_config) {}
 
   class Builder;
   [[nodiscard]] const SchemaRef& from() const { return from_; }
@@ -693,6 +728,10 @@ class Query {
   }
   [[nodiscard]] bool inline_where() const { return inline_where_; }
 
+  [[nodiscard]] const ExecutionConfig& execution_config() const {
+    return execution_config_;
+  }
+
   static Builder from(const std::string& schema) { return Builder(schema); }
 
   class Builder {
@@ -701,6 +740,7 @@ class Query {
     std::vector<std::shared_ptr<Clause>> clauses_;
     std::shared_ptr<Select> select_;
     bool inline_where_ = false;
+    ExecutionConfig execution_config_;
 
    public:
     explicit Builder(const std::string& schema)
@@ -728,6 +768,21 @@ class Query {
 
     Builder& inline_where() {
       inline_where_ = true;
+      return *this;
+    }
+
+    Builder& parallel_batch_size(size_t size) {
+      execution_config_.parallel_batch_size = size;
+      return *this;
+    }
+
+    Builder& parallel(bool enabled = true) {
+      execution_config_.parallel_enabled = enabled;
+      return *this;
+    }
+
+    Builder& parallel_thread_count(size_t count) {
+      execution_config_.parallel_thread_count = count;
       return *this;
     }
 
@@ -780,7 +835,8 @@ class Query {
     }
 
     Query build() {
-      return {from_, std::move(clauses_), std::move(select_), inline_where_};
+      return {from_, std::move(clauses_), std::move(select_), inline_where_,
+              execution_config_};
     }
   };
 };

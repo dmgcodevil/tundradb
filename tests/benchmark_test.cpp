@@ -431,6 +431,8 @@ TEST_F(LargeDatasetTest, PerformanceBaseline) {
     Query query =
         Query::from("u:User")
             .traverse("u", "WORKS_AT", "c:Company", TraverseType::Inner)
+            //.parallel(true)
+            //.parallel_thread_count(4)
             .build();
     auto result = fixture->db()->query(query);
 
