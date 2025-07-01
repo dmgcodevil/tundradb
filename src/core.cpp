@@ -4,6 +4,9 @@
 #include <arrow/dataset/scanner.h>
 #include <arrow/datum.h>
 #include <arrow/table.h>
+#include <tbb/concurrent_unordered_set.h>
+#include <tbb/parallel_for.h>
+#include <tbb/task_arena.h>
 
 #include <chrono>
 #include <future>
@@ -19,6 +22,7 @@
 #include <utility>
 #include <vector>
 
+#include "container_concepts.hpp"
 #include "logger.hpp"
 #include "utils.hpp"
 
@@ -1021,10 +1025,11 @@ void log_grouped_connections(
   }
 }
 
+template <StringSet VisitedSet>
 arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows_bfs(
     int64_t node_id, const SchemaRef& start_schema,
     const std::shared_ptr<arrow::Schema>& output_schema,
-    const QueryState& query_state, std::set<std::string>& global_visited) {
+    const QueryState& query_state, VisitedSet& global_visited) {
   log_debug("populate_rows_bfs::node={}:{}", start_schema.value(), node_id);
   auto result = std::make_shared<std::vector<Row>>();
   int64_t row_id_counter = 0;
@@ -1125,15 +1130,78 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows_bfs(
   return std::make_shared<std::vector<Row>>(merged);
 }
 
+template <NodeIds NodeIdsT>
+arrow::Result<std::shared_ptr<std::vector<Row>>> populate_batch_rows(
+    const NodeIdsT& node_ids, const SchemaRef& schema_ref,
+    const std::shared_ptr<arrow::Schema>& output_schema,
+    const QueryState& query_state, const TraverseType join_type,
+    tbb::concurrent_unordered_set<std::string>& global_visited) {
+  auto rows = std::make_shared<std::vector<Row>>();
+  std::set<std::string> local_visited;
+  // For INNER join: only process nodes that have connections
+  // For LEFT join: process all nodes from the "left" side
+  for (const auto node_id : node_ids) {
+    auto key = schema_ref.value() + ":" + std::to_string(node_id);
+    if (!global_visited.insert(key).second) {
+      // Skip if already processed in an earlier traversal
+      continue;
+    }
+
+    // For INNER JOIN: Skip nodes without connections
+    if (join_type == TraverseType::Inner &&
+        !query_state.has_outgoing(schema_ref, node_id)) {
+      continue;
+    }
+
+    auto res = populate_rows_bfs(node_id, schema_ref, output_schema,
+                                 query_state, local_visited);
+    if (!res.ok()) {
+      log_error("Failed to populate rows for node {} in schema '{}': {}",
+                node_id, schema_ref.value(), res.status().ToString());
+      return res.status();
+    }
+
+    const auto& res_value = res.ValueOrDie();
+    rows->insert(rows->end(), std::make_move_iterator(res_value->begin()),
+                 std::make_move_iterator(res_value->end()));
+  }
+  global_visited.insert(local_visited.begin(), local_visited.end());
+  return rows;
+}
+
+std::vector<std::vector<int64_t>> batch_node_ids(const std::set<int64_t>& ids,
+                                                 size_t batch_size) {
+  std::vector<std::vector<int64_t>> batches;
+  std::vector<int64_t> current_batch;
+  current_batch.reserve(batch_size);
+
+  for (const auto& id : ids) {
+    current_batch.push_back(id);
+
+    if (current_batch.size() >= batch_size) {
+      batches.push_back(std::move(current_batch));
+      current_batch.clear();
+      current_batch.reserve(batch_size);
+    }
+  }
+
+  if (!current_batch.empty()) {
+    batches.push_back(std::move(current_batch));
+  }
+
+  return batches;
+}
+
 // process all schemas used in traverse
 // Phase 1: Process connected nodes
 // Phase 2: Handle outer joins for unmatched nodes
 arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows(
-    const QueryState& query_state, const std::vector<Traverse>& traverses,
+    const ExecutionConfig& execution_config, const QueryState& query_state,
+    const std::vector<Traverse>& traverses,
     const std::shared_ptr<arrow::Schema>& output_schema) {
   auto rows = std::make_shared<std::vector<Row>>();
-  std::set<std::string>
-      global_visited;  // Track processed nodes across all schemas
+  std::mutex rows_mtx;
+  tbb::concurrent_unordered_set<std::string> global_visited;
 
   // Map schemas to their join types
   std::unordered_map<std::string, TraverseType> schema_join_types;
@@ -1187,44 +1255,71 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows(
 
     // Get all nodes for this schema
     const auto& schema_nodes = query_state.ids.at(schema_ref.value());
-
-    log_debug("Processing schema '{}' nodes: [{}]", schema_ref.value(),
-              join_container(schema_nodes));
-    std::set<std::string> local_visited;
-
-    // For INNER join: only process nodes that have connections
-    // For LEFT join: process all nodes from the "left" side
-    for (auto node_id : schema_nodes) {
-      // Skip if already processed in an earlier traversal
-      auto key = schema_ref.value() + ":" + std::to_string(node_id);
-      if (global_visited.contains(key)) {
-        continue;
+    std::vector<std::vector<int64_t>> batch_ids;
+    if (execution_config.parallel_enabled) {
+      size_t batch_size = 0;
+      if (execution_config.parallel_batch_size > 0) {
+        batch_size = execution_config.parallel_batch_size;
+      } else {
+        batch_size = execution_config.calculate_batch_size(schema_nodes.size());
+      }
+      auto batches = batch_node_ids(schema_nodes, batch_size);
+      if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+        log_debug(
+            "process concurrently. thread_count={}, batch_size={}, "
+            "batches_count={}",
+            execution_config.parallel_thread_count, batch_size, batches.size());
+      }
+      tbb::task_arena arena(execution_config.parallel_thread_count);
+      std::atomic error_occurred{false};
+      std::string error_message;
+      std::mutex error_mutex;
+      arena.execute([&] {
+        tbb::parallel_for(
+            tbb::blocked_range<size_t>(0, batches.size()),
+            [&](const tbb::blocked_range<size_t>& range) {
+              for (size_t i = range.begin(); i != range.end(); ++i) {
+                if (error_occurred.load()) {
+                  return;  // Early exit from this thread
+                }
+                auto res =
+                    populate_batch_rows(batches[i], schema_ref, output_schema,
+                                        query_state, join_type, global_visited);
+                if (!res.ok()) {
+                  error_occurred.store(true);
+                  std::lock_guard lock(error_mutex);
+                  if (error_message.empty()) {  // First error wins
+                    error_message = res.status().ToString();
+                  }
+                  return;
+                }
+                const auto& batch_rows = res.ValueOrDie();
+                std::lock_guard lock(rows_mtx);
+                rows->insert(rows->end(), batch_rows->begin(),
+                             batch_rows->end());
+              }
+            });
+      });
+      if (error_occurred.load()) {
+        return arrow::Status::ExecutionError(
+            "Parallel batch processing failed: " + error_message);
       }
 
-      // For INNER JOIN: Skip nodes without connections
-      if (join_type == TraverseType::Inner &&
-          !query_state.has_outgoing(schema_ref, node_id)) {
-        continue;
-      }
-
-      // Process this node with BFS
-      auto res = populate_rows_bfs(node_id, schema_ref, output_schema,
-                                   query_state, local_visited);
+    } else {
+      auto res = populate_batch_rows(schema_nodes, schema_ref, output_schema,
+                                     query_state, join_type, global_visited);
       if (!res.ok()) {
-        log_error("Failed to populate rows for node {} in schema '{}': {}",
-                  node_id, schema_ref.value(), res.status().ToString());
         return res.status();
       }
-
-      // Add the rows from BFS to our result
       const auto& res_value = res.ValueOrDie();
       rows->insert(rows->end(), std::make_move_iterator(res_value->begin()),
                    std::make_move_iterator(res_value->end()));
-
-      // Mark this node as visited
-      global_visited.insert(key);
     }
-    global_visited.insert(local_visited.begin(), local_visited.end());
+
+    if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+      log_debug("Processing schema '{}' nodes: [{}]", schema_ref.value(),
+                join_container(schema_nodes));
+    }
   }
 
   log_debug("Generated {} total rows after processing all schemas",
@@ -1746,8 +1841,8 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
   const auto output_schema = output_schema_res.ValueOrDie();
   log_debug("output_schema={}", output_schema->ToString());
 
-  auto row_res =
-      populate_rows(query_state, query_state.traversals, output_schema);
+  auto row_res = populate_rows(query.execution_config(), query_state,
+                               query_state.traversals, output_schema);
   if (!row_res.ok()) {
     return row_res.status();
   }
