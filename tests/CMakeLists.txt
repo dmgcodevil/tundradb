@@ -116,6 +116,9 @@ add_executable(where_pushdown_join_test
 add_executable(where_expression_test
         where_expression_test.cpp)
 
+add_executable(memory_arena_test
+        memory_arena_test.cpp)
+
 # Link against Arrow and GTest
 target_link_libraries(sharding_test
     PRIVATE
@@ -249,6 +252,12 @@ target_link_libraries(where_expression_test
         TBB::tbb
 )
 
+target_link_libraries(memory_arena_test
+        PRIVATE
+        GTest::GTest
+        GTest::Main
+)
+
 # Apply sanitizer flags to all test targets if enabled
 if(ENABLE_SANITIZERS)
     target_compile_options(sharding_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
@@ -290,6 +299,7 @@ add_test(NAME SchemaUtilsTest COMMAND schema_utils_test)
 add_test(NAME DatabaseTest COMMAND database_test)
 add_test(NAME JoinTest COMMAND join_test)
 add_test(NAME WhereExpressionTest COMMAND where_expression_test)
+add_test(NAME MemoryArenaTest COMMAND memory_arena_test)
 
 # Set TSan options for tests after they've been registered
 if(ENABLE_SANITIZERS AND SANITIZER_TYPE STREQUAL "thread" AND EXISTS ${TSAN_SUPPRESSIONS_FILE})
