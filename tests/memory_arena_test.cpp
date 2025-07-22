@@ -308,6 +308,50 @@ TEST_F(MemoryArenaTest, PerformanceTest) {
   EXPECT_LT(duration.count(), num_allocations);  // Less than 1μs per allocation
 }
 
+TEST_F(MemoryArenaTest, AlignmentLargerThanChunkTest) {
+  void* ptr = arena->allocate(64, 2048);  // Alignment > chunk size (1KB)
+  ASSERT_NE(ptr, nullptr);
+  EXPECT_EQ(reinterpret_cast<uintptr_t>(ptr) % 2048, 0);
+}
+
+TEST_F(MemoryArenaTest, LargeAlignmentStressTest) {
+  // Test multiple large alignments to ensure consistency
+  for (int i = 0; i < 10; ++i) {
+    void* ptr1 = arena->allocate(32, 1024);
+    void* ptr2 = arena->allocate(64, 2048);
+    void* ptr3 = arena->allocate(128, 4096);
+
+    ASSERT_NE(ptr1, nullptr);
+    ASSERT_NE(ptr2, nullptr);
+    ASSERT_NE(ptr3, nullptr);
+
+    EXPECT_EQ(reinterpret_cast<uintptr_t>(ptr1) % 1024, 0);
+    EXPECT_EQ(reinterpret_cast<uintptr_t>(ptr2) % 2048, 0);
+    EXPECT_EQ(reinterpret_cast<uintptr_t>(ptr3) % 4096, 0);
+  }
+}
+
+TEST_F(MemoryArenaTest, ArenaAllocatorSTLContainer) {
+  using IntVec = std::vector<int, ArenaAllocator<int>>;
+  IntVec vec(ArenaAllocator<int>(arena.get()));
+
+  for (int i = 0; i < 100; ++i) {
+    vec.push_back(i);
+  }
+
+  for (int i = 0; i < 100; ++i) {
+    EXPECT_EQ(vec[i], i);
+  }
+}
+
+TEST_F(MemoryArenaTest, ReuseAfterResetLoop) {
+  for (int i = 0; i < 100; ++i) {
+    void* ptr = arena->allocate(128);
+    ASSERT_NE(ptr, nullptr);
+    arena->reset();
+  }
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

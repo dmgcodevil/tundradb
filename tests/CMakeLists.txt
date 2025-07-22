@@ -119,6 +119,9 @@ add_executable(where_expression_test
 add_executable(memory_arena_test
         memory_arena_test.cpp)
 
+add_executable(free_list_arena_test
+        free_list_arena_test.cpp)
+
 # Link against Arrow and GTest
 target_link_libraries(sharding_test
     PRIVATE
@@ -258,6 +261,13 @@ target_link_libraries(memory_arena_test
         GTest::Main
 )
 
+target_link_libraries(free_list_arena_test
+        PRIVATE
+        GTest::GTest
+        GTest::Main
+        spdlog::spdlog
+)
+
 # Apply sanitizer flags to all test targets if enabled
 if(ENABLE_SANITIZERS)
     target_compile_options(sharding_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
@@ -286,6 +296,9 @@ if(ENABLE_SANITIZERS)
     
     target_compile_options(where_expression_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
     target_link_options(where_expression_test PRIVATE ${SANITIZER_LINK_FLAGS})
+    
+    target_compile_options(free_list_arena_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
+    target_link_options(free_list_arena_test PRIVATE ${SANITIZER_LINK_FLAGS})
 endif()
 
 # Simple test registration
@@ -300,6 +313,7 @@ add_test(NAME DatabaseTest COMMAND database_test)
 add_test(NAME JoinTest COMMAND join_test)
 add_test(NAME WhereExpressionTest COMMAND where_expression_test)
 add_test(NAME MemoryArenaTest COMMAND memory_arena_test)
+add_test(NAME FreeListArenaTest COMMAND free_list_arena_test)
 
 # Set TSan options for tests after they've been registered
 if(ENABLE_SANITIZERS AND SANITIZER_TYPE STREQUAL "thread" AND EXISTS ${TSAN_SUPPRESSIONS_FILE})
@@ -322,6 +336,7 @@ set_tests_properties(
         DatabaseTest
         JoinTest
         WhereExpressionTest
+        FreeListArenaTest
         PROPERTIES
         ISOLATED TRUE  # This ensures tests run in isolation
 )

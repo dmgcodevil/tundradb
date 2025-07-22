@@ -7,6 +7,8 @@
 #include <memory>
 #include <vector>
 
+#include "mem_utils.hpp"
+
 namespace tundradb {
 
 /**
@@ -36,16 +38,24 @@ class MemoryArena {
    * @return Pointer to allocated memory, or nullptr if allocation fails
    */
   void* allocate(size_t size, size_t alignment = 8) {
-    // Align the current offset
-    size_t aligned_offset = align_up(current_offset_, alignment);
+    // Calculate aligned offset within current chunk
+    size_t aligned_offset =
+        (current_chunk_ != nullptr)
+            ? calculate_aligned_offset(current_chunk_, current_offset_,
+                                       alignment)
+            : current_offset_;  // Will trigger new chunk allocation below
 
     // Check if we have enough space in the current chunk (or if we have no
     // chunk at all)
     if (current_chunk_ == nullptr || aligned_offset + size > chunk_size_) {
       // Need a new chunk - make it at least as large as the requested size
-      size_t new_chunk_size = std::max(chunk_size_, size);
+      size_t new_chunk_size =
+          std::max(chunk_size_, size) + get_alignment_overhead(alignment);
+
       allocate_new_chunk(new_chunk_size);
-      aligned_offset = align_up(0, alignment);
+
+      // Recalculate aligned offset for the new chunk
+      aligned_offset = calculate_aligned_offset(current_chunk_, 0, alignment);
     }
 
     void* result = current_chunk_ + aligned_offset;
@@ -108,10 +118,6 @@ class MemoryArena {
   char* current_chunk_ = nullptr;
 
  private:
-  static size_t align_up(size_t value, size_t alignment) {
-    return (value + alignment - 1) & ~(alignment - 1);
-  }
-
   size_t chunk_size_;
   size_t current_offset_;
   size_t total_allocated_ = 0;
