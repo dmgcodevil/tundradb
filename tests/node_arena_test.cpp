@@ -378,9 +378,11 @@ TEST_F(NodeArenaTest, ArenaStatistics) {
     nodes.push_back(node);
   }
 
-  // Memory should have increased
+  // Memory should still be within pre-allocated chunk (2MB is much larger than
+  // 5 nodes)
   size_t after_allocation = node_arena_->get_total_allocated();
-  EXPECT_GT(after_allocation, initial_allocated);
+  EXPECT_EQ(after_allocation,
+            initial_allocated);  // Should still be same 2MB chunk
 
   // Clean up
   for (auto& node : nodes) {
@@ -409,10 +411,16 @@ TEST_F(NodeArenaTest, ResetAndClear) {
   // Test reset (should keep chunks but reset usage)
   node_arena_->reset();
 
-  // Old handles should be invalid now, but memory is still allocated (chunks
-  // kept)
-  size_t after_reset = node_arena_->get_total_allocated();
-  EXPECT_GT(after_reset, 0);  // Chunks still exist
+  // Old handles should be invalid now, but chunk memory is still allocated
+  size_t after_reset_chunks = node_arena_->get_total_allocated();
+  EXPECT_GT(after_reset_chunks, 0);  // Chunks still exist
+
+  // Individual allocations should be reset to 0 (check via used_bytes)
+  if (auto* free_list =
+          dynamic_cast<FreeListArena*>(node_arena_->get_mem_arena())) {
+    size_t after_reset_used = free_list->get_used_bytes();
+    EXPECT_EQ(after_reset_used, 0);  // No used allocations after reset
+  }
 
   // Should be able to allocate new nodes
   NodeHandle new_node = node_arena_->allocate_node("TestNode");

@@ -126,6 +126,10 @@ add_executable(free_list_arena_test
 add_executable(node_arena_test
         node_arena_test.cpp)
 
+# String reference counting test
+add_executable(string_refcount_test
+        string_refcount_test.cpp)
+
 # Link against Arrow and GTest
 target_link_libraries(sharding_test
     PRIVATE
@@ -281,6 +285,15 @@ target_link_libraries(node_arena_test
         spdlog::spdlog
 )
 
+target_link_libraries(string_refcount_test
+        PRIVATE
+        core
+        Arrow::arrow_shared
+        Parquet::parquet_shared
+        GTest::GTest
+        GTest::Main
+        spdlog::spdlog
+)
 
 # Apply sanitizer flags to all test targets if enabled
 if(ENABLE_SANITIZERS)
@@ -329,6 +342,7 @@ add_test(NAME WhereExpressionTest COMMAND where_expression_test)
 add_test(NAME MemoryArenaTest COMMAND memory_arena_test)
 add_test(NAME FreeListArenaTest COMMAND free_list_arena_test)
 add_test(NAME NodeArenaTest COMMAND node_arena_test)
+add_test(NAME StringRefCountTest COMMAND string_refcount_test)
 
 # Set TSan options for tests after they've been registered
 if(ENABLE_SANITIZERS AND SANITIZER_TYPE STREQUAL "thread" AND EXISTS ${TSAN_SUPPRESSIONS_FILE})

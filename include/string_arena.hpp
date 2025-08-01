@@ -33,11 +33,13 @@ class StringPool {
       return StringRef{};
     }
 
-    // Check for deduplication (optional optimization)
+    // Check for deduplication with reference counting
     if (enable_deduplication_) {
       auto it = dedup_map_.find(str);
       if (it != dedup_map_.end()) {
-        return it->second;  // Return existing string
+        // Increment reference count and return existing string
+        it->second.second++;
+        return it->second.first;
       }
     }
 
@@ -54,9 +56,9 @@ class StringPool {
 
     StringRef ref(storage, static_cast<uint32_t>(str.length()), pool_id);
 
-    // Add to deduplication map if enabled
+    // Add to deduplication map with reference count = 1
     if (enable_deduplication_) {
-      dedup_map_[str] = ref;
+      dedup_map_[str] = std::make_pair(ref, 1);
     }
 
     return ref;
@@ -70,23 +72,31 @@ class StringPool {
   }
 
   /**
-   * Deallocate a string (only works if we have the exact pointer)
+   * Deallocate a string with reference counting support
    */
   void deallocate_string(const StringRef& ref) {
     if (!ref.is_null()) {
-      // Remove from deduplication map if enabled
       if (enable_deduplication_) {
-        // This is expensive - we'd need reverse lookup
-        // In practice, might want to disable dedup if frequent deallocation
+        // Find string by reverse lookup (expensive but necessary)
         for (auto it = dedup_map_.begin(); it != dedup_map_.end(); ++it) {
-          if (it->second.data == ref.data) {
-            dedup_map_.erase(it);
-            break;
+          if (it->second.first.data == ref.data) {
+            // Decrement reference count
+            it->second.second--;
+
+            // Only deallocate when reference count reaches 0
+            if (it->second.second == 0) {
+              arena_->deallocate(const_cast<char*>(ref.data));
+              dedup_map_.erase(it);
+            }
+            return;
           }
         }
+        // If not found in dedup_map_, it might be a non-deduplicated string
+        arena_->deallocate(const_cast<char*>(ref.data));
+      } else {
+        // No deduplication - always deallocate
+        arena_->deallocate(const_cast<char*>(ref.data));
       }
-
-      arena_->deallocate(const_cast<char*>(ref.data));
     }
   }
 
@@ -113,6 +123,15 @@ class StringPool {
   size_t get_total_allocated() const { return arena_->get_total_allocated(); }
   size_t get_string_count() const { return dedup_map_.size(); }
 
+  // Get total reference count (for debugging)
+  size_t get_total_references() const {
+    size_t total = 0;
+    for (const auto& [fst, snd] : dedup_map_ | std::views::values) {
+      total += snd;
+    }
+    return total;
+  }
+
   void reset() {
     arena_->reset();
     dedup_map_.clear();
@@ -127,7 +146,8 @@ class StringPool {
   size_t max_size_;
   std::unique_ptr<FreeListArena> arena_;
   bool enable_deduplication_ = true;
-  std::unordered_map<std::string, StringRef> dedup_map_;
+  // Reference counting for deduplication safety
+  std::unordered_map<std::string, std::pair<StringRef, uint32_t>> dedup_map_;
 };
 
 /**

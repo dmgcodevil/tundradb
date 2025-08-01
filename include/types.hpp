@@ -7,6 +7,10 @@
 #include <string>
 #include <variant>
 
+// Arrow includes for type conversion functions
+#include <arrow/api.h>
+#include <arrow/type.h>
+
 namespace tundradb {
 
 /**

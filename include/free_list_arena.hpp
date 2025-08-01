@@ -95,7 +95,8 @@ class FreeListArena : public MemArena {
     // Try to coalesce with adjacent blocks
     coalesce_blocks(ptr);
 
-    freed_bytes_ += header->size;
+    freed_bytes_ += header->size;  // For fragmentation ratio calculation
+    total_used_ -= header->size;   // Decrement live memory usage
 
     log_debug("DEALLOCATE DONE: free_block_count={}", get_free_block_count());
   }
@@ -120,8 +121,10 @@ class FreeListArena : public MemArena {
     }
 
     // Reset statistics
-    total_allocated_ = 0;
+    total_used_ = 0;  // Reset individual block usage (can be reused)
     freed_bytes_ = 0;
+    // NOTE: total_allocated_ (chunk memory) is NOT reset - chunks are still
+    // allocated
   }
 
   /**
@@ -135,14 +138,38 @@ class FreeListArena : public MemArena {
     current_chunk_ = nullptr;
     current_chunk_size_ = 0;
     current_offset_ = 0;
-    total_allocated_ = 0;
+    total_allocated_ = 0;  // Reset chunk memory (chunks are freed)
+    total_used_ = 0;       // Reset individual block usage
     freed_bytes_ = 0;
   }
 
+  /**
+   * STATISTICS DOCUMENTATION:
+   *
+   * total_allocated_: Total chunk memory allocated (never decreases except
+   * clear()) total_used_:      Sum of sizes of individual used blocks
+   * (decreases on deallocate) freed_bytes_:     Cumulative bytes freed (for
+   * fragmentation ratio calculation) used_bytes:       Currently used memory
+   * (same as total_used_)
+   *
+   * Example flow:
+   * allocate(100) → total_allocated=1024, used_bytes=100, freed_bytes=0
+   * allocate(200) → total_allocated=1024, used_bytes=300, freed_bytes=0
+   * deallocate(100) → total_allocated=1024, used_bytes=200, freed_bytes=100
+   * reset() → total_allocated=1024, used_bytes=0, freed_bytes=0 (chunks kept)
+   * clear() → total_allocated=0, used_bytes=0, freed_bytes=0 (chunks freed)
+   */
+
   // Statistics
-  size_t get_total_allocated() const override { return total_allocated_; }
-  size_t get_freed_bytes() const { return freed_bytes_; }
-  size_t get_live_bytes() const { return total_allocated_ - freed_bytes_; }
+  size_t get_total_allocated() const override {
+    return total_allocated_;
+  }  // Total chunk memory
+  size_t get_freed_bytes() const {
+    return freed_bytes_;
+  }  // Cumulative deallocations (for fragmentation)
+  size_t get_used_bytes() const {
+    return total_used_;
+  }  // Currently used memory
   size_t get_chunk_count() const override { return chunks_.size(); }
   size_t get_free_block_count() const {
     size_t count = 0;
@@ -217,8 +244,12 @@ class FreeListArena : public MemArena {
   std::map<size_t, std::set<BlockHeader*>> free_blocks_by_size_;
 
   // Statistics
-  size_t total_allocated_ = 0;
-  size_t freed_bytes_ = 0;
+  size_t total_allocated_ =
+      0;  // Total chunk memory allocated (never decreases except clear())
+  size_t total_used_ =
+      0;  // Sum of sizes of individual live blocks (decreases on deallocate)
+  size_t freed_bytes_ =
+      0;  // Cumulative bytes freed (for fragmentation ratio calculation)
 
   void allocate_new_chunk(size_t size) {
     auto new_chunk = std::make_unique<char[]>(size);
@@ -228,6 +259,9 @@ class FreeListArena : public MemArena {
     chunk_sizes_.push_back(size);
     chunk_allocated_sizes_.push_back(0);  // Start with 0 allocated
     current_offset_ = 0;
+
+    // Track total chunk memory allocated (persists across reset)
+    total_allocated_ += size;
   }
 
   // Find which chunk contains this pointer
@@ -319,7 +353,8 @@ class FreeListArena : public MemArena {
         current_offset_);
 
     current_offset_ = data_aligned_offset + aligned_size;
-    total_allocated_ += aligned_size;
+    // Track individual block allocation (live memory usage)
+    total_used_ += aligned_size;
 
     // Update allocated size for current chunk
     chunk_allocated_sizes_.back() = current_offset_;

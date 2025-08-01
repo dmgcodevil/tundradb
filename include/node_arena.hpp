@@ -18,16 +18,19 @@ namespace tundradb {
  * Lightweight reference that can be passed around efficiently
  */
 struct NodeHandle {
-  void* ptr;    // Direct pointer to node data
-  size_t size;  // Size of the node data
+  void* ptr;                // Direct pointer to node data
+  size_t size;              // Size of the node data
+  std::string schema_name;  // Schema name for proper string cleanup
 
-  NodeHandle() : ptr(nullptr), size(0) {}
-  NodeHandle(void* p, size_t s) : ptr(p), size(s) {}
+  NodeHandle() : ptr(nullptr), size(0), schema_name("") {}
+  NodeHandle(void* p, size_t s, std::string schema)
+      : ptr(p), size(s), schema_name(std::move(schema)) {}
 
   bool is_null() const { return ptr == nullptr; }
 
   bool operator==(const NodeHandle& other) const {
-    return ptr == other.ptr && size == other.size;
+    return ptr == other.ptr && size == other.size &&
+           schema_name == other.schema_name;
   }
 
   bool operator!=(const NodeHandle& other) const { return !(*this == other); }
@@ -76,17 +79,42 @@ class NodeArena {
     // Initialize the node data with default values
     layout->initialize_node_data(static_cast<char*>(node_data));
 
-    return NodeHandle(node_data, node_size);
+    return NodeHandle(node_data, node_size, schema_name);
   }
 
   /**
-   * Deallocate a node (only works with FreeListArena)
-   * For MemoryArena, this is a no-op
+   * Deallocate a node and all its string references
+   * Uses schema_name from the NodeHandle for proper cleanup
    */
   void deallocate_node(const NodeHandle& handle) {
-    if (!handle.is_null()) {
-      mem_arena_->deallocate(handle.ptr);
+    if (handle.is_null()) {
+      return;
     }
+
+    // First, deallocate all string references from the node
+    if (!handle.schema_name.empty()) {
+      const SchemaLayout* layout =
+          layout_registry_->get_layout(handle.schema_name);
+      if (layout) {
+        for (const auto& field : layout->get_fields()) {
+          if (is_string_type(field.type)) {
+            // Read the StringRef from the node memory
+            const char* field_ptr =
+                static_cast<const char*>(handle.ptr) + field.offset;
+            const StringRef* str_ref =
+                reinterpret_cast<const StringRef*>(field_ptr);
+
+            // Deallocate the string if it's not null
+            if (!str_ref->is_null()) {
+              string_arena_->deallocate_string(*str_ref);
+            }
+          }
+        }
+      }
+    }
+
+    // Then deallocate the node memory itself
+    mem_arena_->deallocate(handle.ptr);
   }
 
   /**
