@@ -6,10 +6,12 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <ranges>
 #include <set>
 #include <vector>
 
 #include "logger.hpp"
+#include "mem_arena.hpp"
 #include "mem_utils.hpp"
 
 namespace tundradb {
@@ -34,7 +36,7 @@ struct BlockHeader {
  * - Objects that need individual deallocation
  * - Memory pools where fragmentation is acceptable
  */
-class FreeListArena {
+class FreeListArena : public MemArena {
  public:
   explicit FreeListArena(
       size_t initial_size = 1024 * 1024,  // 1MB default
@@ -45,7 +47,7 @@ class FreeListArena {
     allocate_new_chunk(chunk_size_);
   }
 
-  ~FreeListArena() { clear(); }
+  ~FreeListArena() override { clear(); }
 
   // Non-copyable but movable
   FreeListArena(const FreeListArena&) = delete;
@@ -59,7 +61,7 @@ class FreeListArena {
    * @param alignment Memory alignment requirement (default: 8 bytes)
    * @return Pointer to allocated memory, or nullptr if allocation fails
    */
-  void* allocate(size_t size, size_t alignment = 8) {
+  void* allocate(size_t size, size_t alignment = 8) override {
     size = align_up(size, alignment);
 
     // Try to find a suitable free block first
@@ -76,7 +78,7 @@ class FreeListArena {
    * Deallocate a block and add it to the free list
    * @param ptr Pointer returned by allocate()
    */
-  void deallocate(void* ptr) {
+  void deallocate(void* ptr) override {
     if (!ptr) return;
 
     // Get the block header
@@ -101,7 +103,7 @@ class FreeListArena {
   /**
    * Reset the arena - clears all allocations and free lists
    */
-  void reset() {
+  void reset() override {
     // Clear free lists
     free_blocks_by_size_.clear();
 
@@ -125,7 +127,7 @@ class FreeListArena {
   /**
    * Clear all allocated memory
    */
-  void clear() {
+  void clear() override {
     chunks_.clear();
     chunk_sizes_.clear();
     chunk_allocated_sizes_.clear();
@@ -138,13 +140,13 @@ class FreeListArena {
   }
 
   // Statistics
-  size_t get_total_allocated() const { return total_allocated_; }
+  size_t get_total_allocated() const override { return total_allocated_; }
   size_t get_freed_bytes() const { return freed_bytes_; }
   size_t get_live_bytes() const { return total_allocated_ - freed_bytes_; }
-  size_t get_chunk_count() const { return chunks_.size(); }
+  size_t get_chunk_count() const override { return chunks_.size(); }
   size_t get_free_block_count() const {
     size_t count = 0;
-    for (const auto& [size, blocks] : free_blocks_by_size_) {
+    for (const auto& blocks : free_blocks_by_size_ | std::views::values) {
       count += blocks.size();
     }
     return count;
@@ -389,14 +391,14 @@ class FreeListArena {
     }
   }
 
-  // Find next block using physical adjacency
+  // Find the next block using physical adjacency
   BlockHeader* find_next_block(BlockHeader* header) {
     // Need byte-level arithmetic (header + header->size would be wrong pointer
     // math)
     char* current_ptr = reinterpret_cast<char*>(header);
     char* next_ptr = current_ptr + BlockHeader::HEADER_SIZE + header->size;
 
-    // Check if next block is within the same chunk
+    // Check if the next block is within the same chunk
     char* chunk_start = find_chunk_start(header);
     if (!chunk_start) {
       // Defensive check - should not happen with valid blocks

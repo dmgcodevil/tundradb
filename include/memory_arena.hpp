@@ -7,15 +7,17 @@
 #include <memory>
 #include <vector>
 
+#include "mem_arena.hpp"
 #include "mem_utils.hpp"
 
 namespace tundradb {
 
 /**
- * Base class for arena-based memory allocation
+ * Simple arena-based memory allocation
  * Provides fast bulk allocation with automatic cleanup
+ * No individual deallocation - reset/clear only
  */
-class MemoryArena {
+class MemoryArena : public MemArena {
  public:
   explicit MemoryArena(size_t initial_size = 1024 * 1024)  // 1MB default
       : chunk_size_(initial_size), current_offset_(0) {
@@ -37,7 +39,7 @@ class MemoryArena {
    * @param alignment Memory alignment requirement (default: 8 bytes)
    * @return Pointer to allocated memory, or nullptr if allocation fails
    */
-  void* allocate(size_t size, size_t alignment = 8) {
+  void* allocate(size_t size, size_t alignment = 8) override {
     // Calculate aligned offset within current chunk
     size_t aligned_offset =
         (current_chunk_ != nullptr)
@@ -66,6 +68,16 @@ class MemoryArena {
   }
 
   /**
+   * Deallocate memory (no-op for MemoryArena - use reset/clear instead)
+   * @param ptr Pointer returned by allocate()
+   */
+  void deallocate(void* ptr) override {
+    // MemoryArena doesn't support individual deallocation
+    // Use reset() or clear() instead
+    (void)ptr;  // Suppress unused parameter warning
+  }
+
+  /**
    * Allocate and construct an object in the arena
    */
   template <typename T, typename... Args>
@@ -78,7 +90,7 @@ class MemoryArena {
    * Reset the arena - keeps allocated chunks but resets usage
    * Much faster than deallocating and reallocating
    */
-  void reset() {
+  void reset() override {
     current_offset_ = 0;
     if (!chunks_.empty()) {
       current_chunk_ = chunks_[0].get();
@@ -89,7 +101,7 @@ class MemoryArena {
   /**
    * Clear all allocated memory
    */
-  void clear() {
+  void clear() override {
     chunks_.clear();
     current_chunk_ = nullptr;
     current_offset_ = 0;
@@ -97,8 +109,8 @@ class MemoryArena {
   }
 
   // Statistics
-  size_t get_total_allocated() const { return total_allocated_; }
-  size_t get_chunk_count() const { return chunks_.size(); }
+  size_t get_total_allocated() const override { return total_allocated_; }
+  size_t get_chunk_count() const override { return chunks_.size(); }
   size_t get_current_chunk_usage() const { return current_offset_; }
   size_t get_current_chunk_size() const { return chunk_size_; }
 
