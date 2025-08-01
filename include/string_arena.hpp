@@ -121,6 +121,12 @@ class StringPool {
   // Statistics
   size_t get_max_size() const { return max_size_; }
   size_t get_total_allocated() const { return arena_->get_total_allocated(); }
+  size_t get_used_bytes() const {
+    if (auto* free_list = dynamic_cast<FreeListArena*>(arena_.get())) {
+      return free_list->get_used_bytes();
+    }
+    return 0;  // Fallback if not FreeListArena
+  }
   size_t get_string_count() const { return dedup_map_.size(); }
 
   // Get total reference count (for debugging)

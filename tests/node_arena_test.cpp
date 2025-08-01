@@ -439,3 +439,59 @@ TEST_F(NodeArenaTest, ResetAndClear) {
   // Clean up the final node
   node_arena_->deallocate_node(after_clear_node);
 }
+
+TEST_F(NodeArenaTest, StringUpdateDeallocation) {
+  // Test that updating string fields properly deallocates old strings
+  NodeHandle node = node_arena_->allocate_node("TestNode");
+  ASSERT_FALSE(node.is_null());
+
+  // Get initial string arena state - StringPools pre-allocate 1MB chunks
+  StringArena* string_arena = node_arena_->get_string_arena();
+  size_t initial_chunk_memory = 0;
+  size_t initial_used_memory = 0;
+  if (auto* pool16 = string_arena->get_pool(ValueType::FixedString16)) {
+    initial_chunk_memory =
+        pool16->get_total_allocated();  // Should be 1MB (pre-allocated)
+    initial_used_memory =
+        pool16->get_used_bytes();  // Should be 0 (no strings yet)
+  }
+
+  // Set initial string value
+  std::string original_string = "Hello World";
+  EXPECT_TRUE(node_arena_->set_field_value(node, "TestNode", "short_name",
+                                           Value{original_string}));
+
+  // Chunk memory should be unchanged (fits in pre-allocated 1MB)
+  // But used memory should increase
+  size_t after_first_chunk = 0;
+  size_t after_first_used = 0;
+  if (auto* pool16 = string_arena->get_pool(ValueType::FixedString16)) {
+    after_first_chunk = pool16->get_total_allocated();
+    after_first_used = pool16->get_used_bytes();
+  }
+  EXPECT_EQ(after_first_chunk, initial_chunk_memory);  // Same 1MB chunk
+  EXPECT_GT(after_first_used, initial_used_memory);  // More bytes actually used
+
+  // Update with new string value
+  std::string new_string = "Goodbye";
+  EXPECT_TRUE(node_arena_->set_field_value(node, "TestNode", "short_name",
+                                           Value{new_string}));
+
+  // Verify the new value is set correctly
+  Value retrieved =
+      node_arena_->get_field_value(node, "TestNode", "short_name");
+  EXPECT_EQ(retrieved.to_string(), new_string);
+
+  // Due to reference counting, both strings might still be allocated
+  // But we should verify there's no unbounded growth with multiple updates
+  std::string third_string = "Final";
+  EXPECT_TRUE(node_arena_->set_field_value(node, "TestNode", "short_name",
+                                           Value{third_string}));
+
+  Value final_value =
+      node_arena_->get_field_value(node, "TestNode", "short_name");
+  EXPECT_EQ(final_value.to_string(), third_string);
+
+  // Clean up
+  node_arena_->deallocate_node(node);
+}

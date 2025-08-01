@@ -151,17 +151,34 @@ class NodeArena {
       return false;  // unknown schema
     }
 
-    // For string values, store in string arena and convert to StringRef
+    // Handle string deallocation for any field that might contain strings
     Value storage_value = value;
     const FieldLayout* field_layout = layout->get_field_layout(field_name);
-    if (field_layout && is_string_type(field_layout->type)) {
+    if (field_layout) {
+      // If the field currently contains a string, deallocate it first
+      if (is_string_type(field_layout->type)) {
+        Value old_value =
+            layout->get_field_value(static_cast<char*>(handle.ptr), field_name);
+        if (!old_value.is_null() && old_value.type() != ValueType::Null) {
+          try {
+            StringRef old_str_ref = old_value.as_string_ref();
+            if (!old_str_ref.is_null()) {
+              string_arena_->deallocate_string(old_str_ref);
+            }
+          } catch (...) {
+            // Old value wasn't a StringRef, ignore
+          }
+        }
+      }
+
       if (value.type() == ValueType::String) {
         // Check if it's a temporary std::string that needs to be stored in
         // arena
         try {
           const std::string& str_content = value.as_string();
           StringRef str_ref = string_arena_->store_string_auto(str_content);
-          storage_value = Value{str_ref};
+          storage_value =
+              Value{str_ref, field_layout->type};  // Preserve field type
         } catch (...) {
           // Already a StringRef, use as-is
           storage_value = value;
