@@ -16,21 +16,27 @@ namespace tundradb {
 /**
  * Handle to a node stored in the arena
  * Lightweight reference that can be passed around efficiently
+ * Includes schema version for evolution support
  */
 struct NodeHandle {
   void* ptr;                // Direct pointer to node data
   size_t size;              // Size of the node data
   std::string schema_name;  // Schema name for proper string cleanup
+  uint32_t schema_version;  // Schema version for evolution support
 
-  NodeHandle() : ptr(nullptr), size(0), schema_name("") {}
-  NodeHandle(void* p, size_t s, std::string schema)
-      : ptr(p), size(s), schema_name(std::move(schema)) {}
+  NodeHandle() : ptr(nullptr), size(0), schema_name(""), schema_version(0) {}
+  NodeHandle(void* p, size_t s, std::string schema, uint32_t version = 1)
+      : ptr(p),
+        size(s),
+        schema_name(std::move(schema)),
+        schema_version(version) {}
 
   bool is_null() const { return ptr == nullptr; }
 
   bool operator==(const NodeHandle& other) const {
     return ptr == other.ptr && size == other.size &&
-           schema_name == other.schema_name;
+           schema_name == other.schema_name &&
+           schema_version == other.schema_version;
   }
 
   bool operator!=(const NodeHandle& other) const { return !(*this == other); }

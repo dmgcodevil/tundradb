@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "node_arena.hpp"
 #include "schema.hpp"
 #include "types.hpp"
 
@@ -20,16 +21,19 @@ enum UpdateType {
 class Node {
  private:
   std::unordered_map<std::string, Value> data_;
+  std::unique_ptr<NodeHandle> handle_;
 
  public:
   int64_t id;
   std::string schema_name;
 
   explicit Node(const int64_t id, std::string schema_name,
-                std::unordered_map<std::string, Value> initial_data)
+                std::unordered_map<std::string, Value> initial_data,
+                std::unique_ptr<NodeHandle> handle = nullptr)
       : data_(std::move(initial_data)),
         id(id),
-        schema_name(std::move(schema_name)) {}
+        schema_name(std::move(schema_name)),
+        handle_(std::move(handle)) {}
 
   ~Node() { data_.clear(); }
 
@@ -122,7 +126,7 @@ class NodeManager {
 
     auto id = id_counter.fetch_add(1);
     normalized_data["id"] = Value{id};
-    auto node = std::make_shared<Node>(id, schema_name, normalized_data);
+    auto node = std::make_shared<Node>(id, schema_name, normalized_data, std::unique_ptr<NodeHandle>{});
     nodes[id] = node;
     return node;
   }
