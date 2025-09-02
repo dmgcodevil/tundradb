@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "mem_utils.hpp"
+#include "schema.hpp"
 #include "types.hpp"
 
 namespace tundradb {
@@ -144,22 +145,22 @@ class SchemaLayout {
  private:
   Value read_value_from_memory(const char* ptr, ValueType type) const {
     switch (type) {
-      case ValueType::Int64:
+      case ValueType::INT64:
         return Value{*reinterpret_cast<const int64_t*>(ptr)};
-      case ValueType::Int32:
+      case ValueType::INT32:
         return Value{*reinterpret_cast<const int32_t*>(ptr)};
-      case ValueType::Double:
+      case ValueType::DOUBLE:
         return Value{*reinterpret_cast<const double*>(ptr)};
-      case ValueType::Bool:
+      case ValueType::BOOL:
         return Value{*reinterpret_cast<const bool*>(ptr)};
-      case ValueType::String:
-      case ValueType::FixedString16:
-      case ValueType::FixedString32:
-      case ValueType::FixedString64:
+      case ValueType::STRING:
+      case ValueType::FIXED_STRING16:
+      case ValueType::FIXED_STRING32:
+      case ValueType::FIXED_STRING64:
         // All string types stored as StringRef, but preserve the field's
         // declared type
         return Value{*reinterpret_cast<const StringRef*>(ptr), type};
-      case ValueType::Null:
+      case ValueType::NA:
       default:
         return Value{};
     }
@@ -167,26 +168,26 @@ class SchemaLayout {
 
   bool write_value_to_memory(char* ptr, ValueType type, const Value& value) {
     switch (type) {
-      case ValueType::Int64:
-        if (value.type() != ValueType::Int64) return false;
+      case ValueType::INT64:
+        if (value.type() != ValueType::INT64) return false;
         *reinterpret_cast<int64_t*>(ptr) = value.as_int64();
         return true;
-      case ValueType::Int32:
-        if (value.type() != ValueType::Int32) return false;
+      case ValueType::INT32:
+        if (value.type() != ValueType::INT32) return false;
         *reinterpret_cast<int32_t*>(ptr) = value.as_int32();
         return true;
-      case ValueType::Double:
-        if (value.type() != ValueType::Double) return false;
+      case ValueType::DOUBLE:
+        if (value.type() != ValueType::DOUBLE) return false;
         *reinterpret_cast<double*>(ptr) = value.as_double();
         return true;
-      case ValueType::Bool:
-        if (value.type() != ValueType::Bool) return false;
+      case ValueType::BOOL:
+        if (value.type() != ValueType::BOOL) return false;
         *reinterpret_cast<bool*>(ptr) = value.as_bool();
         return true;
-      case ValueType::String:
-      case ValueType::FixedString16:
-      case ValueType::FixedString32:
-      case ValueType::FixedString64: {
+      case ValueType::STRING:
+      case ValueType::FIXED_STRING16:
+      case ValueType::FIXED_STRING32:
+      case ValueType::FIXED_STRING64: {
         // All string types expect StringRef
         if (!is_string_type(value.type())) return false;
 
@@ -201,10 +202,10 @@ class SchemaLayout {
 
   void initialize_field_memory(char* ptr, ValueType type) const {
     switch (type) {
-      case ValueType::String:
-      case ValueType::FixedString16:
-      case ValueType::FixedString32:
-      case ValueType::FixedString64:
+      case ValueType::STRING:
+      case ValueType::FIXED_STRING16:
+      case ValueType::FIXED_STRING32:
+      case ValueType::FIXED_STRING64:
         // Initialize StringRef to null/empty
         new (ptr) StringRef();
         break;
@@ -230,7 +231,7 @@ class LayoutRegistry {
   /**
    * Register a manually created layout
    */
-  void register_layout(std::unique_ptr<SchemaLayout> layout) {
+  void register_layout(std::shared_ptr<SchemaLayout> layout) {
     if (!layout->is_finalized()) {
       layout->finalize();
     }
@@ -240,23 +241,22 @@ class LayoutRegistry {
   /**
    * Get layout for a schema, returns nullptr if not found
    */
-  SchemaLayout* get_layout(const std::string& schema_name) {
+  std::shared_ptr<SchemaLayout> get_layout(const std::string& schema_name) {
     auto it = layouts_.find(schema_name);
-    return it != layouts_.end() ? it->second.get() : nullptr;
+    return it != layouts_.end() ? it->second : nullptr;
   }
 
-  const SchemaLayout* get_layout(const std::string& schema_name) const {
-    auto it = layouts_.find(schema_name);
-    return it != layouts_.end() ? it->second.get() : nullptr;
+  bool exists(const std::string& schema_name) const {
+    return layouts_.contains(schema_name);
   }
 
   /**
    * Create and register a layout from an Arrow schema
    */
-  SchemaLayout* create_layout_from_arrow_schema(
+  std::shared_ptr<SchemaLayout> create_layout_from_arrow_schema(
       const std::string& schema_name,
       const std::shared_ptr<arrow::Schema>& arrow_schema) {
-    auto layout = std::make_unique<SchemaLayout>(schema_name);
+    auto layout = std::make_shared<SchemaLayout>(schema_name);
 
     // Add fields (all strings stored as StringRef)
     for (const auto& field : arrow_schema->fields()) {
@@ -264,12 +264,26 @@ class LayoutRegistry {
       // String types are stored as StringRef in node layout
       layout->add_field(field->name(), value_type, field->nullable());
     }
+    layout->finalize();
+    layouts_[schema_name] = layout;
+    return layout;
+  }
+
+  std::shared_ptr<SchemaLayout> create_layout(
+      const std::shared_ptr<Schema>& schema) {
+    auto layout = std::make_shared<SchemaLayout>(schema->name());
+
+    // Add fields (all strings stored as StringRef)
+    for (const auto& field : schema->fields()) {
+      // String types are stored as StringRef in node layout
+      layout->add_field(field->name(), field->type(), field->nullable());
+    }
 
     layout->finalize();
 
-    SchemaLayout* result = layout.get();
-    layouts_[schema_name] = std::move(layout);
-    return result;
+    layouts_[schema->name()] = layout;
+    Logger::get_instance().debug("created schema layout");
+    return layout;
   }
 
   bool remove_layout(const std::string& schema_name) {
@@ -290,24 +304,24 @@ class LayoutRegistry {
   void clear() { layouts_.clear(); }
 
  private:
-  std::unordered_map<std::string, std::unique_ptr<SchemaLayout>> layouts_;
+  std::unordered_map<std::string, std::shared_ptr<SchemaLayout>> layouts_;
 
   // Helper function to convert Arrow types to ValueTypes
   ValueType arrow_type_to_value_type(
       const std::shared_ptr<arrow::DataType>& arrow_type) const {
     switch (arrow_type->id()) {
       case arrow::Type::INT32:
-        return ValueType::Int32;
+        return ValueType::INT32;
       case arrow::Type::INT64:
-        return ValueType::Int64;
+        return ValueType::INT64;
       case arrow::Type::DOUBLE:
-        return ValueType::Double;
+        return ValueType::DOUBLE;
       case arrow::Type::BOOL:
-        return ValueType::Bool;
+        return ValueType::BOOL;
       case arrow::Type::STRING:
-        return ValueType::String;  // Will be stored as StringRef
+        return ValueType::STRING;  // Will be stored as StringRef
       default:
-        return ValueType::Null;
+        return ValueType::NA;
     }
   }
 };

@@ -46,19 +46,19 @@ std::string join_container(const Container& container,
 // Convert Value to Arrow compute scalar for expressions
 arrow::compute::Expression value_to_expression(const Value& value) {
   switch (value.type()) {
-    case ValueType::Int32:
+    case ValueType::INT32:
       return arrow::compute::literal(value.get<int32_t>());
-    case ValueType::Int64:
+    case ValueType::INT64:
       return arrow::compute::literal(value.get<int64_t>());
-    case ValueType::String:
+    case ValueType::STRING:
       return arrow::compute::literal(value.get<std::string>());
-    case ValueType::Float:
+    case ValueType::FLOAT:
       return arrow::compute::literal(value.get<float>());
-    case ValueType::Double:
+    case ValueType::DOUBLE:
       return arrow::compute::literal(value.get<double>());
-    case ValueType::Bool:
+    case ValueType::BOOL:
       return arrow::compute::literal(value.get<bool>());
-    case ValueType::Null:
+    case ValueType::NA:
       return arrow::compute::literal(
           arrow::Datum(arrow::MakeNullScalar(arrow::null())));
     default:
@@ -70,17 +70,17 @@ arrow::compute::Expression value_to_expression(const Value& value) {
 arrow::Result<std::shared_ptr<arrow::Scalar>> value_to_arrow_scalar(
     const Value& value) {
   switch (value.type()) {
-    case ValueType::Int32:
+    case ValueType::INT32:
       return arrow::MakeScalar(value.as_int32());
-    case ValueType::Int64:
+    case ValueType::INT64:
       return arrow::MakeScalar(value.as_int64());
-    case ValueType::Double:
+    case ValueType::DOUBLE:
       return arrow::MakeScalar(value.as_double());
-    case ValueType::String:
+    case ValueType::STRING:
       return arrow::MakeScalar(value.as_string());
-    case ValueType::Bool:
+    case ValueType::BOOL:
       return arrow::MakeScalar(value.as_bool());
-    case ValueType::Null:
+    case ValueType::NA:
       return arrow::MakeNullScalar(arrow::null());
     default:
       return arrow::Status::NotImplemented(
@@ -165,7 +165,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
       const auto& field_name = schema->field(i)->name();
 
       // Find the value in the node's data
-      auto res = node->get_field(field_name);
+      auto res = node->get_value(field_name);
       if (res.ok()) {
         // Convert Value to Arrow scalar and append to builder
         auto value = res.ValueOrDie();
@@ -498,8 +498,8 @@ arrow::Result<std::shared_ptr<arrow::Schema>> build_denormalized_schema(
 
   log_debug("Adding fields from FROM schema '{}'", from_schema);
 
-  auto schema_result =
-      query_state.schema_registry->get(query_state.aliases.at(from_schema));
+  auto schema_result = query_state.schema_registry->get_arrow(
+      query_state.aliases.at(from_schema));
   if (!schema_result.ok()) {
     return schema_result.status();
   }
@@ -525,7 +525,7 @@ arrow::Result<std::shared_ptr<arrow::Schema>> build_denormalized_schema(
   for (const auto& schema_ref : unique_schemas) {
     log_debug("Adding fields from schema '{}'", schema_ref.value());
 
-    schema_result = query_state.schema_registry->get(
+    schema_result = query_state.schema_registry->get_arrow(
         query_state.aliases.at(schema_ref.value()));
     if (!schema_result.ok()) {
       return schema_result.status();
@@ -1811,7 +1811,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           }
         }
         auto target_table_schema =
-            schema_registry_->get(target_schema).ValueOrDie();
+            schema_registry_->get_arrow(target_schema).ValueOrDie();
         auto table_result =
             create_table_from_nodes(target_table_schema, neighbors);
         if (!table_result.ok()) {

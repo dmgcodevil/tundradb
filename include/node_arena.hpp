@@ -57,10 +57,10 @@ class NodeArena {
    * own if null)
    */
   NodeArena(std::unique_ptr<MemArena> mem_arena,
-            LayoutRegistry* layout_registry,
+            std::shared_ptr<LayoutRegistry> layout_registry,
             std::unique_ptr<StringArena> string_arena = nullptr)
       : mem_arena_(std::move(mem_arena)),
-        layout_registry_(layout_registry),
+        layout_registry_(std::move(layout_registry)),
         string_arena_(string_arena ? std::move(string_arena)
                                    : std::make_unique<StringArena>()) {}
 
@@ -69,7 +69,8 @@ class NodeArena {
    * Returns a handle to the allocated node memory
    */
   NodeHandle allocate_node(const std::string& schema_name) {
-    const SchemaLayout* layout = layout_registry_->get_layout(schema_name);
+    const std::shared_ptr<SchemaLayout> layout =
+        layout_registry_->get_layout(schema_name);
     if (!layout) {
       return NodeHandle{};  // null handle for unknown schema
     }
@@ -99,7 +100,7 @@ class NodeArena {
 
     // First, deallocate all string references from the node
     if (!handle.schema_name.empty()) {
-      const SchemaLayout* layout =
+      const std::shared_ptr<SchemaLayout> layout =
           layout_registry_->get_layout(handle.schema_name);
       if (layout) {
         for (const auto& field : layout->get_fields()) {
@@ -129,14 +130,28 @@ class NodeArena {
   Value get_field_value(const NodeHandle& handle,
                         const std::string& schema_name,
                         const std::string& field_name) const {
+    Logger::get_instance().debug("get_field_value: {}.{}", schema_name,
+                                 field_name);
     if (handle.is_null()) {
+      Logger::get_instance().error("null value for invalid handle");
       return Value{};  // null value for invalid handle
     }
 
-    const SchemaLayout* layout = layout_registry_->get_layout(schema_name);
+    // Logger::get_instance().debug("pitr1");
+    if (layout_registry_ == nullptr) {
+      Logger::get_instance().error("null layout registry");
+      return Value{};  // null value for invalid handle
+    }
+
+    // Logger::get_instance().debug("pitr2");
+
+    const std::shared_ptr<SchemaLayout> layout =
+        layout_registry_->get_layout(schema_name);
     if (!layout) {
+      Logger::get_instance().error("null value for unknown schema");
       return Value{};  // null value for unknown schema
     }
+    // Logger::get_instance().debug("pitr3");
 
     return layout->get_field_value(static_cast<const char*>(handle.ptr),
                                    field_name);
@@ -148,11 +163,14 @@ class NodeArena {
    */
   bool set_field_value(const NodeHandle& handle, const std::string& schema_name,
                        const std::string& field_name, const Value& value) {
+    Logger::get_instance().debug("set_field_value: {}.{} = {}", schema_name,
+                                 field_name, value.to_string());
     if (handle.is_null()) {
       return false;  // invalid handle
     }
 
-    SchemaLayout* layout = layout_registry_->get_layout(schema_name);
+    std::shared_ptr<SchemaLayout> layout =
+        layout_registry_->get_layout(schema_name);
     if (!layout) {
       return false;  // unknown schema
     }
@@ -165,7 +183,7 @@ class NodeArena {
       if (is_string_type(field_layout->type)) {
         Value old_value =
             layout->get_field_value(static_cast<char*>(handle.ptr), field_name);
-        if (!old_value.is_null() && old_value.type() != ValueType::Null) {
+        if (!old_value.is_null() && old_value.type() != ValueType::NA) {
           try {
             StringRef old_str_ref = old_value.as_string_ref();
             if (!old_str_ref.is_null()) {
@@ -177,7 +195,7 @@ class NodeArena {
         }
       }
 
-      if (value.type() == ValueType::String) {
+      if (value.type() == ValueType::STRING) {
         // Check if it's a temporary std::string that needs to be stored in
         // arena
         try {
@@ -229,7 +247,7 @@ class NodeArena {
 
  private:
   std::unique_ptr<MemArena> mem_arena_;  // For fixed-size node layouts
-  LayoutRegistry* layout_registry_;
+  std::shared_ptr<LayoutRegistry> layout_registry_;
   std::unique_ptr<StringArena>
       string_arena_;  // For variable-size string content
 };
@@ -245,7 +263,7 @@ namespace node_arena_factory {
  * Creates its own StringArena for string management
  */
 inline std::unique_ptr<NodeArena> create_simple_arena(
-    LayoutRegistry* layout_registry,
+    const std::shared_ptr<LayoutRegistry>& layout_registry,
     size_t initial_size = 2 * 1024 * 1024) {  // 2MB default
   auto mem_arena = std::make_unique<MemoryArena>(initial_size);
   return std::make_unique<NodeArena>(std::move(mem_arena), layout_registry);
@@ -256,7 +274,7 @@ inline std::unique_ptr<NodeArena> create_simple_arena(
  * Creates its own StringArena for string management
  */
 inline std::unique_ptr<NodeArena> create_free_list_arena(
-    LayoutRegistry* layout_registry,
+    const std::shared_ptr<LayoutRegistry>& layout_registry,
     size_t initial_size = 2 * 1024 * 1024,  // 2MB default
     size_t min_fragment_size = 64) {        // 64 bytes minimum fragment
   auto mem_arena =

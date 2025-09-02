@@ -18,21 +18,21 @@ class NodeArenaTest : public ::testing::Test {
 
     // Create a comprehensive test schema with all ValueTypes
     auto layout = std::make_unique<SchemaLayout>("TestNode");
-    layout->add_field("id", ValueType::Int64);
-    layout->add_field("count", ValueType::Int32);
-    layout->add_field("score", ValueType::Double);
-    layout->add_field("active", ValueType::Bool);
-    layout->add_field("description", ValueType::String);  // Variable length
-    layout->add_field("short_name", ValueType::FixedString16);   // ≤16 chars
-    layout->add_field("medium_name", ValueType::FixedString32);  // ≤32 chars
-    layout->add_field("long_name", ValueType::FixedString64);    // ≤64 chars
+    layout->add_field("id", ValueType::INT64);
+    layout->add_field("count", ValueType::INT32);
+    layout->add_field("score", ValueType::DOUBLE);
+    layout->add_field("active", ValueType::BOOL);
+    layout->add_field("description", ValueType::STRING);  // Variable length
+    layout->add_field("short_name", ValueType::FIXED_STRING16);   // ≤16 chars
+    layout->add_field("medium_name", ValueType::FIXED_STRING32);  // ≤32 chars
+    layout->add_field("long_name", ValueType::FIXED_STRING64);    // ≤64 chars
     layout->finalize();
 
     total_node_size_ = layout->get_total_size();
     registry_->register_layout(std::move(layout));
 
     // Create NodeArena with FreeListArena for individual deallocation
-    node_arena_ = node_arena_factory::create_free_list_arena(registry_.get());
+    node_arena_ = node_arena_factory::create_free_list_arena(registry_);
   }
 
   void TearDown() override {
@@ -40,14 +40,14 @@ class NodeArenaTest : public ::testing::Test {
     registry_.reset();
   }
 
-  std::unique_ptr<LayoutRegistry> registry_;
-  std::unique_ptr<NodeArena> node_arena_;
+  std::shared_ptr<LayoutRegistry> registry_;
+  std::shared_ptr<NodeArena> node_arena_;
   size_t total_node_size_;
 };
 
 TEST_F(NodeArenaTest, SchemaLayoutSize) {
   // Verify the layout calculates correct sizes
-  const SchemaLayout* layout = registry_->get_layout("TestNode");
+  std::shared_ptr<SchemaLayout> layout = registry_->get_layout("TestNode");
   ASSERT_NE(layout, nullptr);
 
   // Check individual field sizes
@@ -103,28 +103,28 @@ TEST_F(NodeArenaTest, NumericFieldOperations) {
   EXPECT_TRUE(node_arena_->set_field_value(node, "TestNode", "id",
                                            Value{static_cast<int64_t>(12345)}));
   Value id_val = node_arena_->get_field_value(node, "TestNode", "id");
-  EXPECT_EQ(id_val.type(), ValueType::Int64);
+  EXPECT_EQ(id_val.type(), ValueType::INT64);
   EXPECT_EQ(id_val.as_int64(), 12345L);
 
   // Test Int32 field
   EXPECT_TRUE(
       node_arena_->set_field_value(node, "TestNode", "count", Value{42}));
   Value count_val = node_arena_->get_field_value(node, "TestNode", "count");
-  EXPECT_EQ(count_val.type(), ValueType::Int32);
+  EXPECT_EQ(count_val.type(), ValueType::INT32);
   EXPECT_EQ(count_val.as_int32(), 42);
 
   // Test Double field
   EXPECT_TRUE(
       node_arena_->set_field_value(node, "TestNode", "score", Value{95.5}));
   Value score_val = node_arena_->get_field_value(node, "TestNode", "score");
-  EXPECT_EQ(score_val.type(), ValueType::Double);
+  EXPECT_EQ(score_val.type(), ValueType::DOUBLE);
   EXPECT_DOUBLE_EQ(score_val.as_double(), 95.5);
 
   // Test Bool field
   EXPECT_TRUE(
       node_arena_->set_field_value(node, "TestNode", "active", Value{true}));
   Value active_val = node_arena_->get_field_value(node, "TestNode", "active");
-  EXPECT_EQ(active_val.type(), ValueType::Bool);
+  EXPECT_EQ(active_val.type(), ValueType::BOOL);
   EXPECT_EQ(active_val.as_bool(), true);
 
   node_arena_->deallocate_node(node);
@@ -141,7 +141,7 @@ TEST_F(NodeArenaTest, StringFieldOperations) {
                                            Value{description}));
   Value desc_val =
       node_arena_->get_field_value(node, "TestNode", "description");
-  EXPECT_EQ(desc_val.type(), ValueType::String);
+  EXPECT_EQ(desc_val.type(), ValueType::STRING);
   EXPECT_EQ(desc_val.to_string(), description);
 
   // Test FixedString16 field (≤16 chars)
@@ -150,7 +150,7 @@ TEST_F(NodeArenaTest, StringFieldOperations) {
                                            Value{short_name}));
   Value short_val =
       node_arena_->get_field_value(node, "TestNode", "short_name");
-  EXPECT_EQ(short_val.type(), ValueType::FixedString16);
+  EXPECT_EQ(short_val.type(), ValueType::FIXED_STRING16);
   EXPECT_EQ(short_val.to_string(), short_name);
 
   // Test FixedString32 field (≤32 chars)
@@ -160,7 +160,7 @@ TEST_F(NodeArenaTest, StringFieldOperations) {
                                            Value{medium_name}));
   Value medium_val =
       node_arena_->get_field_value(node, "TestNode", "medium_name");
-  EXPECT_EQ(medium_val.type(), ValueType::FixedString32);
+  EXPECT_EQ(medium_val.type(), ValueType::FIXED_STRING32);
   EXPECT_EQ(medium_val.to_string(), medium_name);
 
   // Test FixedString64 field (≤64 chars)
@@ -171,7 +171,7 @@ TEST_F(NodeArenaTest, StringFieldOperations) {
   EXPECT_TRUE(node_arena_->set_field_value(node, "TestNode", "long_name",
                                            Value{long_name}));
   Value long_val = node_arena_->get_field_value(node, "TestNode", "long_name");
-  EXPECT_EQ(long_val.type(), ValueType::FixedString64);
+  EXPECT_EQ(long_val.type(), ValueType::FIXED_STRING64);
   EXPECT_EQ(long_val.to_string(), long_name);
 
   node_arena_->deallocate_node(node);
@@ -212,9 +212,9 @@ TEST_F(NodeArenaTest, StringArenaIntegration) {
   ASSERT_NE(string_arena, nullptr);
 
   // Check that different pools are being used
-  StringPool* pool16 = string_arena->get_pool(ValueType::FixedString16);
-  StringPool* pool32 = string_arena->get_pool(ValueType::FixedString32);
-  StringPool* poolStr = string_arena->get_pool(ValueType::String);
+  StringPool* pool16 = string_arena->get_pool(ValueType::FIXED_STRING16);
+  StringPool* pool32 = string_arena->get_pool(ValueType::FIXED_STRING32);
+  StringPool* poolStr = string_arena->get_pool(ValueType::STRING);
 
   EXPECT_GT(pool16->get_total_allocated(), 0);   // str1 went here
   EXPECT_GT(pool32->get_total_allocated(), 0);   // str2 went here
@@ -449,7 +449,7 @@ TEST_F(NodeArenaTest, StringUpdateDeallocation) {
   StringArena* string_arena = node_arena_->get_string_arena();
   size_t initial_chunk_memory = 0;
   size_t initial_used_memory = 0;
-  if (auto* pool16 = string_arena->get_pool(ValueType::FixedString16)) {
+  if (auto* pool16 = string_arena->get_pool(ValueType::FIXED_STRING16)) {
     initial_chunk_memory =
         pool16->get_total_allocated();  // Should be 1MB (pre-allocated)
     initial_used_memory =
@@ -465,7 +465,7 @@ TEST_F(NodeArenaTest, StringUpdateDeallocation) {
   // But used memory should increase
   size_t after_first_chunk = 0;
   size_t after_first_used = 0;
-  if (auto* pool16 = string_arena->get_pool(ValueType::FixedString16)) {
+  if (auto* pool16 = string_arena->get_pool(ValueType::FIXED_STRING16)) {
     after_first_chunk = pool16->get_total_allocated();
     after_first_used = pool16->get_used_bytes();
   }

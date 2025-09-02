@@ -126,7 +126,7 @@ add_library(core
         src/edge_store.cpp
         src/table_info.cpp
         src/utils.cpp
-        include/schema.hpp
+        src/schema.cpp
 )
 
 target_include_directories(core

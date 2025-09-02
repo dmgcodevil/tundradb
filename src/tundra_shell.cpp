@@ -199,12 +199,12 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
       const auto& value_str = properties[field_name];
 
       std::cout << "DEBUG: Converting field " << field_name
-                << " (type=" << field_type->ToString() << ") from value '"
+                << " (type=" << to_string(field_type) << ") from value '"
                 << value_str << "'" << std::endl;
 
-      if (field_type->id() == arrow::Type::STRING) {
+      if (field_type == tundradb::ValueType::STRING) {
         data[field_name] = tundradb::Value(value_str);
-      } else if (field_type->id() == arrow::Type::INT64) {
+      } else if (field_type == tundradb::ValueType::INT64) {
         try {
           // Trim any whitespace and quotes that may be present
           std::string cleaned_value = value_str;
@@ -230,7 +230,7 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
           throw std::runtime_error("Error converting '" + value_str +
                                    "' to int64: " + e.what());
         }
-      } else if (field_type->id() == arrow::Type::DOUBLE) {
+      } else if (field_type == tundradb::ValueType::DOUBLE) {
         try {
           // Trim any whitespace and quotes that may be present
           std::string cleaned_value = value_str;
@@ -258,7 +258,7 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
           throw std::runtime_error("Error converting '" + value_str +
                                    "' to double: " + e.what());
         }
-      } else if (field_type->id() == arrow::Type::BOOL) {
+      } else if (field_type == tundradb::ValueType::BOOL) {
         try {
           // Trim any whitespace and quotes that may be present
           std::string cleaned_value = value_str;
@@ -289,7 +289,7 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
           throw std::runtime_error("Error converting '" + value_str +
                                    "' to bool: " + e.what());
         }
-      } else if (field_type->id() == arrow::Type::INT32) {
+      } else if (field_type == tundradb::ValueType::INT32) {
         try {
           // Trim any whitespace and quotes that may be present
           std::string cleaned_value = value_str;

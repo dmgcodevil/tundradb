@@ -11,6 +11,7 @@
 #include "../libs/json/json.hpp"
 #include "file_utils.hpp"
 #include "logger.hpp"
+#include "schema.hpp"
 #include "types.hpp"
 
 using namespace std::string_literals;
@@ -34,12 +35,35 @@ struct FieldMetadata {
  */
 struct SchemaMetadata {
   std::string name;
-  int version;
+  uint32_t version;
   std::vector<FieldMetadata> fields;
 
   // Allow JSON serialization/deserialization
   NLOHMANN_DEFINE_TYPE_INTRUSIVE(SchemaMetadata, name, version, fields)
 };
+
+static std::shared_ptr<Field> from_metadata(const FieldMetadata &metadata) {
+  return std::make_shared<Field>(metadata.name, metadata.type,
+                                 metadata.nullable);
+}
+
+static std::shared_ptr<Schema> from_metadata(const SchemaMetadata &metadata) {
+  // Schema result;
+  // result.name = metadata.name;
+  // result.version =
+  //     metadata.version;  // static_cast<uint32_t>(metadata.version);
+
+  // // Convert int → uint32_t
+
+  std::vector<std::shared_ptr<Field>> fields;
+
+  fields.reserve(metadata.fields.size());
+  for (const auto &field_meta : metadata.fields) {
+    fields.push_back(from_metadata(field_meta));
+  }
+
+  return std::make_shared<Schema>(metadata.name, metadata.version, fields);
+}
 
 /**
  * @brief Convert an Arrow field to FieldMetadata
@@ -55,7 +79,7 @@ inline arrow::Result<FieldMetadata> ArrowFieldToMetadata(
 
   switch (field->type()->id()) {
     case arrow::Type::BOOL:
-      result.type = ValueType::Bool;
+      result.type = ValueType::BOOL;
       break;
     case arrow::Type::INT8:
     case arrow::Type::INT16:
@@ -65,15 +89,15 @@ inline arrow::Result<FieldMetadata> ArrowFieldToMetadata(
     case arrow::Type::UINT16:
     case arrow::Type::UINT32:
     case arrow::Type::UINT64:
-      result.type = ValueType::Int64;
+      result.type = ValueType::INT64;
       break;
     case arrow::Type::FLOAT:
     case arrow::Type::DOUBLE:
-      result.type = ValueType::Double;
+      result.type = ValueType::DOUBLE;
       break;
     case arrow::Type::STRING:
     case arrow::Type::LARGE_STRING:
-      result.type = ValueType::String;
+      result.type = ValueType::STRING;
       break;
     default:
       return arrow::Status::NotImplemented("Unsupported Arrow type: ",
@@ -95,16 +119,16 @@ inline arrow::Result<std::shared_ptr<arrow::Field>> metadata_to_arrow_field(
   std::shared_ptr<arrow::DataType> type;
 
   switch (metadata.type) {
-    case ValueType::Bool:
+    case ValueType::BOOL:
       type = arrow::boolean();
       break;
-    case ValueType::Int64:
+    case ValueType::INT64:
       type = arrow::int64();
       break;
-    case ValueType::Double:
+    case ValueType::DOUBLE:
       type = arrow::float64();
       break;
-    case ValueType::String:
+    case ValueType::STRING:
       type = arrow::utf8();
       break;
     default:

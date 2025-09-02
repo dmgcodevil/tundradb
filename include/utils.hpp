@@ -228,7 +228,7 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
   for (const auto& node : nodes) {
     for (int i = 0; i < schema->num_fields(); i++) {
       const auto& field = schema->field(i);
-      auto field_result = node->get_field(field->name());
+      auto field_result = node->get_value(field->name());
       if (!field_result.ok()) {
         ARROW_RETURN_NOT_OK(builders[i]->AppendNull());
       } else {

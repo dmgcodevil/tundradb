@@ -239,7 +239,7 @@ class Shard {
   arrow::Result<std::shared_ptr<arrow::Table>> get_table() {
     if (dirty_ || !table_) {
       ARROW_ASSIGN_OR_RAISE(const auto schema,
-                            schema_registry_->get(schema_name));
+                            schema_registry_->get_arrow(schema_name));
       std::vector<std::shared_ptr<Node>> result;
       std::ranges::transform(nodes_, std::back_inserter(result),
                              [](const auto &pair) { return pair.second; });
@@ -751,7 +751,8 @@ class Database {
 
   arrow::Result<std::shared_ptr<arrow::Table>> get_table(
       const std::string &schema_name, size_t chunk_size = 10000) const {
-    ARROW_ASSIGN_OR_RAISE(auto schema, schema_registry_->get(schema_name));
+    ARROW_ASSIGN_OR_RAISE(auto schema,
+                          schema_registry_->get_arrow(schema_name));
 
     ARROW_ASSIGN_OR_RAISE(auto all_nodes,
                           shard_manager_->get_nodes(schema_name));

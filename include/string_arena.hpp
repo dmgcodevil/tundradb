@@ -164,18 +164,18 @@ class StringArena {
  public:
   StringArena() {
     // Create pools for different string size categories
-    pools_[ValueType::String] =
+    pools_[ValueType::STRING] =
         std::make_unique<StringPool>(SIZE_MAX);  // No limit
-    pools_[ValueType::FixedString16] = std::make_unique<StringPool>(16);
-    pools_[ValueType::FixedString32] = std::make_unique<StringPool>(32);
-    pools_[ValueType::FixedString64] = std::make_unique<StringPool>(64);
+    pools_[ValueType::FIXED_STRING16] = std::make_unique<StringPool>(16);
+    pools_[ValueType::FIXED_STRING32] = std::make_unique<StringPool>(32);
+    pools_[ValueType::FIXED_STRING64] = std::make_unique<StringPool>(64);
   }
 
   /**
    * Store a string in the appropriate pool based on its type
    */
   StringRef store_string(const std::string& str,
-                         ValueType type = ValueType::String) {
+                         ValueType type = ValueType::STRING) {
     if (!is_string_type(type)) {
       return StringRef{};  // Not a string type
     }
@@ -195,7 +195,7 @@ class StringArena {
    * Store string view
    */
   StringRef store_string(std::string_view str,
-                         ValueType type = ValueType::String) {
+                         ValueType type = ValueType::STRING) {
     return store_string(std::string(str), type);
   }
 
@@ -207,14 +207,15 @@ class StringArena {
     size_t len = str.length();
 
     if (len <= 16) {
-      return store_string(str, ValueType::FixedString16);
-    } else if (len <= 32) {
-      return store_string(str, ValueType::FixedString32);
-    } else if (len <= 64) {
-      return store_string(str, ValueType::FixedString64);
-    } else {
-      return store_string(str, ValueType::String);
+      return store_string(str, ValueType::FIXED_STRING16);
     }
+    if (len <= 32) {
+      return store_string(str, ValueType::FIXED_STRING32);
+    }
+    if (len <= 64) {
+      return store_string(str, ValueType::FIXED_STRING64);
+    }
+    return store_string(str, ValueType::STRING);
   }
 
   /**
