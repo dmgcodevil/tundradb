@@ -75,7 +75,7 @@ class NodeArena {
       return NodeHandle{};  // null handle for unknown schema
     }
 
-    size_t node_size = layout->get_total_size();
+    size_t node_size = layout->get_total_size_with_bitset();
     size_t alignment = layout->get_alignment();
 
     void* node_data = mem_arena_->allocate(node_size, alignment);
@@ -103,11 +103,12 @@ class NodeArena {
       const std::shared_ptr<SchemaLayout> layout =
           layout_registry_->get_layout(handle.schema_name);
       if (layout) {
+        const char* data_start =
+            static_cast<const char*>(handle.ptr) + layout->get_data_offset();
         for (const auto& field : layout->get_fields()) {
           if (is_string_type(field.type)) {
-            // Read the StringRef from the node memory
-            const char* field_ptr =
-                static_cast<const char*>(handle.ptr) + field.offset;
+            // Read the StringRef from the node memory (after data offset)
+            const char* field_ptr = data_start + field.offset;
             const StringRef* str_ref =
                 reinterpret_cast<const StringRef*>(field_ptr);
 
@@ -137,13 +138,10 @@ class NodeArena {
       return Value{};  // null value for invalid handle
     }
 
-    // Logger::get_instance().debug("pitr1");
     if (layout_registry_ == nullptr) {
       Logger::get_instance().error("null layout registry");
       return Value{};  // null value for invalid handle
     }
-
-    // Logger::get_instance().debug("pitr2");
 
     const std::shared_ptr<SchemaLayout> layout =
         layout_registry_->get_layout(schema_name);
@@ -151,7 +149,6 @@ class NodeArena {
       Logger::get_instance().error("null value for unknown schema");
       return Value{};  // null value for unknown schema
     }
-    // Logger::get_instance().debug("pitr3");
 
     return layout->get_field_value(static_cast<const char*>(handle.ptr),
                                    field_name);
@@ -186,6 +183,8 @@ class NodeArena {
         if (!old_value.is_null() && old_value.type() != ValueType::NA) {
           try {
             StringRef old_str_ref = old_value.as_string_ref();
+            Logger::get_instance().debug("deallocate old string: {}",
+                                         old_str_ref.to_string());
             if (!old_str_ref.is_null()) {
               string_arena_->deallocate_string(old_str_ref);
             }
@@ -201,6 +200,7 @@ class NodeArena {
         try {
           const std::string& str_content = value.as_string();
           StringRef str_ref = string_arena_->store_string_auto(str_content);
+          Logger::get_instance().debug("store string: {}", str_ref.to_string());
           storage_value =
               Value{str_ref, field_layout->type};  // Preserve field type
         } catch (...) {
@@ -209,7 +209,8 @@ class NodeArena {
         }
       }
     }
-
+    Logger::get_instance().debug("storage_value: {}",
+                                 storage_value.to_string());
     return layout->set_field_value(static_cast<char*>(handle.ptr), field_name,
                                    storage_value);
   }

@@ -3,6 +3,7 @@
 
 #include <arrow/api.h>
 
+#include <cstring>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -13,6 +14,29 @@
 #include "types.hpp"
 
 namespace tundradb {
+
+/**
+ * Helper functions for bit set manipulation to track which fields are set
+ */
+inline size_t get_bitset_size_bytes(size_t num_fields) {
+  return (num_fields + 7) / 8;  // Round up to nearest byte
+}
+
+inline bool is_field_set(const char* bitset, size_t field_index) {
+  size_t byte_index = field_index / 8;
+  size_t bit_index = field_index % 8;
+  return (bitset[byte_index] & (1 << bit_index)) != 0;
+}
+
+inline void set_field_bit(char* bitset, size_t field_index, bool is_set) {
+  size_t byte_index = field_index / 8;
+  size_t bit_index = field_index % 8;
+  if (is_set) {
+    bitset[byte_index] |= (1 << bit_index);
+  } else {
+    bitset[byte_index] &= ~(1 << bit_index);
+  }
+}
 
 /**
  * Describes the layout of a single field within a schema
@@ -46,6 +70,21 @@ class SchemaLayout {
       : schema_name_(std::move(schema_name)), total_size_(0), alignment_(8) {}
 
   /**
+   * Get the size of the bit set in bytes
+   */
+  size_t get_bitset_size() const {
+    return get_bitset_size_bytes(fields_.size());
+  }
+
+  /**
+   * Get the offset where actual field data starts (after bit set + alignment)
+   */
+  size_t get_data_offset() const {
+    size_t bitset_size = get_bitset_size();
+    return align_up(bitset_size, alignment_);
+  }
+
+  /**
    * Add a field to the schema layout
    * Fields are automatically aligned and packed efficiently
    */
@@ -57,15 +96,15 @@ class SchemaLayout {
     // Update overall alignment requirement
     alignment_ = std::max(alignment_, field_alignment);
 
-    // Align current position for this field
+    // Calculate field offset (relative to start of data, after bit set)
     size_t aligned_offset = align_up(total_size_, field_alignment);
 
-    // Create field layout
+    // Create field layout (offset is relative to data start, not absolute)
     field_index_[name] = fields_.size();
     fields_.emplace_back(name, type, aligned_offset, field_size,
                          field_alignment, nullable);
 
-    // Update total size
+    // Update total size (size of data portion only)
     total_size_ = aligned_offset + field_size;
   }
 
@@ -80,6 +119,13 @@ class SchemaLayout {
   }
 
   /**
+   * Get the total size including bit set and data
+   */
+  size_t get_total_size_with_bitset() const {
+    return get_data_offset() + total_size_;
+  }
+
+  /**
    * Get field value from node data
    */
   Value get_field_value(const char* node_data,
@@ -89,8 +135,17 @@ class SchemaLayout {
       return Value();  // null value for missing field
     }
 
-    const FieldLayout& field = fields_[it->second];
-    const char* field_ptr = node_data + field.offset;
+    size_t field_index = it->second;
+    const FieldLayout& field = fields_[field_index];
+
+    // Check if this field has been set using the bit set
+    if (!is_field_set(node_data, field_index)) {
+      return Value();  // null value for unset field
+    }
+
+    // Field has been set, read it from memory
+    const char* data_start = node_data + get_data_offset();
+    const char* field_ptr = data_start + field.offset;
 
     return read_value_from_memory(field_ptr, field.type);
   }
@@ -105,8 +160,20 @@ class SchemaLayout {
       return false;  // field not found
     }
 
-    const FieldLayout& field = fields_[it->second];
-    char* field_ptr = node_data + field.offset;
+    size_t field_index = it->second;
+    const FieldLayout& field = fields_[field_index];
+
+    // Update the bit set to indicate this field has been set
+    set_field_bit(node_data, field_index, !value.is_null());
+
+    // If the value is null, we don't need to write it to memory
+    if (value.is_null()) {
+      return true;  // Successfully "set" to null
+    }
+
+    // Write the actual value to memory
+    char* data_start = node_data + get_data_offset();
+    char* field_ptr = data_start + field.offset;
 
     return write_value_to_memory(field_ptr, field.type, value);
   }
@@ -115,12 +182,17 @@ class SchemaLayout {
    * Initialize node data with default values
    */
   void initialize_node_data(char* node_data) const {
-    // Zero out all memory first
-    std::memset(node_data, 0, total_size_);
+    // Clear the bit set (all fields initially unset)
+    size_t bitset_size = get_bitset_size();
+    std::memset(node_data, 0, bitset_size);
+
+    // Zero out all data memory
+    char* data_start = node_data + get_data_offset();
+    std::memset(data_start, 0, total_size_);
 
     // Set any non-zero default values if needed
     for (const auto& field : fields_) {
-      char* field_ptr = node_data + field.offset;
+      char* field_ptr = data_start + field.offset;
       initialize_field_memory(field_ptr, field.type);
     }
   }
@@ -148,6 +220,7 @@ class SchemaLayout {
       case ValueType::INT64:
         return Value{*reinterpret_cast<const int64_t*>(ptr)};
       case ValueType::INT32:
+        Logger::get_instance().debug("reading int32 value");
         return Value{*reinterpret_cast<const int32_t*>(ptr)};
       case ValueType::DOUBLE:
         return Value{*reinterpret_cast<const double*>(ptr)};
@@ -173,7 +246,11 @@ class SchemaLayout {
         *reinterpret_cast<int64_t*>(ptr) = value.as_int64();
         return true;
       case ValueType::INT32:
-        if (value.type() != ValueType::INT32) return false;
+        if (value.type() != ValueType::INT32) {
+          Logger::get_instance().debug(
+              " value.type() != ValueType::INT32 return false;");
+          return false;
+        }
         *reinterpret_cast<int32_t*>(ptr) = value.as_int32();
         return true;
       case ValueType::DOUBLE:
@@ -188,11 +265,13 @@ class SchemaLayout {
       case ValueType::FIXED_STRING16:
       case ValueType::FIXED_STRING32:
       case ValueType::FIXED_STRING64: {
+        Logger::get_instance().debug("writing string value");
         // All string types expect StringRef
         if (!is_string_type(value.type())) return false;
 
         // Value should contain StringRef (created by NodeArena)
         *reinterpret_cast<StringRef*>(ptr) = value.as_string_ref();
+        Logger::get_instance().debug("string value written");
         return true;
       }
       default:

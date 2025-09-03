@@ -67,6 +67,14 @@ arrow::Result<Schema> Schema::from_arrow(
 }
 [[nodiscard]] const std::string &Schema::name() const { return name_; }
 [[nodiscard]] uint32_t Schema::version() const { return version_; }
+std::shared_ptr<Field> Schema::get_field(const std::string &name) const {
+  for (const auto &field : fields_) {
+    if (field->name() == name) {
+      return field;
+    }
+  }
+  return nullptr;
+}
 
 bool Schema::empty() const { return fields_.empty(); }
 

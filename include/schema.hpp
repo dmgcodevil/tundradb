@@ -69,6 +69,7 @@ struct Schema {
   [[nodiscard]] const std::vector<std::shared_ptr<Field>> &fields() const;
   [[nodiscard]] const std::string &name() const;
   [[nodiscard]] uint32_t version() const;
+  [[nodiscard]] std::shared_ptr<Field> get_field(const std::string &name) const;
 
   [[nodiscard]] bool empty() const;
 };

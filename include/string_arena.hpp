@@ -85,13 +85,19 @@ class StringPool {
 
             // Only deallocate when reference count reaches 0
             if (it->second.second == 0) {
+              Logger::get_instance().debug(
+                  "deallocate_string: found in dedup_map_. remove from map");
               arena_->deallocate(const_cast<char*>(ref.data));
               dedup_map_.erase(it);
+              Logger::get_instance().debug(
+                  "deallocate_string: removed from dedup_map_.");
             }
             return;
           }
         }
         // If not found in dedup_map_, it might be a non-deduplicated string
+        Logger::get_instance().debug(
+            "deallocate_string: not found in dedup_map_");
         arena_->deallocate(const_cast<char*>(ref.data));
       } else {
         // No deduplication - always deallocate
@@ -235,10 +241,12 @@ class StringArena {
    */
   void deallocate_string(const StringRef& ref) {
     ValueType type = static_cast<ValueType>(ref.arena_id);
+    Logger::get_instance().debug("deallocate_string type: {}", to_string(type));
     auto it = pools_.find(type);
     if (it != pools_.end()) {
       it->second->deallocate_string(ref);
     }
+    Logger::get_instance().debug("deallocate_string done");
   }
 
   /**

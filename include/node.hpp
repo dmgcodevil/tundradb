@@ -51,6 +51,10 @@ class Node {
 
   arrow::Result<Value> get_value(const std::string &field_name) const {
     if (USE_NODE_ARENA) {
+      if (schema_->get_field(field_name) == nullptr) {
+        Logger::get_instance().debug("Field not found");
+        return arrow::Status::KeyError("Field not found: ", field_name);
+      }
       return arena_->get_field_value(*handle_, schema_name, field_name);
     }
 
@@ -75,8 +79,14 @@ class Node {
   arrow::Result<bool> update(const std::string &field_name, Value value,
                              UpdateType update_type) {
     if (USE_NODE_ARENA) {
+      if (schema_->get_field(field_name) == nullptr) {
+        Logger::get_instance().debug("Field not found");
+        return arrow::Status::KeyError("Field not found: ", field_name);
+      }
+
       arena_->set_field_value(*handle_, schema_name, field_name, value);
-      return arrow::Status::OK();
+      Logger::get_instance().debug("set value is done");
+      return true;
     }
 
     if (const auto it = data_.find(field_name); it == data_.end()) {
@@ -174,7 +184,7 @@ class NodeManager {
       for (const auto &field : schema->fields()) {
         if (field->name() == "id") continue;
         if (!data.contains(field->name())) {
-          Logger::get_instance().debug("set NA value");
+          Logger::get_instance().debug("{} set NA value", field->name());
           node_arena_->set_field_value(node_handle, schema_name, field->name(),
                                        Value());
         } else {

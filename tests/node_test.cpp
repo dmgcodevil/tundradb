@@ -189,37 +189,40 @@ TEST_F(NodeTest, NodeSetValue) {
 
   auto node = node_result.ValueOrDie();
 
+  Logger::get_instance().debug("Update values");
+
   // Update values
   auto set_name_result = node->set_value("name", Value{"Charlie Updated"});
+  Logger::get_instance().debug("done");
+  Logger::get_instance().debug("set_name_result: {}", set_name_result.ok());
   ASSERT_TRUE(set_name_result.ok())
       << "Failed to set name: " << set_name_result.status().ToString();
+
+  auto name_result = node->get_value("name");
+  ASSERT_TRUE(name_result.ok());
+  EXPECT_EQ(name_result.ValueOrDie().to_string(), "Charlie Updated");
 
   auto set_age_result = node->set_value("age", Value{static_cast<int32_t>(23)});
   ASSERT_TRUE(set_age_result.ok())
       << "Failed to set age: " << set_age_result.status().ToString();
+
+  auto age_result = node->get_value("age");
+  ASSERT_TRUE(age_result.ok());
+  EXPECT_EQ(age_result.ValueOrDie().as_int32(), 23);
 
   auto set_email_result =
       node->set_value("email", Value{"charlie.updated@example.com"});
   ASSERT_TRUE(set_email_result.ok())
       << "Failed to set email: " << set_email_result.status().ToString();
 
-  auto set_score_result = node->set_value("score", Value{82.5});
-  ASSERT_TRUE(set_score_result.ok())
-      << "Failed to set score: " << set_score_result.status().ToString();
-
-  // Verify updated values
-  auto name_result = node->get_value("name");
-  ASSERT_TRUE(name_result.ok());
-  EXPECT_EQ(name_result.ValueOrDie().to_string(), "Charlie Updated");
-
-  auto age_result = node->get_value("age");
-  ASSERT_TRUE(age_result.ok());
-  EXPECT_EQ(age_result.ValueOrDie().as_int32(), 23);
-
   auto email_result = node->get_value("email");
   ASSERT_TRUE(email_result.ok());
   EXPECT_EQ(email_result.ValueOrDie().to_string(),
             "charlie.updated@example.com");
+
+  auto set_score_result = node->set_value("score", Value{82.5});
+  ASSERT_TRUE(set_score_result.ok())
+      << "Failed to set score: " << set_score_result.status().ToString();
 
   auto score_result = node->get_value("score");
   ASSERT_TRUE(score_result.ok());
@@ -254,11 +257,17 @@ TEST_F(NodeTest, NodeNullableFields) {
   // Test nullable fields (should be null)
   auto age_result = node->get_value("age");
   ASSERT_TRUE(age_result.ok());
+
+  Logger::get_instance().debug("age_result type: {}",
+                               to_string(age_result.ValueOrDie().type()));
+
   EXPECT_TRUE(age_result.ValueOrDie().is_null())
       << "Age should be null when not provided";
 
   auto email_result = node->get_value("email");
   ASSERT_TRUE(email_result.ok());
+  Logger::get_instance().debug("email_result type: {}",
+                               to_string(email_result.ValueOrDie().type()));
   EXPECT_TRUE(email_result.ValueOrDie().is_null())
       << "Email should be null when not provided";
 
