@@ -112,10 +112,6 @@ arrow::Result<bool> SnapshotManager::initialize() {
             log_error("Failed to add shard: " + add_result.status().ToString());
             return add_result.status();
           }
-          for (const auto &node : shard->get_nodes()) {
-            log_debug("Adding node {}", node->id);
-            node_manager_->add_node(node);
-          }
         }
       }
       log_info("Load edges");

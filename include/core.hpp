@@ -644,7 +644,7 @@ class Database {
       : schema_registry_(std::make_shared<SchemaRegistry>()),
         shard_manager_(
             std::make_shared<ShardManager>(schema_registry_, config)),
-        node_manager_(std::make_shared<NodeManager>()),
+        node_manager_(std::make_shared<NodeManager>(schema_registry_)),
         config_(config),
         persistence_enabled_(config.is_persistence_enabled()),
         edge_store_(std::make_shared<EdgeStore>(0, config.get_chunk_size())) {
@@ -657,8 +657,8 @@ class Database {
       }
 
       std::string data_path = db_path + "/data";
-      storage_ = std::make_shared<Storage>(std::move(data_path),
-                                           schema_registry_, config);
+      storage_ = std::make_shared<Storage>(
+          std::move(data_path), schema_registry_, node_manager_, config);
       metadata_manager_ = std::make_shared<MetadataManager>(db_path);
       snapshot_manager_ = std::make_shared<SnapshotManager>(
           metadata_manager_, storage_, shard_manager_, edge_store_,
@@ -702,8 +702,8 @@ class Database {
     if (schema_name.empty()) {
       return arrow::Status::Invalid("Schema name cannot be empty");
     }
-    ARROW_ASSIGN_OR_RAISE(auto node, node_manager_->create_node(
-                                         schema_name, data, schema_registry_));
+    ARROW_ASSIGN_OR_RAISE(auto node,
+                          node_manager_->create_node(schema_name, data));
     ARROW_RETURN_NOT_OK(shard_manager_->insert_node(node));
     return node;
   }

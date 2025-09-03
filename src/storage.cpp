@@ -25,9 +25,11 @@ namespace tundradb {
 
 Storage::Storage(std::string data_dir,
                  std::shared_ptr<SchemaRegistry> schema_registry,
+                 std::shared_ptr<NodeManager> node_manager_,
                  DatabaseConfig config)
     : data_directory_(std::move(data_dir)),
       schema_registry_(std::move(schema_registry)),
+      node_manager_(std::move(node_manager_)),
       config_(std::move(config)) {}
 
 arrow::Result<bool> Storage::initialize() {
@@ -187,10 +189,18 @@ arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(
       return arrow::Status::Invalid("Node missing required 'id' field");
     }
 
-    auto node =
-        std::make_shared<Node>(node_id, shard_metadata.schema_name, node_data);
+    log_debug("node_data:");
 
-    ARROW_RETURN_NOT_OK(shard->add(node));
+    for (auto data : node_data) {
+      log_debug("{}={}", data.first, data.second.to_string());
+    }
+    auto node_result =
+        node_manager_->create_node(shard_metadata.schema_name, node_data, true);
+    if (!node_result.ok()) {
+      return node_result.status();
+    }
+
+    ARROW_RETURN_NOT_OK(shard->add(node_result.ValueOrDie()));
   }
 
   return shard;

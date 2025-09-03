@@ -81,16 +81,29 @@ class StringPool {
         for (auto it = dedup_map_.begin(); it != dedup_map_.end(); ++it) {
           if (it->second.first.data == ref.data) {
             // Decrement reference count
+            uint32_t old_count = it->second.second;
             it->second.second--;
+            uint32_t new_count = it->second.second;
+
+            Logger::get_instance().debug(
+                "deallocate_string: string '{}' ref count: {} -> {}", it->first,
+                old_count, new_count);
 
             // Only deallocate when reference count reaches 0
             if (it->second.second == 0) {
               Logger::get_instance().debug(
-                  "deallocate_string: found in dedup_map_. remove from map");
+                  "deallocate_string: ref count reached 0, deallocating string "
+                  "'{}'",
+                  it->first);
               arena_->deallocate(const_cast<char*>(ref.data));
               dedup_map_.erase(it);
               Logger::get_instance().debug(
-                  "deallocate_string: removed from dedup_map_.");
+                  "deallocate_string: removed '{}' from dedup_map", it->first);
+            } else {
+              Logger::get_instance().debug(
+                  "deallocate_string: string '{}' still has {} references, "
+                  "keeping alive",
+                  it->first, new_count);
             }
             return;
           }
@@ -240,20 +253,17 @@ class StringArena {
    * Deallocate a string
    */
   void deallocate_string(const StringRef& ref) {
-    ValueType type = static_cast<ValueType>(ref.arena_id);
-    Logger::get_instance().debug("deallocate_string type: {}", to_string(type));
-    auto it = pools_.find(type);
-    if (it != pools_.end()) {
+    const auto type = static_cast<ValueType>(ref.arena_id);
+    if (const auto it = pools_.find(type); it != pools_.end()) {
       it->second->deallocate_string(ref);
     }
-    Logger::get_instance().debug("deallocate_string done");
   }
 
   /**
    * Configure deduplication for all pools
    */
   void enable_deduplication(bool enable = true) {
-    for (auto& [type, pool] : pools_) {
+    for (const auto& pool : pools_ | std::views::values) {
       pool->enable_deduplication(enable);
     }
   }
@@ -277,13 +287,13 @@ class StringArena {
   }
 
   void reset() {
-    for (auto& [type, pool] : pools_) {
+    for (const auto& pool : pools_ | std::views::values) {
       pool->reset();
     }
   }
 
   void clear() {
-    for (auto& [type, pool] : pools_) {
+    for (const auto& pool : pools_ | std::views::values) {
       pool->clear();
     }
   }

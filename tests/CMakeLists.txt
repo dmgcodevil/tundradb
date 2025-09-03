@@ -61,7 +61,7 @@ endif()
 
 # Add sharding test
 add_executable(sharding_test
-    test_sharding.cpp
+        sharding_test.cpp
 )
 
 # Add snapshot test

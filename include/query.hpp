@@ -243,8 +243,8 @@ class ComparisonExpr : public Clause, public WhereExpr {
         return apply_comparison(field_val, op, where_val);
       }
       case ValueType::STRING: {
-        const std::string& field_val = value.get<std::string>();
-        const std::string& where_val = where_value.get<std::string>();
+        const std::string& field_val = value.as_string();
+        const std::string& where_val = where_value.as_string();
         return apply_comparison(field_val, op, where_val);
       }
       case ValueType::BOOL: {

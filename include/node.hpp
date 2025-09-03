@@ -43,7 +43,12 @@ class Node {
         id(id),
         schema_name(std::move(schema_name)) {}
 
-  ~Node() { data_.clear(); }
+  ~Node() {
+    data_.clear();
+    if (USE_NODE_ARENA && arena_ && handle_) {
+      arena_->deallocate_node(*handle_);
+    }
+  }
 
   void add_field(const std::string &field_name, Value value) {
     data_[field_name] = std::move(value);
@@ -65,16 +70,7 @@ class Node {
     return it->second;
   }
 
-  // todo do we need this ?
-  // todo remove
-  [[nodiscard]] const std::unordered_map<std::string, Value> data() const {
-    std::unordered_map<std::string, Value> result;
-    for (auto field : schema_->fields()) {
-      result[field->name()] =
-          arena_->get_field_value(*handle_, schema_name, field->name());
-    }
-    return result;
-  }
+  [[nodiscard]] std::shared_ptr<Schema> get_schema() const { return schema_; }
 
   arrow::Result<bool> update(const std::string &field_name, Value value,
                              UpdateType update_type) {
@@ -110,7 +106,8 @@ class Node {
 
 class NodeManager {
  public:
-  NodeManager() {
+  explicit NodeManager(std::shared_ptr<SchemaRegistry> schema_registry) {
+    schema_registry_ = std::move(schema_registry);
     layout_registry_ = std::make_shared<LayoutRegistry>();
     node_arena_ = node_arena_factory::create_free_list_arena(layout_registry_);
   }
@@ -119,25 +116,24 @@ class NodeManager {
     return nodes[id];
   }
 
-  bool add_node(std::shared_ptr<Node> node) {
-    // todo check if node exists
-    nodes[node->id] = node;
-    return true;
-  }
-
   bool remove_node(const int64_t id) { return nodes.erase(id) > 0; }
 
   arrow::Result<std::shared_ptr<Node>> create_node(
       const std::string &schema_name,
       const std::unordered_map<std::string, Value> &data,
-      const std::shared_ptr<SchemaRegistry> &schema_registry) {
+      const bool add = false) {
     if (schema_name.empty()) {
       return arrow::Status::Invalid("Schema name cannot be empty");
     }
 
-    ARROW_ASSIGN_OR_RAISE(const auto schema, schema_registry->get(schema_name));
-    if (data.contains("id")) {
+    ARROW_ASSIGN_OR_RAISE(const auto schema,
+                          schema_registry_->get(schema_name));
+    if (!add && data.contains("id")) {
       return arrow::Status::Invalid("'id' column is auto generated");
+    }
+
+    if (add && !data.contains("id")) {
+      return arrow::Status::Invalid("'id' is missing");
     }
 
     for (const auto &field : schema->fields()) {
@@ -157,16 +153,13 @@ class NodeManager {
               to_string(field->type()), " but got ", to_string(value.type()));
         }
       }
-
-      // if (!data.contains(name)) {
-      //   normalized_data[name] = Value();
-      // } else {
-      //
-      //   normalized_data[name] = value;
-      // }
     }
-
-    auto id = id_counter.fetch_add(1);
+    int64_t id = 0;
+    if (!add) {
+      id = id_counter.fetch_add(1);
+    } else {
+      id = data.at("id").as_int64();
+    }
 
     if (USE_NODE_ARENA) {
       std::shared_ptr<SchemaLayout> layout;
@@ -174,7 +167,7 @@ class NodeManager {
         layout = layout_registry_->get_layout(schema_name);
       } else {
         layout = layout_registry_->create_layout(
-            schema_registry->get(schema_name).ValueOrDie());
+            schema_registry_->get(schema_name).ValueOrDie());
         layout_registry_->register_layout(layout);
       }
       NodeHandle node_handle = node_arena_->allocate_node(schema_name);
@@ -202,6 +195,17 @@ class NodeManager {
     } else {
       std::unordered_map<std::string, Value> normalized_data;
       normalized_data["id"] = Value{id};
+
+      for (const auto &field : schema->fields()) {
+        if (field->name() == "id") continue;
+        if (!data.contains(field->name())) {
+          normalized_data[field->name()] = Value();
+        } else {
+          const auto value = data.find(field->name())->second;
+          normalized_data[field->name()] = value;
+        }
+      }
+
       // populate other fields
 
       auto node = std::make_shared<Node>(id, schema_name, normalized_data,
@@ -218,6 +222,7 @@ class NodeManager {
  private:
   std::atomic<int64_t> id_counter{0};
   std::unordered_map<int64_t, std::shared_ptr<Node>> nodes;
+  std::shared_ptr<SchemaRegistry> schema_registry_;
   std::shared_ptr<LayoutRegistry> layout_registry_;
   std::shared_ptr<NodeArena> node_arena_;
 };

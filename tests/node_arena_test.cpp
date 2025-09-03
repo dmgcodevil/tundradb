@@ -28,7 +28,7 @@ class NodeArenaTest : public ::testing::Test {
     layout->add_field("long_name", ValueType::FIXED_STRING64);    // ≤64 chars
     layout->finalize();
 
-    total_node_size_ = layout->get_total_size();
+    total_node_size_ = layout->get_total_size_with_bitset();
     registry_->register_layout(std::move(layout));
 
     // Create NodeArena with FreeListArena for individual deallocation

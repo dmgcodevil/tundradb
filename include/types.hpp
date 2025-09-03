@@ -176,14 +176,31 @@ class Value {
   [[nodiscard]] int64_t as_int64() const { return get<int64_t>(); }
   [[nodiscard]] double as_float() const { return get<float>(); }
   [[nodiscard]] double as_double() const { return get<double>(); }
-  [[nodiscard]] const std::string& as_string() const {
-    return get<std::string>();
+  [[nodiscard]] std::string as_string() const {
+    if (is_string_type(type_)) {
+      if (std::holds_alternative<StringRef>(data_)) {
+        return get<StringRef>().to_string();
+      } else if (std::holds_alternative<std::string>(data_)) {
+        return get<std::string>();
+      }
+    }
+    return "";  // fallback for non-string types
   }
   [[nodiscard]] const StringRef& as_string_ref() const {
     return get<StringRef>();
   }
   [[nodiscard]] bool as_bool() const { return get<bool>(); }
   [[nodiscard]] bool is_null() const { return type_ == ValueType::NA; }
+
+  // Check if the Value contains a StringRef (vs std::string)
+  [[nodiscard]] bool holds_string_ref() const {
+    return is_string_type(type_) && std::holds_alternative<StringRef>(data_);
+  }
+
+  // Check if the Value contains a std::string
+  [[nodiscard]] bool holds_std_string() const {
+    return is_string_type(type_) && std::holds_alternative<std::string>(data_);
+  }
 
   // Convert the Value to its raw string representation (without quotes for
   // strings)
@@ -198,11 +215,7 @@ class Value {
       case ValueType::DOUBLE:
         return std::to_string(as_double());
       case ValueType::STRING:
-        if (std::holds_alternative<std::string>(data_)) {
-          return as_string();  // No quotes
-        } else {
-          return as_string_ref().to_string();  // Convert StringRef to string
-        }
+        return as_string();
       case ValueType::FIXED_STRING16:
       case ValueType::FIXED_STRING32:
       case ValueType::FIXED_STRING64:

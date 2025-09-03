@@ -600,9 +600,9 @@ struct Row {
 
   void set_cell_from_node(const SchemaRef& schema_ref,
                           const std::shared_ptr<Node>& node) {
-    for (const auto& [name, value] : node->data()) {
-      auto full_name = schema_ref.value() + "." + name;
-      this->set_cell(full_name, value);
+    for (const auto& field : node->get_schema()->fields()) {
+      auto full_name = schema_ref.value() + "." + field->name();
+      this->set_cell(full_name, node->get_value(field->name()).ValueOrDie());
     }
   }
 
