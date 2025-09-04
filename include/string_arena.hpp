@@ -85,32 +85,34 @@ class StringPool {
             it->second.second--;
             uint32_t new_count = it->second.second;
 
-            Logger::get_instance().debug(
-                "deallocate_string: string '{}' ref count: {} -> {}", it->first,
-                old_count, new_count);
+            // Logger::get_instance().debug(
+            //     "deallocate_string: string '{}' ref count: {} -> {}",
+            //     it->first, old_count, new_count);
 
             // Only deallocate when reference count reaches 0
             if (it->second.second == 0) {
-              Logger::get_instance().debug(
-                  "deallocate_string: ref count reached 0, deallocating string "
-                  "'{}'",
-                  it->first);
+              // Logger::get_instance().debug(
+              //     "deallocate_string: ref count reached 0, deallocating
+              //     string "
+              //     "'{}'",
+              //     it->first);
               arena_->deallocate(const_cast<char*>(ref.data));
               dedup_map_.erase(it);
-              Logger::get_instance().debug(
-                  "deallocate_string: removed '{}' from dedup_map", it->first);
+              // Logger::get_instance().debug(
+              //     "deallocate_string: removed '{}' from dedup_map",
+              //     it->first);
             } else {
-              Logger::get_instance().debug(
-                  "deallocate_string: string '{}' still has {} references, "
-                  "keeping alive",
-                  it->first, new_count);
+              // Logger::get_instance().debug(
+              //     "deallocate_string: string '{}' still has {} references, "
+              //     "keeping alive",
+              //     it->first, new_count);
             }
             return;
           }
         }
         // If not found in dedup_map_, it might be a non-deduplicated string
-        Logger::get_instance().debug(
-            "deallocate_string: not found in dedup_map_");
+        // Logger::get_instance().debug(
+        //     "deallocate_string: not found in dedup_map_");
         arena_->deallocate(const_cast<char*>(ref.data));
       } else {
         // No deduplication - always deallocate

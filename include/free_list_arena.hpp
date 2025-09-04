@@ -86,8 +86,8 @@ class FreeListArena : public MemArena {
 
     assert(!header->is_free && "Double free detected");
 
-    log_debug("DEALLOCATE: ptr={}, header={}, size={}", ptr,
-              static_cast<void*>(header), header->size);
+    // log_debug("DEALLOCATE: ptr={}, header={}, size={}", ptr,
+    //           static_cast<void*>(header), header->size);
 
     // Mark as free (coalesce_blocks will handle adding to free list)
     header->is_free = true;
@@ -98,7 +98,8 @@ class FreeListArena : public MemArena {
     freed_bytes_ += header->size;  // For fragmentation ratio calculation
     total_used_ -= header->size;   // Decrement live memory usage
 
-    log_debug("DEALLOCATE DONE: free_block_count={}", get_free_block_count());
+    // log_debug("DEALLOCATE DONE: free_block_count={}",
+    // get_free_block_count());
   }
 
   /**
@@ -410,8 +411,8 @@ class FreeListArena : public MemArena {
 
   void add_to_free_list(void* ptr, size_t size) {
     BlockHeader* header = get_block_header(ptr);
-    log_debug("ADD_TO_FREE_LIST: ptr={}, header={}, size={}", ptr,
-              static_cast<void*>(header), size);
+    // log_debug("ADD_TO_FREE_LIST: ptr={}, header={}, size={}", ptr,
+    //           static_cast<void*>(header), size);
     free_blocks_by_size_[size].insert(header);
   }
 
@@ -422,7 +423,7 @@ class FreeListArena : public MemArena {
       if (it->second.empty()) {
         free_blocks_by_size_.erase(it);
       }
-      log_debug("COALESCE: removed block from free list");
+      // log_debug("COALESCE: removed block from free list");
     }
   }
 
@@ -437,8 +438,8 @@ class FreeListArena : public MemArena {
     char* chunk_start = find_chunk_start(header);
     if (!chunk_start) {
       // Defensive check - should not happen with valid blocks
-      log_debug("FIND_NEXT: header={}, no chunk found",
-                static_cast<void*>(header));
+      // log_debug("FIND_NEXT: header={}, no chunk found",
+      //           static_cast<void*>(header));
       return nullptr;
     }
 
@@ -453,37 +454,38 @@ class FreeListArena : public MemArena {
     char* chunk_allocated_end =
         chunk_start + chunk_allocated_sizes_[chunk_index];
 
-    log_debug(
-        "FIND_NEXT: header={}, next_ptr={}, chunk_start={}, "
-        "chunk_allocated_end={}",
-        static_cast<void*>(header), next_ptr, chunk_start, chunk_allocated_end);
+    // log_debug(
+    //     "FIND_NEXT: header={}, next_ptr={}, chunk_start={}, "
+    //     "chunk_allocated_end={}",
+    //     static_cast<void*>(header), next_ptr, chunk_start,
+    //     chunk_allocated_end);
 
     // Check if next block would be within allocated portion of chunk
     // Must ensure entire header fits (not just start position)
     if (next_ptr + BlockHeader::HEADER_SIZE <= chunk_allocated_end) {
       BlockHeader* next_header = reinterpret_cast<BlockHeader*>(next_ptr);
       // Using physical traversal - don't rely on header.next pointer
-      log_debug("FIND_NEXT: found next block={}, size={}, is_free={}",
-                static_cast<void*>(next_header), next_header->size,
-                next_header->is_free);
+      // log_debug("FIND_NEXT: found next block={}, size={}, is_free={}",
+      //           static_cast<void*>(next_header), next_header->size,
+      //           next_header->is_free);
       return next_header;
     }
 
-    log_debug("FIND_NEXT: next block would be outside allocated portion");
+    // log_debug("FIND_NEXT: next block would be outside allocated portion");
     return nullptr;  // Next block would be outside allocated portion
   }
 
   void coalesce_blocks(void* ptr) {
     BlockHeader* header = get_block_header(ptr);
 
-    log_debug("COALESCE START: ptr={}, header={}, size={}", ptr,
-              static_cast<void*>(header), header->size);
+    // log_debug("COALESCE START: ptr={}, header={}, size={}", ptr,
+    //           static_cast<void*>(header), header->size);
 
     // Coalesce with next block (forward coalescing)
     BlockHeader* next = find_next_block(header);
     if (next && next->is_free) {
-      log_debug("COALESCE: merging with NEXT block={}, size={}",
-                static_cast<void*>(next), next->size);
+      // log_debug("COALESCE: merging with NEXT block={}, size={}",
+      //           static_cast<void*>(next), next->size);
 
       // Remove next block from free list
       remove_block_from_free_list(next);
@@ -491,18 +493,19 @@ class FreeListArena : public MemArena {
       // Merge blocks
       size_t old_size = header->size;
       header->size += BlockHeader::HEADER_SIZE + next->size;
-      log_debug("COALESCE: merged forward - old_size={}, new_size={}", old_size,
-                header->size);
+      // log_debug("COALESCE: merged forward - old_size={}, new_size={}",
+      // old_size,
+      //           header->size);
     } else {
-      log_debug("COALESCE: no next block to merge (next={}, is_free={})",
-                static_cast<void*>(next), next ? next->is_free : false);
+      // log_debug("COALESCE: no next block to merge (next={}, is_free={})",
+      //           static_cast<void*>(next), next ? next->is_free : false);
     }
 
     // Coalesce with previous block (backward coalescing)
     BlockHeader* prev = find_prev_block(header);
     if (prev && prev->is_free) {
-      log_debug("COALESCE: merging with PREV block={}, size={}",
-                static_cast<void*>(prev), prev->size);
+      // log_debug("COALESCE: merging with PREV block={}, size={}",
+      //           static_cast<void*>(prev), prev->size);
 
       // Remove prev block from free list
       remove_block_from_free_list(prev);
@@ -510,19 +513,20 @@ class FreeListArena : public MemArena {
       // Merge blocks
       size_t old_size = prev->size;
       prev->size += BlockHeader::HEADER_SIZE + header->size;
-      log_debug("COALESCE: merged backward - old_size={}, new_size={}",
-                old_size, prev->size);
+      // log_debug("COALESCE: merged backward - old_size={}, new_size={}",
+      //           old_size, prev->size);
 
       // Update header to point to merged block
       header = prev;
     } else {
-      log_debug("COALESCE: no prev block to merge (prev={}, is_free={})",
-                static_cast<void*>(prev), prev ? prev->is_free : false);
+      // log_debug("COALESCE: no prev block to merge (prev={}, is_free={})",
+      //           static_cast<void*>(prev), prev ? prev->is_free : false);
     }
 
     // Add the coalesced block back to free list
-    log_debug("COALESCE: adding final block to free list: header={}, size={}",
-              static_cast<void*>(header), header->size);
+    // log_debug("COALESCE: adding final block to free list: header={},
+    // size={}",
+    //           static_cast<void*>(header), header->size);
     add_to_free_list(reinterpret_cast<char*>(header) + BlockHeader::HEADER_SIZE,
                      header->size);
   }

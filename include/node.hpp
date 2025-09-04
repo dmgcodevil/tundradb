@@ -44,10 +44,13 @@ class Node {
         schema_name(std::move(schema_name)) {}
 
   ~Node() {
-    data_.clear();
-    if (USE_NODE_ARENA && arena_ && handle_) {
-      arena_->deallocate_node(*handle_);
+    if (!USE_NODE_ARENA) {
+      data_.clear();
     }
+    // TODO slow
+    // if (USE_NODE_ARENA && arena_ && handle_) {
+    //   arena_->deallocate_node(*handle_);
+    // }
   }
 
   void add_field(const std::string &field_name, Value value) {
@@ -57,7 +60,7 @@ class Node {
   arrow::Result<Value> get_value(const std::string &field_name) const {
     if (USE_NODE_ARENA) {
       if (schema_->get_field(field_name) == nullptr) {
-        Logger::get_instance().debug("Field not found");
+        // Logger::get_instance().debug("Field not found");
         return arrow::Status::KeyError("Field not found: ", field_name);
       }
       return arena_->get_field_value(*handle_, schema_name, field_name);
@@ -76,12 +79,12 @@ class Node {
                              UpdateType update_type) {
     if (USE_NODE_ARENA) {
       if (schema_->get_field(field_name) == nullptr) {
-        Logger::get_instance().debug("Field not found");
+        // Logger::get_instance().debug("Field not found");
         return arrow::Status::KeyError("Field not found: ", field_name);
       }
 
       arena_->set_field_value(*handle_, schema_name, field_name, value);
-      Logger::get_instance().debug("set value is done");
+      // Logger::get_instance().debug("set value is done");
       return true;
     }
 
@@ -111,6 +114,8 @@ class NodeManager {
     layout_registry_ = std::make_shared<LayoutRegistry>();
     node_arena_ = node_arena_factory::create_free_list_arena(layout_registry_);
   }
+
+  ~NodeManager() { node_arena_->clear(); }
 
   arrow::Result<std::shared_ptr<Node>> get_node(const int64_t id) {
     return nodes[id];
@@ -171,13 +176,13 @@ class NodeManager {
         layout_registry_->register_layout(layout);
       }
       NodeHandle node_handle = node_arena_->allocate_node(schema_name);
-      Logger::get_instance().debug("node has been allocated at {}",
-                                   node_handle.ptr);
+      // Logger::get_instance().debug("node has been allocated at {}",
+      //                              node_handle.ptr);
       node_arena_->set_field_value(node_handle, schema_name, "id", Value{id});
       for (const auto &field : schema->fields()) {
         if (field->name() == "id") continue;
         if (!data.contains(field->name())) {
-          Logger::get_instance().debug("{} set NA value", field->name());
+          // Logger::get_instance().debug("{} set NA value", field->name());
           node_arena_->set_field_value(node_handle, schema_name, field->name(),
                                        Value());
         } else {

@@ -131,22 +131,22 @@ class NodeArena {
   Value get_field_value(const NodeHandle& handle,
                         const std::string& schema_name,
                         const std::string& field_name) const {
-    Logger::get_instance().debug("get_field_value: {}.{}", schema_name,
-                                 field_name);
+    // Logger::get_instance().debug("get_field_value: {}.{}", schema_name,
+    //                              field_name);
     if (handle.is_null()) {
-      Logger::get_instance().error("null value for invalid handle");
+      // Logger::get_instance().error("null value for invalid handle");
       return Value{};  // null value for invalid handle
     }
 
     if (layout_registry_ == nullptr) {
-      Logger::get_instance().error("null layout registry");
+      // Logger::get_instance().error("null layout registry");
       return Value{};  // null value for invalid handle
     }
 
     const std::shared_ptr<SchemaLayout> layout =
         layout_registry_->get_layout(schema_name);
     if (!layout) {
-      Logger::get_instance().error("null value for unknown schema");
+      // Logger::get_instance().error("null value for unknown schema");
       return Value{};  // null value for unknown schema
     }
 
@@ -160,8 +160,8 @@ class NodeArena {
    */
   bool set_field_value(const NodeHandle& handle, const std::string& schema_name,
                        const std::string& field_name, const Value& value) {
-    Logger::get_instance().debug("set_field_value: {}.{} = {}", schema_name,
-                                 field_name, value.to_string());
+    // Logger::get_instance().debug("set_field_value: {}.{} = {}", schema_name,
+    //                              field_name, value.to_string());
     if (handle.is_null()) {
       return false;  // invalid handle
     }
@@ -183,8 +183,8 @@ class NodeArena {
         if (!old_value.is_null() && old_value.type() != ValueType::NA) {
           try {
             StringRef old_str_ref = old_value.as_string_ref();
-            Logger::get_instance().debug("deallocate old string: {}",
-                                         old_str_ref.to_string());
+            // Logger::get_instance().debug("deallocate old string: {}",
+            //                              old_str_ref.to_string());
             if (!old_str_ref.is_null()) {
               string_arena_->deallocate_string(old_str_ref);
             }
@@ -200,7 +200,8 @@ class NodeArena {
         try {
           const std::string& str_content = value.as_string();
           StringRef str_ref = string_arena_->store_string_auto(str_content);
-          Logger::get_instance().debug("store string: {}", str_ref.to_string());
+          // Logger::get_instance().debug("store string: {}",
+          // str_ref.to_string());
           storage_value =
               Value{str_ref, field_layout->type};  // Preserve field type
         } catch (...) {
@@ -209,8 +210,8 @@ class NodeArena {
         }
       }
     }
-    Logger::get_instance().debug("storage_value: {}",
-                                 storage_value.to_string());
+    // Logger::get_instance().debug("storage_value: {}",
+    //                              storage_value.to_string());
     return layout->set_field_value(static_cast<char*>(handle.ptr), field_name,
                                    storage_value);
   }
