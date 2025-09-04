@@ -248,7 +248,9 @@ else()
         include_directories(${ANTLR4_INCLUDE_DIR})
         message(STATUS "Found ANTLR4 headers at: ${ANTLR4_INCLUDE_DIR}")
     else()
-        message(WARNING "ANTLR4 headers not found")
+        # Fallback: try to use the installed headers directly
+        include_directories(/usr/local/include)
+        message(WARNING "ANTLR4 headers not found in expected paths, using /usr/local/include as fallback")
     endif()
 endif()
 
@@ -266,10 +268,12 @@ add_library(tundraql_parser
 # Make sure the parser is generated first
 add_dependencies(tundraql_parser GenerateTundraQLParser)
 
-# Include the generated header files
+# Include the generated header files and ANTLR runtime headers
 target_include_directories(tundraql_parser
     PUBLIC
         ${ANTLR_OUTPUT_DIR}
+        /usr/local/include
+        /usr/local/include/antlr4-runtime
 )
 
 # Link ANTLR runtime to the parser library

@@ -85,16 +85,31 @@ jobs:
         # Install Java for ANTLR
         sudo apt-get install -y openjdk-11-jdk
 
+        # Install spdlog from source (required by the project)
+        cd /tmp
+        git clone https://github.com/gabime/spdlog.git
+        cd spdlog
+        mkdir build
+        cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DSPDLOG_BUILD_SHARED=ON
+        make -j$(nproc)
+        sudo make install
+        cd /
+        rm -rf /tmp/spdlog
+
         # Install ANTLR4 runtime from source
         cd /tmp
         git clone https://github.com/antlr/antlr4.git
         cd antlr4/runtime/Cpp
         mkdir build
         cd build
-        cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local
+        cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DCMAKE_CXX_STANDARD=17
         make -j$(nproc)
         sudo make install
         sudo ldconfig
+        # Ensure headers are in the right place
+        sudo mkdir -p /usr/local/include/antlr4-runtime
+        sudo cp -r /tmp/antlr4/runtime/Cpp/runtime/src/* /usr/local/include/antlr4-runtime/ 2>/dev/null || true
         cd /
         rm -rf /tmp/antlr4
 
