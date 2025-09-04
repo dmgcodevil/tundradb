@@ -220,7 +220,6 @@ class SchemaLayout {
       case ValueType::INT64:
         return Value{*reinterpret_cast<const int64_t*>(ptr)};
       case ValueType::INT32:
-        Logger::get_instance().debug("reading int32 value");
         return Value{*reinterpret_cast<const int32_t*>(ptr)};
       case ValueType::DOUBLE:
         return Value{*reinterpret_cast<const double*>(ptr)};
@@ -246,11 +245,7 @@ class SchemaLayout {
         *reinterpret_cast<int64_t*>(ptr) = value.as_int64();
         return true;
       case ValueType::INT32:
-        if (value.type() != ValueType::INT32) {
-          Logger::get_instance().debug(
-              " value.type() != ValueType::INT32 return false;");
-          return false;
-        }
+        if (value.type() != ValueType::INT32) return false;
         *reinterpret_cast<int32_t*>(ptr) = value.as_int32();
         return true;
       case ValueType::DOUBLE:
@@ -265,13 +260,10 @@ class SchemaLayout {
       case ValueType::FIXED_STRING16:
       case ValueType::FIXED_STRING32:
       case ValueType::FIXED_STRING64: {
-        Logger::get_instance().debug("writing string value");
         // All string types expect StringRef
         if (!is_string_type(value.type())) return false;
-
         // Value should contain StringRef (created by NodeArena)
         *reinterpret_cast<StringRef*>(ptr) = value.as_string_ref();
-        Logger::get_instance().debug("string value written");
         return true;
       }
       default:
@@ -361,7 +353,7 @@ class LayoutRegistry {
     layout->finalize();
 
     layouts_[schema->name()] = layout;
-    Logger::get_instance().debug("created schema layout");
+    // Logger::get_instance().debug("created schema layout");
     return layout;
   }
 
