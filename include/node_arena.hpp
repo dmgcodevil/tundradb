@@ -154,22 +154,27 @@ class NodeArena {
                                    field_name);
   }
 
+  bool set_field_value(const NodeHandle& handle, const std::string& schema_name,
+                       const std::string& field_name, const Value& value) {
+    std::shared_ptr<SchemaLayout> layout =
+        layout_registry_->get_layout(schema_name);
+    if (!layout) {
+      return false;  // unknown schema
+    }
+    return set_field_value(handle, layout, field_name, value);
+  }
+
   /**
    * Set field value in a node using its handle
    * Automatically stores strings in the string arena and creates StringRef
    */
-  bool set_field_value(const NodeHandle& handle, const std::string& schema_name,
+  bool set_field_value(const NodeHandle& handle,
+                       const std::shared_ptr<SchemaLayout>& layout,
                        const std::string& field_name, const Value& value) {
     // Logger::get_instance().debug("set_field_value: {}.{} = {}", schema_name,
     //                              field_name, value.to_string());
     if (handle.is_null()) {
       return false;  // invalid handle
-    }
-
-    std::shared_ptr<SchemaLayout> layout =
-        layout_registry_->get_layout(schema_name);
-    if (!layout) {
-      return false;  // unknown schema
     }
 
     // Handle string deallocation for any field that might contain strings
