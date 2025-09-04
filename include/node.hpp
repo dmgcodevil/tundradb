@@ -26,6 +26,7 @@ class Node {
   std::unique_ptr<NodeHandle> handle_;
   std::shared_ptr<NodeArena> arena_;
   std::shared_ptr<Schema> schema_;
+  std::shared_ptr<SchemaLayout> layout_;
 
  public:
   int64_t id;
@@ -35,11 +36,13 @@ class Node {
                 std::unordered_map<std::string, Value> initial_data,
                 std::unique_ptr<NodeHandle> handle = nullptr,
                 std::shared_ptr<NodeArena> arena = nullptr,
-                std::shared_ptr<Schema> schema = nullptr)
+                std::shared_ptr<Schema> schema = nullptr,
+                std::shared_ptr<SchemaLayout> layout = nullptr)
       : data_(std::move(initial_data)),
         handle_(std::move(handle)),
         arena_(std::move(arena)),
         schema_(std::move(schema)),
+        layout_(std::move(layout)),
         id(id),
         schema_name(std::move(schema_name)) {}
 
@@ -63,7 +66,7 @@ class Node {
         // Logger::get_instance().debug("Field not found");
         return arrow::Status::KeyError("Field not found: ", field_name);
       }
-      return arena_->get_field_value(*handle_, schema_name, field_name);
+      return arena_->get_field_value(*handle_, layout_, field_name);
     }
 
     const auto it = data_.find(field_name);
@@ -190,7 +193,7 @@ class NodeManager {
 
       auto node = std::make_shared<Node>(
           id, schema_name, EMPTY_DATA,
-          std::make_unique<NodeHandle>(node_handle), node_arena_, schema_);
+          std::make_unique<NodeHandle>(node_handle), node_arena_, schema_, layout_);
       nodes[id] = node;
       return node;
     } else {
@@ -236,6 +239,8 @@ class NodeManager {
 
   const std::unordered_map<std::string, Value> EMPTY_DATA{};
 
+  // since node creation is single threaded, we can cache the layout
+  // w/o synchronization
   std::shared_ptr<SchemaLayout> create_or_get_layout(
       const std::string &schema_name) const {
     if (layout_registry_->exists(schema_name)) {
@@ -247,6 +252,8 @@ class NodeManager {
     return layout;
   }
 
+  // since node creation is single threaded, we can cache the schema
+  // w/o synchronization
   void init_schema(const std::string &schema_name) {
     if (schema_name_ == schema_name) return;
     schema_name_ = schema_name;
