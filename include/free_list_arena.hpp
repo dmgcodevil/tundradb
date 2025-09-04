@@ -347,11 +347,11 @@ class FreeListArena : public MemArena {
     header->is_free = false;
 
     char* data_ptr = current_chunk_ + data_aligned_offset;
-    log_debug(
-        "ALLOCATE_NEW: data_ptr={}, header={}, size={}, total_size={}, "
-        "offset={}",
-        data_ptr, static_cast<void*>(header), aligned_size, total_size,
-        current_offset_);
+    // log_debug(
+    //     "ALLOCATE_NEW: data_ptr={}, header={}, size={}, total_size={}, "
+    //     "offset={}",
+    //     data_ptr, static_cast<void*>(header), aligned_size, total_size,
+    //     current_offset_);
 
     current_offset_ = data_aligned_offset + aligned_size;
     // Track individual block allocation (live memory usage)
