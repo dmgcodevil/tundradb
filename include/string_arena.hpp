@@ -172,7 +172,7 @@ class StringPool {
  private:
   size_t max_size_;
   std::unique_ptr<FreeListArena> arena_;
-  bool enable_deduplication_ = true;
+  bool enable_deduplication_ = false;
   // Reference counting for deduplication safety
   std::unordered_map<std::string, std::pair<StringRef, uint32_t>> dedup_map_;
 };
