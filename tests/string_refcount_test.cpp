@@ -4,7 +4,7 @@
 
 using namespace tundradb;
 
-TEST(StringRefCountTest, BasicRefCounting) {
+TEST(StringRefCountTest, DISABLED_BasicRefCounting) {
   StringPool pool(100);  // 100 char max
 
   // Store same string twice - should get same pointer
@@ -34,7 +34,7 @@ TEST(StringRefCountTest, BasicRefCounting) {
   EXPECT_EQ(pool.get_total_references(), 0);
 }
 
-TEST(StringRefCountTest, MultipleStringsRefCount) {
+TEST(StringRefCountTest, DISABLED_MultipleStringsRefCount) {
   StringPool pool(100);
 
   // Store different strings

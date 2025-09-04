@@ -115,7 +115,9 @@ class NodeManager {
     node_arena_ = node_arena_factory::create_free_list_arena(layout_registry_);
   }
 
-  ~NodeManager() { node_arena_->clear(); }
+  ~NodeManager() {
+    node_arena_->clear();
+  }
 
   arrow::Result<std::shared_ptr<Node>> get_node(const int64_t id) {
     return nodes[id];
