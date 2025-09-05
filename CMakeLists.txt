@@ -272,8 +272,11 @@ add_dependencies(tundraql_parser GenerateTundraQLParser)
 target_include_directories(tundraql_parser
     PUBLIC
         ${ANTLR_OUTPUT_DIR}
+    PRIVATE
         /usr/local/include
         /usr/local/include/antlr4-runtime
+        /usr/include
+        /usr/include/antlr4-runtime
 )
 
 # Link ANTLR runtime to the parser library

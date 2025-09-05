@@ -96,10 +96,13 @@ RUN cd /tmp && \
     cd antlr4/runtime/Cpp && \
     mkdir build && \
     cd build && \
-    cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local && \
+    cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DCMAKE_CXX_STANDARD=17 && \
     make -j$(nproc) && \
     make install && \
     ldconfig && \
+    # Copy ANTLR4 headers to be directly accessible \
+    cp -r /usr/local/include/antlr4-runtime/* /usr/local/include/ 2>/dev/null || \
+    cp -r /tmp/antlr4/runtime/Cpp/runtime/src/* /usr/local/include/ && \
     cd / && \
     rm -rf /tmp/antlr4
 
