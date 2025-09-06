@@ -17,10 +17,67 @@ list(APPEND CMAKE_PREFIX_PATH "/usr/local")
 
 # Find required packages
 find_package(Arrow REQUIRED)
+find_package(Parquet REQUIRED)
 
-# ArrowDataset might be part of Arrow or a separate package
-# Try to find it as a separate package first
-find_package(ArrowDataset QUIET)
+# Arrow targets are available after find_package(Arrow)
+
+# ArrowDataset depends on Arrow, ArrowCompute, ArrowAcero, and Parquet
+# Try to find ArrowCompute and ArrowAcero first
+find_package(ArrowCompute QUIET)
+find_package(ArrowAcero QUIET)
+
+# Add specific paths for ArrowDataset
+list(APPEND CMAKE_PREFIX_PATH "/usr/lib/x86_64-linux-gnu/cmake/ArrowDataset")
+list(APPEND CMAKE_PREFIX_PATH "/usr/lib/x86_64-linux-gnu/cmake")
+
+# Now try to find ArrowDataset with explicit CONFIG mode
+find_package(ArrowDataset QUIET CONFIG)
+if(NOT ArrowDataset_FOUND)
+    # Try without CONFIG mode
+    find_package(ArrowDataset QUIET)
+endif()
+
+# Manual inclusion for ArrowAcero if not found
+if(NOT ArrowAcero_FOUND)
+    message(STATUS "Attempting manual ArrowAcero inclusion...")
+    if(EXISTS "/usr/lib/x86_64-linux-gnu/cmake/ArrowAcero/ArrowAceroTargets.cmake")
+        include("/usr/lib/x86_64-linux-gnu/cmake/ArrowAcero/ArrowAceroTargets.cmake")
+        set(ArrowAcero_FOUND TRUE)
+        message(STATUS "Manually included ArrowAcero targets")
+    endif()
+endif()
+
+# Manual inclusion for ArrowCompute if not found
+if(NOT ArrowCompute_FOUND)
+    message(STATUS "Attempting manual ArrowCompute inclusion...")
+    if(EXISTS "/usr/lib/x86_64-linux-gnu/cmake/ArrowCompute/ArrowComputeTargets.cmake")
+        include("/usr/lib/x86_64-linux-gnu/cmake/ArrowCompute/ArrowComputeTargets.cmake")
+        set(ArrowCompute_FOUND TRUE)
+        message(STATUS "Manually included ArrowCompute targets")
+    else()
+        # ArrowCompute is likely part of the main Arrow library on Linux
+        # Create an alias from ArrowCompute::arrow_compute_shared to Arrow::arrow_shared
+        if(TARGET Arrow::arrow_shared AND NOT TARGET ArrowCompute::arrow_compute_shared)
+            add_library(ArrowCompute::arrow_compute_shared ALIAS Arrow::arrow_shared)
+            message(STATUS "Created ArrowCompute::arrow_compute_shared alias to Arrow::arrow_shared")
+            set(ArrowCompute_FOUND TRUE)
+        endif()
+    endif()
+endif()
+
+# If ArrowDataset still not found, try manual inclusion
+if(NOT ArrowDataset_FOUND)
+    message(STATUS "Attempting manual ArrowDataset inclusion...")
+    # Try to manually include the ArrowDataset targets
+    if(EXISTS "/usr/lib/x86_64-linux-gnu/cmake/ArrowDataset/ArrowDatasetTargets.cmake")
+        include("/usr/lib/x86_64-linux-gnu/cmake/ArrowDataset/ArrowDatasetTargets.cmake")
+        set(ArrowDataset_FOUND TRUE)
+        message(STATUS "Manually included ArrowDataset targets")
+    endif()
+endif()
+
+# ArrowDataset detection complete
+
 if(ArrowDataset_FOUND AND TARGET ArrowDataset::arrow_dataset_shared)
     set(ARROW_DATASET_LIB ArrowDataset::arrow_dataset_shared)
     message(STATUS "Using ArrowDataset::arrow_dataset_shared")
@@ -33,7 +90,6 @@ else()
     message(STATUS "Using Arrow::arrow_shared (assuming dataset functionality included)")
 endif()
 
-find_package(Parquet REQUIRED)
 find_package(benchmark REQUIRED)
 find_package(GTest REQUIRED)
 find_package(TBB REQUIRED)
@@ -161,6 +217,7 @@ target_link_libraries(tundradb
     PRIVATE
         core
         Arrow::arrow_shared
+        ${ARROW_DATASET_LIB}
         Parquet::parquet_shared
         ${UUID_LIBRARY}
 )
@@ -182,6 +239,7 @@ target_link_libraries(tundra_shell
         core
         tundraql_parser
         Arrow::arrow_shared
+        ${ARROW_DATASET_LIB}
         Parquet::parquet_shared
         ${UUID_LIBRARY}
         ${ANTLR4_RUNTIME}
