@@ -710,7 +710,7 @@ class Database {
     }
     ARROW_ASSIGN_OR_RAISE(auto node,
                           node_manager_->create_node(schema_name, data));
-    ARROW_RETURN_NOT_OK(shard_manager_->insert_node(node));
+    // ARROW_RETURN_NOT_OK(shard_manager_->insert_node(node));
     return node;
   }
 

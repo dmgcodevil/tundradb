@@ -14,6 +14,7 @@
 namespace tundradb {
 
 constexpr bool USE_NODE_ARENA = true;
+constexpr bool VALIDATION_ENABLED = false;
 
 enum UpdateType {
   SET,
@@ -138,32 +139,35 @@ class NodeManager {
 
     // ARROW_ASSIGN_OR_RAISE(const auto schema,
     //                       schema_registry_->get(schema_name));
-    if (!add && data.contains("id")) {
-      return arrow::Status::Invalid("'id' column is auto generated");
-    }
-
-    if (add && !data.contains("id")) {
-      return arrow::Status::Invalid("'id' is missing");
-    }
-
-    for (const auto &field : schema_->fields()) {
-      // check required
-      if (field->name() != "id" && !field->nullable() &&
-          (!data.contains(field->name()) ||
-           data.find(field->name())->second.is_null())) {
-        return arrow::Status::Invalid("Field '", field->name(),
-                                      "' is required");
+    if (VALIDATION_ENABLED) {
+      if (!add && data.contains("id")) {
+        return arrow::Status::Invalid("'id' column is auto generated");
       }
 
-      if (data.contains(field->name())) {
-        const auto value = data.find(field->name())->second;
-        if (field->type() != value.type()) {
-          return arrow::Status::Invalid(
-              "Type mismatch for field '", field->name(), "'. Expected ",
-              to_string(field->type()), " but got ", to_string(value.type()));
+      if (add && !data.contains("id")) {
+        return arrow::Status::Invalid("'id' is missing");
+      }
+
+      for (const auto &field : schema_->fields()) {
+        // check required
+        if (field->name() != "id" && !field->nullable() &&
+            (!data.contains(field->name()) ||
+             data.find(field->name())->second.is_null())) {
+          return arrow::Status::Invalid("Field '", field->name(),
+                                        "' is required");
+        }
+
+        if (data.contains(field->name())) {
+          const auto value = data.find(field->name())->second;
+          if (field->type() != value.type()) {
+            return arrow::Status::Invalid(
+                "Type mismatch for field '", field->name(), "'. Expected ",
+                to_string(field->type()), " but got ", to_string(value.type()));
+          }
         }
       }
     }
+
     int64_t id = 0;
     if (!add) {
       id = id_counter.fetch_add(1);
@@ -172,7 +176,7 @@ class NodeManager {
     }
 
     if (USE_NODE_ARENA) {
-      NodeHandle node_handle = node_arena_->allocate_node(schema_name);
+      NodeHandle node_handle = node_arena_->allocate_node(layout_);
       // Logger::get_instance().debug("node has been allocated at {}",
       //                              node_handle.ptr);
       node_arena_->set_field_value(node_handle, layout_, "id", Value{id});

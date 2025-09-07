@@ -77,7 +77,7 @@ class WherePushdownJoinTest : public ::testing::Test {
 };
 
 TEST_F(WherePushdownJoinTest, WhereInJoin) {
-  auto total_users = 100000;
+  auto total_users = 1000000;
   auto start_time = std::chrono::high_resolution_clock::now();
   create_users(total_users);
   auto end_time = std::chrono::high_resolution_clock::now();
