@@ -11,10 +11,9 @@ arrow::Result<std::shared_ptr<Edge>> EdgeStore::create_edge(
                                 now_millis());
 }
 
-arrow::Result<bool> EdgeStore::add(std::shared_ptr<Edge> edge) {
+arrow::Result<bool> EdgeStore::add(const std::shared_ptr<Edge>& edge) {
   {
-    typename tbb::concurrent_hash_map<int64_t, std::shared_ptr<Edge>>::accessor
-        acc;
+    tbb::concurrent_hash_map<int64_t, std::shared_ptr<Edge>>::accessor acc;
     if (!this->edges.insert(acc, edge->get_id())) {
       return arrow::Status::KeyError("Edge already exists with id=" +
                                      std::to_string(edge->get_id()));
@@ -24,29 +23,25 @@ arrow::Result<bool> EdgeStore::add(std::shared_ptr<Edge> edge) {
   }
 
   {
-    typename tbb::concurrent_hash_map<std::string,
-                                      ConcurrentSet<int64_t>>::accessor acc;
+    tbb::concurrent_hash_map<std::string, ConcurrentSet<int64_t>>::accessor acc;
     this->edges_by_type_.insert(acc, edge->get_type());
     acc->second.insert(edge->get_id());
   }
 
   {
-    typename tbb::concurrent_hash_map<int64_t, ConcurrentSet<int64_t>>::accessor
-        acc;
+    tbb::concurrent_hash_map<int64_t, ConcurrentSet<int64_t>>::accessor acc;
     this->outgoing_edges_.insert(acc, edge->get_source_id());
     acc->second.insert(edge->get_id());
   }
 
   {
-    typename tbb::concurrent_hash_map<int64_t, ConcurrentSet<int64_t>>::accessor
-        acc;
+    tbb::concurrent_hash_map<int64_t, ConcurrentSet<int64_t>>::accessor acc;
     this->incoming_edges_.insert(acc, edge->get_target_id());
     acc->second.insert(edge->get_id());
   }
 
   {
-    typename tbb::concurrent_hash_map<std::string,
-                                      std::atomic<int64_t>>::accessor acc;
+    tbb::concurrent_hash_map<std::string, std::atomic<int64_t>>::accessor acc;
     if (this->versions_.insert(acc, edge->get_type())) {
       acc->second.store(1);
     } else {
@@ -58,37 +53,35 @@ arrow::Result<bool> EdgeStore::add(std::shared_ptr<Edge> edge) {
 }
 
 arrow::Result<bool> EdgeStore::remove(int64_t edge_id) {
-  typename tbb::concurrent_hash_map<int64_t, std::shared_ptr<Edge>>::accessor
-      acc;
+  tbb::concurrent_hash_map<int64_t, std::shared_ptr<Edge>>::accessor acc;
 
   if (edges.find(acc, edge_id)) {
-    auto edge = acc->second;
+    const auto edge = acc->second;
     if (edges.erase(acc)) {
       {
-        typename tbb::concurrent_hash_map<
-            std::string, ConcurrentSet<int64_t>>::accessor edges_by_type_acc;
+        tbb::concurrent_hash_map<std::string, ConcurrentSet<int64_t>>::accessor
+            edges_by_type_acc;
         if (edges_by_type_.find(edges_by_type_acc, edge->get_type())) {
           edges_by_type_acc->second.remove(edge->get_id());
         }
       }
       {
-        typename tbb::concurrent_hash_map<
-            int64_t, ConcurrentSet<int64_t>>::accessor outgoing_edges_acc;
+        tbb::concurrent_hash_map<int64_t, ConcurrentSet<int64_t>>::accessor
+            outgoing_edges_acc;
         if (outgoing_edges_.find(outgoing_edges_acc, edge->get_source_id())) {
           outgoing_edges_acc->second.remove(edge->get_id());
         }
       }
       {
-        typename tbb::concurrent_hash_map<
-            int64_t, ConcurrentSet<int64_t>>::accessor incoming_edges_acc;
+        tbb::concurrent_hash_map<int64_t, ConcurrentSet<int64_t>>::accessor
+            incoming_edges_acc;
         if (incoming_edges_.find(incoming_edges_acc, edge->get_target_id())) {
           incoming_edges_acc->second.remove(edge->get_id());
         }
       }
     }
     {
-      typename tbb::concurrent_hash_map<std::string,
-                                        std::atomic<int64_t>>::accessor acc;
+      tbb::concurrent_hash_map<std::string, std::atomic<int64_t>>::accessor acc;
       if (this->versions_.insert(acc, edge->get_type())) {
         acc->second.store(1);
       } else {
@@ -103,8 +96,7 @@ arrow::Result<bool> EdgeStore::remove(int64_t edge_id) {
 std::vector<std::shared_ptr<Edge>> EdgeStore::get(
     const std::set<int64_t>& ids) const {
   std::vector<std::shared_ptr<Edge>> res;
-  typename tbb::concurrent_hash_map<int64_t,
-                                    std::shared_ptr<Edge>>::const_accessor acc;
+  tbb::concurrent_hash_map<int64_t, std::shared_ptr<Edge>>::const_accessor acc;
 
   for (auto id : ids) {
     if (edges.find(acc, id)) {
@@ -115,8 +107,7 @@ std::vector<std::shared_ptr<Edge>> EdgeStore::get(
 }
 
 arrow::Result<std::shared_ptr<Edge>> EdgeStore::get(int64_t edge_id) const {
-  typename tbb::concurrent_hash_map<int64_t,
-                                    std::shared_ptr<Edge>>::const_accessor acc;
+  tbb::concurrent_hash_map<int64_t, std::shared_ptr<Edge>>::const_accessor acc;
   if (edges.find(acc, edge_id)) {
     return acc->second;
   }
@@ -124,20 +115,21 @@ arrow::Result<std::shared_ptr<Edge>> EdgeStore::get(int64_t edge_id) const {
                                  std::to_string(edge_id));
 }
 
-arrow::Result<std::vector<std::shared_ptr<Edge>>> EdgeStore::get_outgoing_edges(
-    int64_t id, const std::string& type) const {
-  typename tbb::concurrent_hash_map<int64_t,
-                                    ConcurrentSet<int64_t>>::const_accessor acc;
-  if (!outgoing_edges_.find(acc, id)) {
+arrow::Result<std::vector<std::shared_ptr<Edge>>> EdgeStore::get_edges_from_map(
+    const tbb::concurrent_hash_map<int64_t, ConcurrentSet<int64_t>>& edge_map,
+    const int64_t id, const std::string& type) const {
+  tbb::concurrent_hash_map<int64_t, ConcurrentSet<int64_t>>::const_accessor acc;
+  if (!edge_map.find(acc, id)) {
     return std::vector<std::shared_ptr<Edge>>();
   }
 
   std::vector<std::shared_ptr<Edge>> result;
-  auto edge_ids = acc->second.get_all();
+  const auto edge_ids = acc->second.get_all();
+  result.reserve(edge_ids->size());
 
   for (const auto& edge_id : *edge_ids) {
-    typename tbb::concurrent_hash_map<
-        int64_t, std::shared_ptr<Edge>>::const_accessor edge_acc;
+    tbb::concurrent_hash_map<int64_t, std::shared_ptr<Edge>>::const_accessor
+        edge_acc;
     if (edges.find(edge_acc, edge_id)) {
       if (auto edge = edge_acc->second;
           type.empty() || edge->get_type() == type) {
@@ -149,35 +141,20 @@ arrow::Result<std::vector<std::shared_ptr<Edge>>> EdgeStore::get_outgoing_edges(
   return result;
 }
 
+arrow::Result<std::vector<std::shared_ptr<Edge>>> EdgeStore::get_outgoing_edges(
+    const int64_t id, const std::string& type) const {
+  return get_edges_from_map(outgoing_edges_, id, type);
+}
+
 arrow::Result<std::vector<std::shared_ptr<Edge>>> EdgeStore::get_incoming_edges(
-    int64_t id, const std::string& type) const {
-  typename tbb::concurrent_hash_map<int64_t,
-                                    ConcurrentSet<int64_t>>::const_accessor acc;
-  if (!incoming_edges_.find(acc, id)) {
-    return std::vector<std::shared_ptr<Edge>>();
-  }
-
-  std::vector<std::shared_ptr<Edge>> result;
-  auto edge_ids = acc->second.get_all();
-
-  for (const auto& edge_id : *edge_ids) {
-    typename tbb::concurrent_hash_map<
-        int64_t, std::shared_ptr<Edge>>::const_accessor edge_acc;
-    if (edges.find(edge_acc, edge_id)) {
-      auto edge = edge_acc->second;
-      if (type.empty() || edge->get_type() == type) {
-        result.push_back(edge);
-      }
-    }
-  }
-
-  return result;
+    const int64_t id, const std::string& type) const {
+  return get_edges_from_map(incoming_edges_, id, type);
 }
 
 arrow::Result<std::vector<std::shared_ptr<Edge>>> EdgeStore::get_by_type(
     const std::string& type) const {
-  typename tbb::concurrent_hash_map<std::string,
-                                    ConcurrentSet<int64_t>>::const_accessor acc;
+  tbb::concurrent_hash_map<std::string, ConcurrentSet<int64_t>>::const_accessor
+      acc;
   if (!edges_by_type_.find(acc, type)) {
     return std::vector<std::shared_ptr<Edge>>();
   }
@@ -186,8 +163,8 @@ arrow::Result<std::vector<std::shared_ptr<Edge>>> EdgeStore::get_by_type(
   auto edge_ids = acc->second.get_all();
 
   for (const auto& edge_id : *edge_ids) {
-    typename tbb::concurrent_hash_map<
-        int64_t, std::shared_ptr<Edge>>::const_accessor edge_acc;
+    tbb::concurrent_hash_map<int64_t, std::shared_ptr<Edge>>::const_accessor
+        edge_acc;
     if (edges.find(edge_acc, edge_id)) {
       result.push_back(edge_acc->second);
     }
@@ -198,8 +175,8 @@ arrow::Result<std::vector<std::shared_ptr<Edge>>> EdgeStore::get_by_type(
 
 arrow::Result<int64_t> EdgeStore::get_version(
     const std::string& edge_type) const {
-  typename tbb::concurrent_hash_map<std::string,
-                                    std::atomic<int64_t>>::const_accessor acc;
+  tbb::concurrent_hash_map<std::string, std::atomic<int64_t>>::const_accessor
+      acc;
   if (versions_.find(acc, edge_type)) {
     return acc->second.load(std::memory_order_acquire);
   }
@@ -209,9 +186,7 @@ arrow::Result<int64_t> EdgeStore::get_version(
 
 std::set<std::string> EdgeStore::get_edge_types() const {
   std::set<std::string> result;
-  typename tbb::concurrent_hash_map<std::string,
-                                    ConcurrentSet<int64_t>>::const_iterator it;
-  for (it = edges_by_type_.begin(); it != edges_by_type_.end(); ++it) {
+  for (auto it = edges_by_type_.begin(); it != edges_by_type_.end(); ++it) {
     result.insert(it->first);
   }
   return result;
@@ -224,8 +199,8 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::generate_table(
   if (edge_type.empty()) {
     selected_edges = get(*edge_ids_.get_all());
   } else {
-    typename tbb::concurrent_hash_map<
-        std::string, ConcurrentSet<int64_t>>::const_accessor acc;
+    tbb::concurrent_hash_map<std::string,
+                             ConcurrentSet<int64_t>>::const_accessor acc;
     if (edges_by_type_.find(acc, edge_type)) {
       selected_edges = get(*acc->second.get_all());
     }
@@ -375,8 +350,8 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::generate_table(
 
 arrow::Result<int64_t> EdgeStore::get_version_snapshot(
     const std::string& edge_type) const {
-  typename tbb::concurrent_hash_map<std::string,
-                                    std::atomic<int64_t>>::const_accessor acc;
+  tbb::concurrent_hash_map<std::string, std::atomic<int64_t>>::const_accessor
+      acc;
   if (versions_.find(acc, edge_type)) {
     return acc->second.load(std::memory_order_acquire);
   }
@@ -385,7 +360,7 @@ arrow::Result<int64_t> EdgeStore::get_version_snapshot(
 
 arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::get_table(
     const std::string& edge_type) {
-  const int MAX_RETRIES = 5;
+  constexpr int MAX_RETRIES = 5;
   int retry_count = 0;
 
   if (edges_by_type_.empty() || edges_by_type_.count(edge_type) == 0) {
@@ -394,15 +369,15 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::get_table(
 
   while (retry_count < MAX_RETRIES) {
     {
-      typename tbb::concurrent_hash_map<
+      tbb::concurrent_hash_map<
           std::string, std::shared_ptr<TableCache>>::const_accessor tables_acc;
       if (tables_.find(tables_acc, edge_type)) {
         auto latest_version_res = get_version_snapshot(edge_type);
         if (!latest_version_res.ok()) {
           return latest_version_res.status();
         }
-        int64_t latest_version = latest_version_res.ValueOrDie();
-        int64_t current_version =
+        const int64_t latest_version = latest_version_res.ValueOrDie();
+        const int64_t current_version =
             tables_acc->second->version.load(std::memory_order_acquire);
 
         if (current_version > latest_version) {
@@ -416,16 +391,16 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::get_table(
       }
     }
 
-    typename tbb::concurrent_hash_map<
-        std::string, std::shared_ptr<TableCache>>::accessor tables_acc;
+    tbb::concurrent_hash_map<std::string, std::shared_ptr<TableCache>>::accessor
+        tables_acc;
 
     if (tables_.find(tables_acc, edge_type)) {
       auto latest_version_res = get_version_snapshot(edge_type);
       if (!latest_version_res.ok()) {
         return latest_version_res.status();
       }
-      int64_t latest_version = latest_version_res.ValueOrDie();
-      int64_t current_version =
+      const int64_t latest_version = latest_version_res.ValueOrDie();
+      const int64_t current_version =
           tables_acc->second->version.load(std::memory_order_acquire);
 
       if (current_version < latest_version) {
@@ -451,7 +426,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::get_table(
         return tables_acc->second->table;
       }
     } else if (tables_.insert(tables_acc, edge_type)) {
-      auto table_cache = std::make_shared<TableCache>();
+      const auto table_cache = std::make_shared<TableCache>();
 
       tables_acc->second = table_cache;
       std::lock_guard<std::mutex> lock(table_cache->lock);
@@ -460,7 +435,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::get_table(
       if (!latest_version_res.ok()) {
         return latest_version_res.status();
       }
-      int64_t latest_version = latest_version_res.ValueOrDie();
+      const int64_t latest_version = latest_version_res.ValueOrDie();
 
       auto table_res = generate_table(edge_type);
       if (!table_res.ok()) {

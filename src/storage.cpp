@@ -64,7 +64,7 @@ arrow::Result<std::string> Storage::write_table(
   std::string file_path = folder + "/" + uuid_str + ".parquet";
 
   log_debug("writing a table to parquet. path=" + file_path);
-  ARROW_ASSIGN_OR_RAISE(auto output_file,
+  ARROW_ASSIGN_OR_RAISE(const auto output_file,
                         arrow::io::FileOutputStream::Open(file_path));
   const auto write_options = parquet::ArrowWriterProperties::Builder().build();
   const auto parquet_props = parquet::WriterProperties::Builder()

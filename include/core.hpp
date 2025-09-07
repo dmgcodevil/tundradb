@@ -408,13 +408,12 @@ class ShardManager {
 
   // сompact all schemas in the database
   arrow::Result<bool> compact_all() {
-    std::vector<std::string> schema_names =
+    const std::vector<std::string> schema_names =
         schema_registry_->get_schema_names();
     bool success = true;
 
     for (const auto &schema_name : schema_names) {
-      auto result = compact(schema_name);
-      if (!result.ok()) {
+      if (auto result = compact(schema_name); !result.ok()) {
         log_error("Error compacting schema '{}':{}", schema_name,
                   result.status().ToString());
         success = false;
@@ -473,7 +472,7 @@ class ShardManager {
                                      "' not found in shards");
     }
 
-    for (auto &shard : schema_it->second) {
+    for (const auto &shard : schema_it->second) {
       if (node_id >= shard->min_id && node_id <= shard->max_id) {
         try {
           if (auto node_result = shard->remove(node_id); node_result.ok()) {
@@ -730,15 +729,15 @@ class Database {
     return shard_manager_->remove_node(schema_name, node_id);
   }
 
-  arrow::Result<bool> connect(int64_t source_id, const std::string &type,
-                              int64_t target_id) {
+  arrow::Result<bool> connect(const int64_t source_id, const std::string &type,
+                              const int64_t target_id) {
     const auto edge =
         edge_store_->create_edge(source_id, type, target_id).ValueOrDie();
     ARROW_RETURN_NOT_OK(edge_store_->add(edge));
     return true;
   }
 
-  arrow::Result<bool> remove_edge(int64_t edge_id) {
+  arrow::Result<bool> remove_edge(const int64_t edge_id) {
     return edge_store_->remove(edge_id);
   }
 

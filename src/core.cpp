@@ -327,9 +327,9 @@ std::set<int64_t> get_roots(
   std::set<int64_t> roots;
   std::unordered_map<int64_t, int64_t> count;
   std::vector<int64_t> stack;
-  for (const auto& conn : connections) {
-    count[conn.first] = 0;
-    stack.push_back(conn.first);
+  for (const auto& id : connections | std::views::keys) {
+    count[id] = 0;
+    stack.push_back(id);
   }
 
   while (!stack.empty()) {
@@ -755,11 +755,14 @@ struct RowNode {
   PathSegment path_segment;
   std::vector<std::unique_ptr<RowNode>> children;
 
-  RowNode() : depth(0) {}
+  RowNode() : depth(0), path_segment{"", -1} {}
 
   RowNode(std::optional<Row> r, int d,
           std::vector<std::unique_ptr<RowNode>> c = {})
-      : row(std::move(r)), depth(d), children(std::move(c)) {}
+      : row(std::move(r)),
+        depth(d),
+        path_segment{"", -1},
+        children(std::move(c)) {}
 
   bool leaf() const { return row.has_value(); }
 

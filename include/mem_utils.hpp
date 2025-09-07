@@ -30,8 +30,8 @@ constexpr uintptr_t align_up_address(uintptr_t value, size_t alignment) {
  * @return Offset from chunk start to properly aligned position
  */
 inline size_t calculate_aligned_offset(const void* chunk_start,
-                                       size_t current_offset,
-                                       size_t alignment) {
+                                       const size_t current_offset,
+                                       const size_t alignment) {
   if (alignment <= alignof(std::max_align_t)) {
     // Small alignment: use efficient offset-based calculation
     return align_up(current_offset, alignment);

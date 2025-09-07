@@ -360,11 +360,14 @@ class ComparisonExpr : public Clause, public WhereExpr {
       case ValueType::DOUBLE:
         ss << value_.get<double>();
         break;
-      case ValueType::STRING:
-        ss << "'" << value_.get<std::string>() << "'";
-        break;
       case ValueType::BOOL:
         ss << (value_.get<bool>() ? "true" : "false");
+        break;
+      case ValueType::FIXED_STRING16:
+      case ValueType::FIXED_STRING32:
+      case ValueType::FIXED_STRING64:
+      case ValueType::STRING:
+        ss << "'" << value_.to_string() << "'";
         break;
     }
 
@@ -389,7 +392,7 @@ class ComparisonExpr : public Clause, public WhereExpr {
 
     // parse field name to extract variable and field parts
     // expected format: "variable.field" (e.g., "user.age", "company.name")
-    size_t dot_pos = field_.find('.');
+    const size_t dot_pos = field_.find('.');
     std::string field_name;
 
     if (dot_pos != std::string::npos) {
@@ -406,25 +409,23 @@ class ComparisonExpr : public Clause, public WhereExpr {
       bool strip_var) const override {
     std::string field_name = field_;
     if (strip_var) {
-      size_t dot_pos = field_.find('.');
-      if (dot_pos != std::string::npos) {
+      if (const size_t dot_pos = field_.find('.');
+          dot_pos != std::string::npos) {
         field_name = field_.substr(dot_pos + 1);
       } else {
         field_name = field_;
       }
     }
-    auto field_expr = arrow::compute::field_ref(field_name);
-    auto value_expr = value_to_expression(value_);
+    const auto field_expr = arrow::compute::field_ref(field_name);
+    const auto value_expr = value_to_expression(value_);
 
     return apply_comparison_op(field_expr, value_expr, op_);
   }
 
   std::vector<std::shared_ptr<ComparisonExpr>> get_conditions_for_variable(
       const std::string& variable) const override {
-    size_t dot_pos = field_.find('.');
-    if (dot_pos != std::string::npos) {
-      std::string var = field_.substr(0, dot_pos);
-      if (var == variable) {
+    if (const size_t dot_pos = field_.find('.'); dot_pos != std::string::npos) {
+      if (const std::string var = field_.substr(0, dot_pos); var == variable) {
         return {std::make_shared<ComparisonExpr>(*this)};
       }
     }
@@ -432,16 +433,14 @@ class ComparisonExpr : public Clause, public WhereExpr {
   }
 
   bool can_inline(const std::string& variable) const override {
-    size_t dot_pos = field_.find('.');
-    if (dot_pos != std::string::npos) {
+    if (const size_t dot_pos = field_.find('.'); dot_pos != std::string::npos) {
       return field_.substr(0, dot_pos) == variable;
     }
     return false;
   }
 
   std::string extract_first_variable() const override {
-    size_t dot_pos = field_.find('.');
-    if (dot_pos != std::string::npos) {
+    if (const size_t dot_pos = field_.find('.'); dot_pos != std::string::npos) {
       return field_.substr(0, dot_pos);
     }
     return "";
@@ -449,9 +448,8 @@ class ComparisonExpr : public Clause, public WhereExpr {
 
   std::set<std::string> get_all_variables() const override {
     std::set<std::string> variables;
-    size_t dot_pos = field_.find('.');
-    if (dot_pos != std::string::npos) {
-      std::string var = field_.substr(0, dot_pos);
+    if (const size_t dot_pos = field_.find('.'); dot_pos != std::string::npos) {
+      const std::string var = field_.substr(0, dot_pos);
       variables.insert(var);
     }
     return variables;

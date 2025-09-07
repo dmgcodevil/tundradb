@@ -35,6 +35,10 @@ class EdgeStore {
   std::string data_file_;
   int64_t chunk_size_;
 
+  arrow::Result<std::vector<std::shared_ptr<Edge>>> get_edges_from_map(
+      const tbb::concurrent_hash_map<int64_t, ConcurrentSet<int64_t>> &edge_map,
+      int64_t id, const std::string &type) const;
+
   arrow::Result<std::shared_ptr<arrow::Table>> generate_table(
       const std::string &edge_type) const;
 
@@ -69,7 +73,7 @@ class EdgeStore {
       std::unordered_map<std::string, std::shared_ptr<arrow::Array>>
           properties = {});
 
-  arrow::Result<bool> add(std::shared_ptr<Edge> edge);
+  arrow::Result<bool> add(const std::shared_ptr<Edge> &edge);
 
   arrow::Result<bool> remove(int64_t edge_id);
 

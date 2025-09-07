@@ -142,6 +142,7 @@ inline arrow::Result<std::shared_ptr<arrow::Field>> metadata_to_arrow_field(
 /**
  * @brief Convert an Arrow schema to SchemaMetadata
  *
+ * @param schema_name The name of the schema
  * @param schema The Arrow schema to convert
  * @return arrow::Result<SchemaMetadata> The resulting schema metadata
  */
@@ -353,22 +354,18 @@ class MetadataManager {
  public:
   explicit MetadataManager(const std::string &metadata_dir_path);
 
-  arrow::Result<bool> initialize();
+  arrow::Result<bool> initialize() const;
 
-  arrow::Result<std::string> write_manifest(const Manifest &manifest);
-  arrow::Result<Manifest> read_manifest(const std::string &id);
+  arrow::Result<std::string> write_manifest(const Manifest &manifest) const;
+  arrow::Result<Manifest> read_manifest(const std::string &id) const;
 
-  arrow::Result<std::string> write_metadata(const Metadata &metadata);
-  arrow::Result<Metadata> read_metadata(const std::string &path);
+  arrow::Result<std::string> write_metadata(const Metadata &metadata) const;
+  arrow::Result<Metadata> read_metadata(const std::string &path) const;
 
-  arrow::Result<std::string> write_db_info(const DatabaseInfo &db_info);
-  arrow::Result<DatabaseInfo> read_db_info();
+  arrow::Result<std::string> write_db_info(const DatabaseInfo &db_info) const;
+  arrow::Result<DatabaseInfo> read_db_info() const;
 
-  arrow::Result<Metadata> load_current_metadata();
-
-  arrow::Result<std::string> write_edge_metadata(
-      const EdgeMetadata &edge_metadata);
-  arrow::Result<EdgeMetadata> read_edge_metadata(const std::string &id);
+  arrow::Result<Metadata> load_current_metadata() const;
 
   const std::string &get_metadata_dir() const;
 

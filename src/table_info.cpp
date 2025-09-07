@@ -9,7 +9,7 @@ TableInfo::TableInfo(const std::shared_ptr<arrow::Table>& table)
   chunk_boundaries_.reserve(table->num_columns());
 
   for (int col_idx = 0; col_idx < table->num_columns(); ++col_idx) {
-    auto column = table->column(col_idx);
+    const auto column = table->column(col_idx);
     std::vector<int64_t> boundaries;
     boundaries.reserve(column->num_chunks() + 1);
 
@@ -25,8 +25,8 @@ TableInfo::TableInfo(const std::shared_ptr<arrow::Table>& table)
   }
 }
 
-TableInfo::ChunkInfo TableInfo::get_chunk_info(int column_index,
-                                               int64_t row_index) const {
+TableInfo::ChunkInfo TableInfo::get_chunk_info(const int column_index,
+                                               const int64_t row_index) const {
   if (column_index < 0 ||
       column_index >= static_cast<int>(chunk_boundaries_.size())) {
     throw std::out_of_range("Column index out of range");
@@ -37,8 +37,8 @@ TableInfo::ChunkInfo TableInfo::get_chunk_info(int column_index,
   }
 
   const auto& boundaries = chunk_boundaries_[column_index];
-  auto it = std::ranges::upper_bound(boundaries, row_index);
-  int chunk_index = std::distance(boundaries.begin(), it) - 1;
+  const auto it = std::ranges::upper_bound(boundaries, row_index);
+  const int chunk_index = std::distance(boundaries.begin(), it) - 1;
 
   return ChunkInfo{chunk_index, row_index - boundaries[chunk_index]};
 }

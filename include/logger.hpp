@@ -232,7 +232,7 @@ inline void log_error(
 
 class ContextLogger {
  public:
-  ContextLogger(std::string prefix) : prefix_(std::move(prefix)) {}
+  explicit ContextLogger(std::string prefix) : prefix_(std::move(prefix)) {}
 
   template <typename... Args>
   void debug(spdlog::format_string_t<Args...> fmt, Args&&... args) {

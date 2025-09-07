@@ -17,7 +17,8 @@ namespace tundradb {
  */
 class StringPool {
  public:
-  explicit StringPool(size_t max_size, size_t initial_arena_size = 1024 * 1024)
+  explicit StringPool(const size_t max_size,
+                      size_t initial_arena_size = 1024 * 1024)
       : max_size_(max_size),
         arena_(std::make_unique<FreeListArena>(initial_arena_size, 16)) {
     // Use 16-byte minimum fragment size for string alignment
@@ -27,7 +28,7 @@ class StringPool {
    * Store a string in this pool
    * Returns StringRef pointing to the stored string
    */
-  StringRef store_string(const std::string& str, uint32_t pool_id = 0) {
+  StringRef store_string(const std::string& str, const uint32_t pool_id = 0) {
     if (str.length() > max_size_) {
       // String too large for this pool
       return StringRef{};
@@ -35,8 +36,7 @@ class StringPool {
 
     // Check for deduplication with reference counting
     if (enable_deduplication_) {
-      auto it = dedup_map_.find(str);
-      if (it != dedup_map_.end()) {
+      if (const auto it = dedup_map_.find(str); it != dedup_map_.end()) {
         // Increment reference count and return existing string
         it->second.second++;
         return it->second.first;
@@ -44,8 +44,8 @@ class StringPool {
     }
 
     // Allocate space for string + null terminator
-    size_t alloc_size = str.length() + 1;
-    char* storage = static_cast<char*>(arena_->allocate(alloc_size));
+    const size_t alloc_size = str.length() + 1;
+    const auto storage = static_cast<char*>(arena_->allocate(alloc_size));
     if (!storage) {
       return StringRef{};  // Allocation failed
     }
@@ -67,7 +67,8 @@ class StringPool {
   /**
    * Store a string view in this pool
    */
-  StringRef store_string(std::string_view str, uint32_t pool_id = 0) {
+  StringRef store_string(const std::string_view str,
+                         const uint32_t pool_id = 0) {
     return store_string(std::string(str), pool_id);
   }
 
@@ -81,9 +82,9 @@ class StringPool {
         for (auto it = dedup_map_.begin(); it != dedup_map_.end(); ++it) {
           if (it->second.first.data == ref.data) {
             // Decrement reference count
-            uint32_t old_count = it->second.second;
+            // uint32_t old_count = it->second.second;
             it->second.second--;
-            uint32_t new_count = it->second.second;
+            // uint32_t new_count = it->second.second;
 
             // Logger::get_instance().debug(
             //     "deallocate_string: string '{}' ref count: {} -> {}",
@@ -124,7 +125,7 @@ class StringPool {
   /**
    * Get string content from reference (zero-copy view)
    */
-  std::string_view get_string_view(const StringRef& ref) const {
+  static std::string_view get_string_view(const StringRef& ref) {
     if (ref.is_null()) {
       return std::string_view{};
     }
@@ -132,7 +133,7 @@ class StringPool {
   }
 
   // Configuration
-  void enable_deduplication(bool enable = true) {
+  void enable_deduplication(const bool enable = true) {
     enable_deduplication_ = enable;
     if (!enable) {
       dedup_map_.clear();
@@ -143,7 +144,7 @@ class StringPool {
   size_t get_max_size() const { return max_size_; }
   size_t get_total_allocated() const { return arena_->get_total_allocated(); }
   size_t get_used_bytes() const {
-    if (auto* free_list = dynamic_cast<FreeListArena*>(arena_.get())) {
+    if (const auto* free_list = dynamic_cast<FreeListArena*>(arena_.get())) {
       return free_list->get_used_bytes();
     }
     return 0;  // Fallback if not FreeListArena
@@ -201,13 +202,13 @@ class StringArena {
       return StringRef{};  // Not a string type
     }
 
-    auto it = pools_.find(type);
+    const auto it = pools_.find(type);
     if (it == pools_.end()) {
       return StringRef{};  // Unknown string type
     }
 
     // Get pool ID from the type (for identification)
-    uint32_t pool_id = static_cast<uint32_t>(type);
+    const uint32_t pool_id = static_cast<uint32_t>(type);
 
     return it->second->store_string(str, pool_id);
   }
@@ -215,8 +216,8 @@ class StringArena {
   /**
    * Store string view
    */
-  StringRef store_string(std::string_view str,
-                         ValueType type = ValueType::STRING) {
+  StringRef store_string(const std::string_view str,
+                         const ValueType type = ValueType::STRING) {
     return store_string(std::string(str), type);
   }
 
@@ -225,7 +226,7 @@ class StringArena {
    * Picks the smallest pool that can fit the string
    */
   StringRef store_string_auto(const std::string& str) {
-    size_t len = str.length();
+    const size_t len = str.length();
 
     if (len <= 16) {
       return store_string(str, ValueType::FIXED_STRING16);
@@ -243,9 +244,8 @@ class StringArena {
    * Get string content from reference
    */
   std::string_view get_string_view(const StringRef& ref) const {
-    ValueType type = static_cast<ValueType>(ref.arena_id);
-    auto it = pools_.find(type);
-    if (it != pools_.end()) {
+    const auto type = static_cast<ValueType>(ref.arena_id);
+    if (const auto it = pools_.find(type); it != pools_.end()) {
       return it->second->get_string_view(ref);
     }
     return std::string_view{};
@@ -264,7 +264,7 @@ class StringArena {
   /**
    * Configure deduplication for all pools
    */
-  void enable_deduplication(bool enable = true) {
+  void enable_deduplication(const bool enable = true) {
     for (const auto& pool : pools_ | std::views::values) {
       pool->enable_deduplication(enable);
     }
@@ -273,8 +273,8 @@ class StringArena {
   /**
    * Get pool for a specific string type
    */
-  StringPool* get_pool(ValueType type) {
-    auto it = pools_.find(type);
+  StringPool* get_pool(const ValueType type) {
+    const auto it = pools_.find(type);
     return it != pools_.end() ? it->second.get() : nullptr;
   }
 

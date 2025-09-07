@@ -1,12 +1,11 @@
 #include "schema.hpp"
+
+#include "arrow_utils.hpp"
+
 namespace tundradb {
 
 arrow::Result<Field> Field::from_arrow(
     const std::shared_ptr<arrow::Field> &field) {
-  // Field result;
-  // result.name = field->name();
-  // result.nullable = field->nullable();
-
   ValueType type;
 
   switch (field->type()->id()) {
@@ -42,7 +41,26 @@ arrow::Result<Field> Field::from_arrow(
   return Field(field->name(), type, field->nullable());
 }
 
-[[nodiscard]] arrow::Result<arrow::Field> Field::to_arrow() const {}
+[[nodiscard]] arrow::Result<std::shared_ptr<arrow::Field>> Field::to_arrow()
+    const {
+  switch (type_) {
+    case ValueType::BOOL:
+      return arrow::field(name_, arrow::boolean());
+    case ValueType::INT32:
+      return arrow::field(name_, arrow::int32());
+    case ValueType::INT64:
+      return arrow::field(name_, arrow::int64());
+    case ValueType::FLOAT:
+      return arrow::field(name_, arrow::float32());
+    case ValueType::DOUBLE:
+      return arrow::field(name_, arrow::float64());
+    case ValueType::STRING:
+      return arrow::field(name_, arrow::utf8());
+    default:
+      return arrow::Status::NotImplemented("Unsupported ValueType: ",
+                                           static_cast<int>(type_));
+  }
+}
 
 arrow::Result<Schema> Schema::from_arrow(
     const std::string &schema_name,
@@ -79,11 +97,9 @@ std::shared_ptr<Field> Schema::get_field(const std::string &name) const {
 bool Schema::empty() const { return fields_.empty(); }
 
 arrow::Result<bool> SchemaRegistry::create(
-    const std::string &name, std::shared_ptr<arrow::Schema> schema) {
-  auto normalized_schema = prepend_id_field(schema);
+    const std::string &name, const std::shared_ptr<arrow::Schema> &schema) {
+  const auto normalized_schema = prepend_id_field(schema);
   return add_arrow(name, normalized_schema);
-  // schemas_.insert(std::make_pair(name, normalized_schema));
-  // return {true};
 }
 
 arrow::Result<bool> SchemaRegistry::add_arrow(

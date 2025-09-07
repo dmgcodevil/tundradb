@@ -18,19 +18,20 @@ namespace tundradb {
 /**
  * Helper functions for bit set manipulation to track which fields are set
  */
-inline size_t get_bitset_size_bytes(size_t num_fields) {
+inline size_t get_bitset_size_bytes(const size_t num_fields) {
   return (num_fields + 7) / 8;  // Round up to nearest byte
 }
 
-inline bool is_field_set(const char* bitset, size_t field_index) {
-  size_t byte_index = field_index / 8;
-  size_t bit_index = field_index % 8;
+inline bool is_field_set(const char* bitset, const size_t field_index) {
+  const size_t byte_index = field_index / 8;
+  const size_t bit_index = field_index % 8;
   return (bitset[byte_index] & (1 << bit_index)) != 0;
 }
 
-inline void set_field_bit(char* bitset, size_t field_index, bool is_set) {
-  size_t byte_index = field_index / 8;
-  size_t bit_index = field_index % 8;
+inline void set_field_bit(char* bitset, const size_t field_index,
+                          const bool is_set) {
+  const size_t byte_index = field_index / 8;
+  const size_t bit_index = field_index % 8;
   if (is_set) {
     bitset[byte_index] |= (1 << bit_index);
   } else {
@@ -49,9 +50,9 @@ struct FieldLayout {
   size_t alignment;  // Required alignment
   bool nullable;     // Whether field can be null
 
-  FieldLayout(std::string field_name, ValueType field_type, size_t field_offset,
-              size_t field_size, size_t field_alignment,
-              bool is_nullable = true)
+  FieldLayout(std::string field_name, const ValueType field_type,
+              const size_t field_offset, const size_t field_size,
+              const size_t field_alignment, const bool is_nullable = true)
       : name(std::move(field_name)),
         type(field_type),
         offset(field_offset),
@@ -80,7 +81,7 @@ class SchemaLayout {
    * Get the offset where actual field data starts (after bit set + alignment)
    */
   size_t get_data_offset() const {
-    size_t bitset_size = get_bitset_size();
+    const size_t bitset_size = get_bitset_size();
     return align_up(bitset_size, alignment_);
   }
 
@@ -93,7 +94,6 @@ class SchemaLayout {
     size_t field_size = get_type_size(type);
     size_t field_alignment = get_type_alignment(type);
 
-    // Update overall alignment requirement
     alignment_ = std::max(alignment_, field_alignment);
 
     // Calculate field offset (relative to start of data, after bit set)
@@ -130,12 +130,12 @@ class SchemaLayout {
    */
   Value get_field_value(const char* node_data,
                         const std::string& field_name) const {
-    auto it = field_index_.find(field_name);
+    const auto it = field_index_.find(field_name);
     if (it == field_index_.end()) {
       return Value();  // null value for missing field
     }
 
-    size_t field_index = it->second;
+    const size_t field_index = it->second;
     const FieldLayout& field = fields_[field_index];
 
     // Check if this field has been set using the bit set
@@ -155,12 +155,12 @@ class SchemaLayout {
    */
   bool set_field_value(char* node_data, const std::string& field_name,
                        const Value& value) {
-    auto it = field_index_.find(field_name);
+    const auto it = field_index_.find(field_name);
     if (it == field_index_.end()) {
       return false;  // field not found
     }
 
-    size_t field_index = it->second;
+    const size_t field_index = it->second;
     const FieldLayout& field = fields_[field_index];
 
     // Update the bit set to indicate this field has been set
@@ -183,7 +183,7 @@ class SchemaLayout {
    */
   void initialize_node_data(char* node_data) const {
     // Clear the bit set (all fields initially unset)
-    size_t bitset_size = get_bitset_size();
+    const size_t bitset_size = get_bitset_size();
     std::memset(node_data, 0, bitset_size);
 
     // Zero out all data memory
@@ -204,18 +204,18 @@ class SchemaLayout {
   bool is_finalized() const { return finalized_; }
 
   bool has_field(const std::string& name) const {
-    return field_index_.find(name) != field_index_.end();
+    return field_index_.contains(name);
   }
 
   const FieldLayout* get_field_layout(const std::string& name) const {
-    auto it = field_index_.find(name);
+    const auto it = field_index_.find(name);
     return it != field_index_.end() ? &fields_[it->second] : nullptr;
   }
 
   const std::vector<FieldLayout>& get_fields() const { return fields_; }
 
  private:
-  Value read_value_from_memory(const char* ptr, ValueType type) const {
+  static Value read_value_from_memory(const char* ptr, const ValueType type) {
     switch (type) {
       case ValueType::INT64:
         return Value{*reinterpret_cast<const int64_t*>(ptr)};
@@ -238,7 +238,8 @@ class SchemaLayout {
     }
   }
 
-  bool write_value_to_memory(char* ptr, ValueType type, const Value& value) {
+  static bool write_value_to_memory(char* ptr, const ValueType type,
+                                    const Value& value) {
     switch (type) {
       case ValueType::INT64:
         if (value.type() != ValueType::INT64) return false;
@@ -271,7 +272,7 @@ class SchemaLayout {
     }
   }
 
-  void initialize_field_memory(char* ptr, ValueType type) const {
+  static void initialize_field_memory(char* ptr, const ValueType type) {
     switch (type) {
       case ValueType::STRING:
       case ValueType::FIXED_STRING16:
@@ -313,7 +314,7 @@ class LayoutRegistry {
    * Get layout for a schema, returns nullptr if not found
    */
   std::shared_ptr<SchemaLayout> get_layout(const std::string& schema_name) {
-    auto it = layouts_.find(schema_name);
+    const auto it = layouts_.find(schema_name);
     return it != layouts_.end() ? it->second : nullptr;
   }
 
@@ -331,7 +332,7 @@ class LayoutRegistry {
 
     // Add fields (all strings stored as StringRef)
     for (const auto& field : arrow_schema->fields()) {
-      ValueType value_type = arrow_type_to_value_type(field->type());
+      const ValueType value_type = arrow_type_to_value_type(field->type());
       // String types are stored as StringRef in node layout
       layout->add_field(field->name(), value_type, field->nullable());
     }
@@ -364,7 +365,7 @@ class LayoutRegistry {
   std::vector<std::string> get_schema_names() const {
     std::vector<std::string> names;
     names.reserve(layouts_.size());
-    for (const auto& [name, layout] : layouts_) {
+    for (const auto& name : layouts_ | std::views::keys) {
       names.push_back(name);
     }
     return names;
@@ -378,8 +379,8 @@ class LayoutRegistry {
   std::unordered_map<std::string, std::shared_ptr<SchemaLayout>> layouts_;
 
   // Helper function to convert Arrow types to ValueTypes
-  ValueType arrow_type_to_value_type(
-      const std::shared_ptr<arrow::DataType>& arrow_type) const {
+  static ValueType arrow_type_to_value_type(
+      const std::shared_ptr<arrow::DataType>& arrow_type) {
     switch (arrow_type->id()) {
       case arrow::Type::INT32:
         return ValueType::INT32;
