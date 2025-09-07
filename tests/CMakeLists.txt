@@ -61,7 +61,7 @@ endif()
 
 # Add sharding test
 add_executable(sharding_test
-    test_sharding.cpp
+        sharding_test.cpp
 )
 
 # Add snapshot test
@@ -121,6 +121,18 @@ add_executable(memory_arena_test
 
 add_executable(free_list_arena_test
         free_list_arena_test.cpp)
+
+# NodeArena comprehensive test
+add_executable(node_arena_test
+        node_arena_test.cpp)
+
+# String reference counting test
+add_executable(string_refcount_test
+        string_refcount_test.cpp)
+
+# Node test
+add_executable(node_test
+        node_test.cpp)
 
 # Link against Arrow and GTest
 target_link_libraries(sharding_test
@@ -268,6 +280,35 @@ target_link_libraries(free_list_arena_test
         spdlog::spdlog
 )
 
+
+target_link_libraries(node_arena_test
+        PRIVATE
+        core
+        GTest::GTest
+        GTest::Main
+        spdlog::spdlog
+)
+
+target_link_libraries(string_refcount_test
+        PRIVATE
+        core
+        Arrow::arrow_shared
+        Parquet::parquet_shared
+        GTest::GTest
+        GTest::Main
+        spdlog::spdlog
+)
+
+target_link_libraries(node_test
+        PRIVATE
+        core
+        Arrow::arrow_shared
+        Parquet::parquet_shared
+        GTest::GTest
+        GTest::Main
+        spdlog::spdlog
+)
+
 # Apply sanitizer flags to all test targets if enabled
 if(ENABLE_SANITIZERS)
     target_compile_options(sharding_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
@@ -314,6 +355,9 @@ add_test(NAME JoinTest COMMAND join_test)
 add_test(NAME WhereExpressionTest COMMAND where_expression_test)
 add_test(NAME MemoryArenaTest COMMAND memory_arena_test)
 add_test(NAME FreeListArenaTest COMMAND free_list_arena_test)
+add_test(NAME NodeArenaTest COMMAND node_arena_test)
+add_test(NAME StringRefCountTest COMMAND string_refcount_test)
+add_test(NAME NodeTest COMMAND node_test)
 
 # Set TSan options for tests after they've been registered
 if(ENABLE_SANITIZERS AND SANITIZER_TYPE STREQUAL "thread" AND EXISTS ${TSAN_SUPPRESSIONS_FILE})

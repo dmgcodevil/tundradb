@@ -30,7 +30,7 @@ arrow::Result<bool> SnapshotManager::initialize() {
         }
         auto arrow_shema = arrow_schema_result.ValueOrDie();
         auto add_schema_result =
-            schema_registry_->add(schema_metadata.name, arrow_shema);
+            schema_registry_->add_arrow(schema_metadata.name, arrow_shema);
         if (!add_schema_result.ok()) {
           log_error("Failed to add schema to registry: " +
                     add_schema_result.status().ToString());
@@ -112,10 +112,6 @@ arrow::Result<bool> SnapshotManager::initialize() {
             log_error("Failed to add shard: " + add_result.status().ToString());
             return add_result.status();
           }
-          for (const auto &node : shard->get_nodes()) {
-            log_debug("Adding node {}", node->id);
-            node_manager_->add_node(node);
-          }
         }
       }
       log_info("Load edges");
@@ -178,7 +174,7 @@ arrow::Result<Snapshot> SnapshotManager::commit() {
   }
 
   Snapshot new_snapshot;
-  new_snapshot.id = timestamp_ms;
+  new_snapshot.id = generate_unique_snapshot_id();  // timestamp_ms;
   new_snapshot.timestamp_ms = timestamp_ms;
 
   if (this->metadata_.get_current_snapshot() != nullptr) {
@@ -267,7 +263,7 @@ arrow::Result<Snapshot> SnapshotManager::commit() {
   log_info("Updating schemas");
   std::vector<SchemaMetadata> schemas;
   for (const auto &name : this->schema_registry_->get_schema_names()) {
-    auto arrow_shema = this->schema_registry_->get(name).ValueOrDie();
+    auto arrow_shema = this->schema_registry_->get_arrow(name).ValueOrDie();
     schemas.push_back(arrow_schema_to_metadata(name, arrow_shema).ValueOrDie());
   }
   log_info("schemas count {}", schemas.size());

@@ -179,15 +179,14 @@ class ComparisonExpr : public Clause, public WhereExpr {
 
   static arrow::Result<bool> compare_values(const Value& value, CompareOp op,
                                             const Value& where_value) {
-    if (value.type() == ValueType::Null ||
-        where_value.type() == ValueType::Null) {
+    if (value.type() == ValueType::NA || where_value.type() == ValueType::NA) {
       switch (op) {
         case CompareOp::Eq:
-          return value.type() == ValueType::Null &&
-                 where_value.type() == ValueType::Null;
+          return value.type() == ValueType::NA &&
+                 where_value.type() == ValueType::NA;
         case CompareOp::NotEq:
-          return value.type() != ValueType::Null ||
-                 where_value.type() != ValueType::Null;
+          return value.type() != ValueType::NA ||
+                 where_value.type() != ValueType::NA;
         default:
           return arrow::Status::Invalid(
               "Null values can only be compared with == or !=");
@@ -196,18 +195,18 @@ class ComparisonExpr : public Clause, public WhereExpr {
 
     if (op == CompareOp::Contains || op == CompareOp::StartsWith ||
         op == CompareOp::EndsWith) {
-      if (value.type() != ValueType::String ||
-          where_value.type() != ValueType::String) {
+      if (value.type() != ValueType::STRING ||
+          where_value.type() != ValueType::STRING) {
         return arrow::Status::Invalid(
             "String operations (CONTAINS, STARTS_WITH, ENDS_WITH) can only be "
             "applied to string values");
       }
     }
 
-    if (value.type() == ValueType::Bool ||
-        where_value.type() == ValueType::Bool) {
-      if (value.type() != ValueType::Bool ||
-          where_value.type() != ValueType::Bool) {
+    if (value.type() == ValueType::BOOL ||
+        where_value.type() == ValueType::BOOL) {
+      if (value.type() != ValueType::BOOL ||
+          where_value.type() != ValueType::BOOL) {
         return arrow::Status::Invalid(
             "Boolean values can only be compared with other boolean values");
       }
@@ -223,37 +222,37 @@ class ComparisonExpr : public Clause, public WhereExpr {
     }
 
     switch (value.type()) {
-      case ValueType::Int32: {
+      case ValueType::INT32: {
         int32_t field_val = value.get<int32_t>();
         int32_t where_val = where_value.get<int32_t>();
         return apply_comparison(field_val, op, where_val);
       }
-      case ValueType::Int64: {
+      case ValueType::INT64: {
         int64_t field_val = value.get<int64_t>();
         int64_t where_val = where_value.get<int64_t>();
         return apply_comparison(field_val, op, where_val);
       }
-      case ValueType::Float: {
+      case ValueType::FLOAT: {
         float field_val = value.get<float>();
         float where_val = where_value.get<float>();
         return apply_comparison(field_val, op, where_val);
       }
-      case ValueType::Double: {
+      case ValueType::DOUBLE: {
         double field_val = value.get<double>();
         double where_val = where_value.get<double>();
         return apply_comparison(field_val, op, where_val);
       }
-      case ValueType::String: {
-        const std::string& field_val = value.get<std::string>();
-        const std::string& where_val = where_value.get<std::string>();
+      case ValueType::STRING: {
+        const std::string& field_val = value.as_string();
+        const std::string& where_val = where_value.as_string();
         return apply_comparison(field_val, op, where_val);
       }
-      case ValueType::Bool: {
+      case ValueType::BOOL: {
         bool field_val = value.get<bool>();
         bool where_val = where_value.get<bool>();
         return apply_comparison(field_val, op, where_val);
       }
-      case ValueType::Null:
+      case ValueType::NA:
         return arrow::Status::Invalid("Unexpected null value in comparison");
       default:
         return arrow::Status::NotImplemented(
@@ -346,25 +345,25 @@ class ComparisonExpr : public Clause, public WhereExpr {
     }
 
     switch (value_.type()) {
-      case ValueType::Null:
+      case ValueType::NA:
         ss << "NULL";
         break;
-      case ValueType::Int32:
+      case ValueType::INT32:
         ss << value_.get<int32_t>();
         break;
-      case ValueType::Int64:
+      case ValueType::INT64:
         ss << value_.get<int64_t>();
         break;
-      case ValueType::Float:
+      case ValueType::FLOAT:
         ss << value_.get<float>();
         break;
-      case ValueType::Double:
+      case ValueType::DOUBLE:
         ss << value_.get<double>();
         break;
-      case ValueType::String:
+      case ValueType::STRING:
         ss << "'" << value_.get<std::string>() << "'";
         break;
-      case ValueType::Bool:
+      case ValueType::BOOL:
         ss << (value_.get<bool>() ? "true" : "false");
         break;
     }
@@ -399,7 +398,7 @@ class ComparisonExpr : public Clause, public WhereExpr {
       field_name = field_;
     }
 
-    ARROW_ASSIGN_OR_RAISE(auto field_value, node->get_field(field_name));
+    ARROW_ASSIGN_OR_RAISE(auto field_value, node->get_value(field_name));
     return compare_values(field_value, op_, value_);
   }
 
@@ -531,6 +530,13 @@ class LogicalExpr : public Clause, public WhereExpr {
     return std::make_shared<LogicalExpr>(std::move(left), LogicalOp::OR,
                                          std::move(right));
   }
+
+  // Public accessors
+  [[nodiscard]] const std::shared_ptr<WhereExpr>& left() const { return left_; }
+  [[nodiscard]] const std::shared_ptr<WhereExpr>& right() const {
+    return right_;
+  }
+  [[nodiscard]] LogicalOp op() const { return op_; }
 
   arrow::Result<bool> matches(
       const std::shared_ptr<Node>& node) const override {

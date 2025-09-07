@@ -66,18 +66,25 @@ TEST_F(FreeListArenaTest, AllocationAlignment) {
 }
 
 TEST_F(FreeListArenaTest, BasicDeallocation) {
+  size_t initial_used = arena->get_used_bytes();  // Should be 0 initially
+
   void* ptr1 = arena->allocate(96);   // 96 is already 8-byte aligned
   void* ptr2 = arena->allocate(200);  // 200 is already 8-byte aligned
 
-  size_t allocated_before = arena->get_total_allocated();
-  EXPECT_GT(allocated_before, 0);
+  // After allocation: used should be 296 bytes
+  EXPECT_EQ(arena->get_used_bytes(), initial_used + 296);
 
   arena->deallocate(ptr1);
+
+  // After deallocating 96 bytes: used should be 200 bytes
   EXPECT_EQ(arena->get_freed_bytes(), 96);
-  EXPECT_EQ(arena->get_live_bytes(), allocated_before - 96);
+  EXPECT_EQ(arena->get_used_bytes(), initial_used + 200);
 
   arena->deallocate(ptr2);
+
+  // After deallocating everything: used should be 0 bytes
   EXPECT_EQ(arena->get_freed_bytes(), 296);
+  EXPECT_EQ(arena->get_used_bytes(), initial_used);
 }
 
 TEST_F(FreeListArenaTest, FreeListManagement) {
@@ -300,23 +307,42 @@ TEST_F(FreeListArenaTest, BestFitAllocation) {
 }
 
 TEST_F(FreeListArenaTest, Statistics) {
-  size_t initial_allocated = arena->get_total_allocated();
+  size_t initial_chunk_memory =
+      arena->get_total_allocated();  // Chunk memory (1024 initially -
+                                     // pre-allocated)
+  size_t initial_used = arena->get_used_bytes();  // Used memory (0 initially)
 
   void* ptr1 = arena->allocate(96);   // 8-byte aligned
   void* ptr2 = arena->allocate(200);  // 8-byte aligned
 
-  EXPECT_EQ(arena->get_total_allocated(), initial_allocated + 296);
-  EXPECT_EQ(arena->get_freed_bytes(), 0);
-  EXPECT_EQ(arena->get_live_bytes(), initial_allocated + 296);
+  // These fit in first chunk, so chunk memory unchanged
+  EXPECT_EQ(arena->get_total_allocated(), initial_chunk_memory);
 
+  // Used memory should be exactly the allocated blocks
+  EXPECT_EQ(arena->get_used_bytes(), initial_used + 296);  // 96 + 200
+  EXPECT_EQ(arena->get_freed_bytes(), 0);
+
+  size_t chunk_memory_before_deallocate = arena->get_total_allocated();
   arena->deallocate(ptr1);
 
-  EXPECT_EQ(arena->get_freed_bytes(), 96);
-  EXPECT_EQ(arena->get_live_bytes(), initial_allocated + 200);
+  // Chunk memory unchanged (chunks not freed)
+  EXPECT_EQ(arena->get_total_allocated(), chunk_memory_before_deallocate);
+
+  // Used memory decreased by deallocated block
+  EXPECT_EQ(arena->get_used_bytes(), initial_used + 200);  // 200 remaining
+  EXPECT_EQ(arena->get_freed_bytes(), 96);                 // 96 freed
 
   double frag_ratio = arena->get_fragmentation_ratio();
   EXPECT_GT(frag_ratio, 0);
   EXPECT_LT(frag_ratio, 1);
+
+  // Now allocate enough to trigger a second chunk (1024 - 296 - headers ≈ 700
+  // bytes available)
+  void* ptr3 = arena->allocate(800);  // This should trigger a new chunk
+  EXPECT_GT(arena->get_total_allocated(),
+            initial_chunk_memory);  // Now 2048 > 1024
+  EXPECT_EQ(arena->get_total_allocated(),
+            initial_chunk_memory * 2);  // Should be exactly 2 chunks
 }
 
 TEST_F(FreeListArenaTest, Clear) {
@@ -544,7 +570,7 @@ TEST_F(FreeListArenaTest, Reset) {
   // Verify initial state - should have allocated memory
   EXPECT_GT(arena->get_total_allocated(), 0);
   EXPECT_EQ(arena->get_freed_bytes(), 0);
-  EXPECT_GT(arena->get_live_bytes(), 0);
+  EXPECT_GT(arena->get_used_bytes(), 0);
   EXPECT_EQ(arena->get_free_block_count(), 0);
 
   // Deallocate some blocks to create free blocks
@@ -561,9 +587,9 @@ TEST_F(FreeListArenaTest, Reset) {
   arena->reset();
 
   // Verify everything is reset
-  EXPECT_EQ(arena->get_total_allocated(), 0);
+  EXPECT_EQ(arena->get_total_allocated(), 1024);
   EXPECT_EQ(arena->get_freed_bytes(), 0);
-  EXPECT_EQ(arena->get_live_bytes(), 0);
+  EXPECT_EQ(arena->get_used_bytes(), 0);
   EXPECT_EQ(arena->get_free_block_count(), 0);
 
   // Verify we had something to reset
@@ -586,7 +612,7 @@ TEST_F(FreeListArenaTest, Reset) {
   // Statistics should reflect new allocations
   EXPECT_GT(arena->get_total_allocated(), 0);
   EXPECT_EQ(arena->get_freed_bytes(), 0);
-  EXPECT_GT(arena->get_live_bytes(), 0);
+  EXPECT_GT(arena->get_used_bytes(), 0);
 }
 
 int main(int argc, char** argv) {

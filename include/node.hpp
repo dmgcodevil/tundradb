@@ -7,10 +7,13 @@
 #include <unordered_map>
 #include <vector>
 
+#include "node_arena.hpp"
 #include "schema.hpp"
 #include "types.hpp"
 
 namespace tundradb {
+
+constexpr bool USE_NODE_ARENA = true;
 
 enum UpdateType {
   SET,
@@ -20,24 +23,52 @@ enum UpdateType {
 class Node {
  private:
   std::unordered_map<std::string, Value> data_;
+  std::unique_ptr<NodeHandle> handle_;
+  std::shared_ptr<NodeArena> arena_;
+  std::shared_ptr<Schema> schema_;
+  std::shared_ptr<SchemaLayout> layout_;
 
  public:
   int64_t id;
   std::string schema_name;
 
   explicit Node(const int64_t id, std::string schema_name,
-                std::unordered_map<std::string, Value> initial_data)
+                std::unordered_map<std::string, Value> initial_data,
+                std::unique_ptr<NodeHandle> handle = nullptr,
+                std::shared_ptr<NodeArena> arena = nullptr,
+                std::shared_ptr<Schema> schema = nullptr,
+                std::shared_ptr<SchemaLayout> layout = nullptr)
       : data_(std::move(initial_data)),
+        handle_(std::move(handle)),
+        arena_(std::move(arena)),
+        schema_(std::move(schema)),
+        layout_(std::move(layout)),
         id(id),
         schema_name(std::move(schema_name)) {}
 
-  ~Node() { data_.clear(); }
+  ~Node() {
+    if (!USE_NODE_ARENA) {
+      data_.clear();
+    }
+    // TODO slow
+    // if (USE_NODE_ARENA && arena_ && handle_) {
+    //   arena_->deallocate_node(*handle_);
+    // }
+  }
 
   void add_field(const std::string &field_name, Value value) {
     data_[field_name] = std::move(value);
   }
 
-  arrow::Result<Value> get_field(const std::string &field_name) const {
+  arrow::Result<Value> get_value(const std::string &field_name) const {
+    if (USE_NODE_ARENA) {
+      if (schema_->get_field(field_name) == nullptr) {
+        // Logger::get_instance().debug("Field not found");
+        return arrow::Status::KeyError("Field not found: ", field_name);
+      }
+      return arena_->get_field_value(*handle_, layout_, field_name);
+    }
+
     const auto it = data_.find(field_name);
     if (it == data_.end()) {
       return arrow::Status::KeyError("Field not found: ", field_name);
@@ -45,12 +76,21 @@ class Node {
     return it->second;
   }
 
-  [[nodiscard]] const std::unordered_map<std::string, Value> &data() const {
-    return data_;
-  }
+  [[nodiscard]] std::shared_ptr<Schema> get_schema() const { return schema_; }
 
   arrow::Result<bool> update(const std::string &field_name, Value value,
                              UpdateType update_type) {
+    if (USE_NODE_ARENA) {
+      if (schema_->get_field(field_name) == nullptr) {
+        // Logger::get_instance().debug("Field not found");
+        return arrow::Status::KeyError("Field not found: ", field_name);
+      }
+
+      arena_->set_field_value(*handle_, schema_name, field_name, value);
+      // Logger::get_instance().debug("set value is done");
+      return true;
+    }
+
     if (const auto it = data_.find(field_name); it == data_.end()) {
       return arrow::Status::KeyError("Field not found: ", field_name);
     }
@@ -72,16 +112,16 @@ class Node {
 
 class NodeManager {
  public:
-  NodeManager() = default;
+  explicit NodeManager(std::shared_ptr<SchemaRegistry> schema_registry) {
+    schema_registry_ = std::move(schema_registry);
+    layout_registry_ = std::make_shared<LayoutRegistry>();
+    node_arena_ = node_arena_factory::create_free_list_arena(layout_registry_);
+  }
+
+  ~NodeManager() { node_arena_->clear(); }
 
   arrow::Result<std::shared_ptr<Node>> get_node(const int64_t id) {
     return nodes[id];
-  }
-
-  bool add_node(std::shared_ptr<Node> node) {
-    // todo check if node exists
-    nodes[node->id] = node;
-    return true;
   }
 
   bool remove_node(const int64_t id) { return nodes.erase(id) > 0; }
@@ -89,42 +129,94 @@ class NodeManager {
   arrow::Result<std::shared_ptr<Node>> create_node(
       const std::string &schema_name,
       const std::unordered_map<std::string, Value> &data,
-      const std::shared_ptr<SchemaRegistry> &schema_registry) {
+      const bool add = false) {
     if (schema_name.empty()) {
       return arrow::Status::Invalid("Schema name cannot be empty");
     }
 
-    ARROW_ASSIGN_OR_RAISE(const auto schema, schema_registry->get(schema_name));
-    if (data.contains("id")) {
+    init_schema(schema_name);
+
+    // ARROW_ASSIGN_OR_RAISE(const auto schema,
+    //                       schema_registry_->get(schema_name));
+    if (!add && data.contains("id")) {
       return arrow::Status::Invalid("'id' column is auto generated");
     }
 
-    std::unordered_map<std::string, Value> normalized_data;
-    for (const auto &field : schema->fields()) {
+    if (add && !data.contains("id")) {
+      return arrow::Status::Invalid("'id' is missing");
+    }
+
+    for (const auto &field : schema_->fields()) {
+      // check required
       if (field->name() != "id" && !field->nullable() &&
           (!data.contains(field->name()) ||
            data.find(field->name())->second.is_null())) {
         return arrow::Status::Invalid("Field '", field->name(),
                                       "' is required");
       }
-      if (!data.contains(field->name())) {
-        normalized_data[field->name()] = Value();
-      } else {
+
+      if (data.contains(field->name())) {
         const auto value = data.find(field->name())->second;
-        if (arrow_type_to_value_type(field->type()) != value.type()) {
+        if (field->type() != value.type()) {
           return arrow::Status::Invalid(
               "Type mismatch for field '", field->name(), "'. Expected ",
-              field->type()->ToString(), " but got ", to_string(value.type()));
+              to_string(field->type()), " but got ", to_string(value.type()));
         }
-        normalized_data[field->name()] = value;
       }
     }
+    int64_t id = 0;
+    if (!add) {
+      id = id_counter.fetch_add(1);
+    } else {
+      id = data.at("id").as_int64();
+    }
 
-    auto id = id_counter.fetch_add(1);
-    normalized_data["id"] = Value{id};
-    auto node = std::make_shared<Node>(id, schema_name, normalized_data);
-    nodes[id] = node;
-    return node;
+    if (USE_NODE_ARENA) {
+      NodeHandle node_handle = node_arena_->allocate_node(schema_name);
+      // Logger::get_instance().debug("node has been allocated at {}",
+      //                              node_handle.ptr);
+      node_arena_->set_field_value(node_handle, layout_, "id", Value{id});
+      for (const auto &field : schema_->fields()) {
+        if (field->name() == "id") continue;
+        if (!data.contains(field->name())) {
+          // Logger::get_instance().debug("{} set NA value", field->name());
+          node_arena_->set_field_value(node_handle, layout_, field->name(),
+                                       Value());
+        } else {
+          const auto value = data.find(field->name())->second;
+          node_arena_->set_field_value(node_handle, layout_, field->name(),
+                                       value);
+        }
+      }
+
+      auto node =
+          std::make_shared<Node>(id, schema_name, EMPTY_DATA,
+                                 std::make_unique<NodeHandle>(node_handle),
+                                 node_arena_, schema_, layout_);
+      nodes[id] = node;
+      return node;
+    } else {
+      std::unordered_map<std::string, Value> normalized_data;
+      normalized_data["id"] = Value{id};
+
+      for (const auto &field : schema_->fields()) {
+        if (field->name() == "id") continue;
+        if (!data.contains(field->name())) {
+          normalized_data[field->name()] = Value();
+        } else {
+          const auto value = data.find(field->name())->second;
+          normalized_data[field->name()] = value;
+        }
+      }
+
+      // populate other fields
+
+      auto node = std::make_shared<Node>(id, schema_name, normalized_data,
+                                         std::unique_ptr<NodeHandle>{}, nullptr,
+                                         schema_);
+      nodes[id] = node;
+      return node;
+    }
   }
 
   void set_id_counter(const int64_t value) { id_counter.store(value); }
@@ -133,6 +225,40 @@ class NodeManager {
  private:
   std::atomic<int64_t> id_counter{0};
   std::unordered_map<int64_t, std::shared_ptr<Node>> nodes;
+  std::shared_ptr<SchemaRegistry> schema_registry_;
+  std::shared_ptr<LayoutRegistry> layout_registry_;
+  std::shared_ptr<NodeArena> node_arena_;
+
+  // cache schema
+  std::string schema_name_;
+  std::shared_ptr<Schema> schema_;
+
+  // cache layout
+  std::shared_ptr<SchemaLayout> layout_;
+
+  const std::unordered_map<std::string, Value> EMPTY_DATA{};
+
+  // since node creation is single threaded, we can cache the layout
+  // w/o synchronization
+  std::shared_ptr<SchemaLayout> create_or_get_layout(
+      const std::string &schema_name) const {
+    if (layout_registry_->exists(schema_name)) {
+      return layout_registry_->get_layout(schema_name);
+    }
+    auto layout = layout_registry_->create_layout(
+        schema_registry_->get(schema_name).ValueOrDie());
+    layout_registry_->register_layout(layout);
+    return layout;
+  }
+
+  // since node creation is single threaded, we can cache the schema
+  // w/o synchronization
+  void init_schema(const std::string &schema_name) {
+    if (schema_name_ == schema_name) return;
+    schema_name_ = schema_name;
+    schema_ = schema_registry_->get(schema_name).ValueOrDie();
+    layout_ = create_or_get_layout(schema_name);
+  }
 };
 
 }  // namespace tundradb

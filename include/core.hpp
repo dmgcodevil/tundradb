@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "../libs/json/json.hpp"
+#include "arrow_utils.hpp"
 #include "config.hpp"
 #include "edge_store.hpp"
 #include "file_utils.hpp"
@@ -239,7 +240,7 @@ class Shard {
   arrow::Result<std::shared_ptr<arrow::Table>> get_table() {
     if (dirty_ || !table_) {
       ARROW_ASSIGN_OR_RAISE(const auto schema,
-                            schema_registry_->get(schema_name));
+                            schema_registry_->get_arrow(schema_name));
       std::vector<std::shared_ptr<Node>> result;
       std::ranges::transform(nodes_, std::back_inserter(result),
                              [](const auto &pair) { return pair.second; });
@@ -644,10 +645,16 @@ class Database {
       : schema_registry_(std::make_shared<SchemaRegistry>()),
         shard_manager_(
             std::make_shared<ShardManager>(schema_registry_, config)),
-        node_manager_(std::make_shared<NodeManager>()),
+        node_manager_(std::make_shared<NodeManager>(schema_registry_)),
         config_(config),
         persistence_enabled_(config.is_persistence_enabled()),
         edge_store_(std::make_shared<EdgeStore>(0, config.get_chunk_size())) {
+    // Initialize Arrow Compute module early in database lifecycle
+    if (!initialize_arrow_compute()) {
+      log_error("Failed to initialize Arrow Compute module");
+      // Continue anyway, some operations might still work
+    }
+
     if (persistence_enabled_) {
       const std::string &db_path = config.get_db_path();
       if (db_path.empty()) {
@@ -657,8 +664,8 @@ class Database {
       }
 
       std::string data_path = db_path + "/data";
-      storage_ = std::make_shared<Storage>(std::move(data_path),
-                                           schema_registry_, config);
+      storage_ = std::make_shared<Storage>(
+          std::move(data_path), schema_registry_, node_manager_, config);
       metadata_manager_ = std::make_shared<MetadataManager>(db_path);
       snapshot_manager_ = std::make_shared<SnapshotManager>(
           metadata_manager_, storage_, shard_manager_, edge_store_,
@@ -702,8 +709,8 @@ class Database {
     if (schema_name.empty()) {
       return arrow::Status::Invalid("Schema name cannot be empty");
     }
-    ARROW_ASSIGN_OR_RAISE(auto node, node_manager_->create_node(
-                                         schema_name, data, schema_registry_));
+    ARROW_ASSIGN_OR_RAISE(auto node,
+                          node_manager_->create_node(schema_name, data));
     ARROW_RETURN_NOT_OK(shard_manager_->insert_node(node));
     return node;
   }
@@ -751,7 +758,8 @@ class Database {
 
   arrow::Result<std::shared_ptr<arrow::Table>> get_table(
       const std::string &schema_name, size_t chunk_size = 10000) const {
-    ARROW_ASSIGN_OR_RAISE(auto schema, schema_registry_->get(schema_name));
+    ARROW_ASSIGN_OR_RAISE(auto schema,
+                          schema_registry_->get_arrow(schema_name));
 
     ARROW_ASSIGN_OR_RAISE(auto all_nodes,
                           shard_manager_->get_nodes(schema_name));

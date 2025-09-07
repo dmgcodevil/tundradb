@@ -3,6 +3,8 @@
 #include <arrow/api.h>
 #include <gtest/gtest.h>
 
+#include "arrow_utils.hpp"
+
 namespace tundradb {
 
 class SchemaUtilsTest : public ::testing::Test {

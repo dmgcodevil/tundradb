@@ -21,7 +21,6 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-
     - name: Install dependencies
       run: |
         # Prevent interactive prompts
@@ -55,22 +54,14 @@ jobs:
         sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 13 --slave /usr/bin/g++ g++ /usr/bin/g++-13
 
         # Add Arrow repository and install Arrow
-        wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
-        wget https://apache.jfrog.io/artifactory/arrow/ubuntu/apache-arrow-apt-source-latest-$(lsb_release -cs).deb
-        sudo apt-get update
-        sudo apt-get install -y ./apache-arrow-apt-source-latest-$(lsb_release -cs).deb
-        sudo apt-get update
-        sudo apt-get install -y libarrow-dev libarrow-dataset-dev libparquet-dev
-        rm ./apache-arrow-apt-source-latest-$(lsb_release -cs).deb
-
-        # Install nlohmann-json
-        mkdir -p /tmp/json
-        cd /tmp/json
-        wget https://github.com/nlohmann/json/releases/download/v3.11.2/json.hpp
-        sudo mkdir -p /usr/include/nlohmann
-        sudo cp json.hpp /usr/include/nlohmann/
-        cd /
-        rm -rf /tmp/json
+        sudo apt install -y -V ca-certificates lsb-release wget
+        wget https://packages.apache.org/artifactory/arrow/$(lsb_release --id --short | tr 'A-Z' 'a-z')/apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb
+        sudo apt install -y -V ./apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb
+        sudo apt update
+        sudo apt install -y -V libarrow-dev
+        sudo apt install -y -V libarrow-dataset-dev
+        sudo apt install -y -V libparquet-dev
+        sudo apt install -y -V libarrow-compute-dev
 
         # Install latest CMake
         wget https://github.com/Kitware/CMake/releases/download/v3.30.0/cmake-3.30.0-linux-x86_64.sh -q -O /tmp/cmake-install.sh
@@ -85,16 +76,31 @@ jobs:
         # Install Java for ANTLR
         sudo apt-get install -y openjdk-11-jdk
 
+        # Install spdlog from source (required by the project)
+        cd /tmp
+        git clone https://github.com/gabime/spdlog.git
+        cd spdlog
+        mkdir build
+        cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DSPDLOG_BUILD_SHARED=ON
+        make -j$(nproc)
+        sudo make install
+        cd /
+        rm -rf /tmp/spdlog
+
         # Install ANTLR4 runtime from source
         cd /tmp
         git clone https://github.com/antlr/antlr4.git
         cd antlr4/runtime/Cpp
         mkdir build
         cd build
-        cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local
+        cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DCMAKE_CXX_STANDARD=17
         make -j$(nproc)
         sudo make install
         sudo ldconfig
+        # Ensure headers are in the right place
+        sudo mkdir -p /usr/local/include/antlr4-runtime
+        sudo cp -r /tmp/antlr4/runtime/Cpp/runtime/src/* /usr/local/include/antlr4-runtime/ 2>/dev/null || true
         cd /
         rm -rf /tmp/antlr4
 

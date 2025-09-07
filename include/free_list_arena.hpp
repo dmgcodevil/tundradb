@@ -6,10 +6,12 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <ranges>
 #include <set>
 #include <vector>
 
 #include "logger.hpp"
+#include "mem_arena.hpp"
 #include "mem_utils.hpp"
 
 namespace tundradb {
@@ -34,7 +36,7 @@ struct BlockHeader {
  * - Objects that need individual deallocation
  * - Memory pools where fragmentation is acceptable
  */
-class FreeListArena {
+class FreeListArena : public MemArena {
  public:
   explicit FreeListArena(
       size_t initial_size = 1024 * 1024,  // 1MB default
@@ -45,7 +47,7 @@ class FreeListArena {
     allocate_new_chunk(chunk_size_);
   }
 
-  ~FreeListArena() { clear(); }
+  ~FreeListArena() override { clear(); }
 
   // Non-copyable but movable
   FreeListArena(const FreeListArena&) = delete;
@@ -59,7 +61,7 @@ class FreeListArena {
    * @param alignment Memory alignment requirement (default: 8 bytes)
    * @return Pointer to allocated memory, or nullptr if allocation fails
    */
-  void* allocate(size_t size, size_t alignment = 8) {
+  void* allocate(size_t size, size_t alignment = 8) override {
     size = align_up(size, alignment);
 
     // Try to find a suitable free block first
@@ -76,7 +78,7 @@ class FreeListArena {
    * Deallocate a block and add it to the free list
    * @param ptr Pointer returned by allocate()
    */
-  void deallocate(void* ptr) {
+  void deallocate(void* ptr) override {
     if (!ptr) return;
 
     // Get the block header
@@ -84,8 +86,8 @@ class FreeListArena {
 
     assert(!header->is_free && "Double free detected");
 
-    log_debug("DEALLOCATE: ptr={}, header={}, size={}", ptr,
-              static_cast<void*>(header), header->size);
+    // log_debug("DEALLOCATE: ptr={}, header={}, size={}", ptr,
+    //           static_cast<void*>(header), header->size);
 
     // Mark as free (coalesce_blocks will handle adding to free list)
     header->is_free = true;
@@ -93,15 +95,17 @@ class FreeListArena {
     // Try to coalesce with adjacent blocks
     coalesce_blocks(ptr);
 
-    freed_bytes_ += header->size;
+    freed_bytes_ += header->size;  // For fragmentation ratio calculation
+    total_used_ -= header->size;   // Decrement live memory usage
 
-    log_debug("DEALLOCATE DONE: free_block_count={}", get_free_block_count());
+    // log_debug("DEALLOCATE DONE: free_block_count={}",
+    // get_free_block_count());
   }
 
   /**
    * Reset the arena - clears all allocations and free lists
    */
-  void reset() {
+  void reset() override {
     // Clear free lists
     free_blocks_by_size_.clear();
 
@@ -118,14 +122,16 @@ class FreeListArena {
     }
 
     // Reset statistics
-    total_allocated_ = 0;
+    total_used_ = 0;  // Reset individual block usage (can be reused)
     freed_bytes_ = 0;
+    // NOTE: total_allocated_ (chunk memory) is NOT reset - chunks are still
+    // allocated
   }
 
   /**
    * Clear all allocated memory
    */
-  void clear() {
+  void clear() override {
     chunks_.clear();
     chunk_sizes_.clear();
     chunk_allocated_sizes_.clear();
@@ -133,18 +139,42 @@ class FreeListArena {
     current_chunk_ = nullptr;
     current_chunk_size_ = 0;
     current_offset_ = 0;
-    total_allocated_ = 0;
+    total_allocated_ = 0;  // Reset chunk memory (chunks are freed)
+    total_used_ = 0;       // Reset individual block usage
     freed_bytes_ = 0;
   }
 
+  /**
+   * STATISTICS DOCUMENTATION:
+   *
+   * total_allocated_: Total chunk memory allocated (never decreases except
+   * clear()) total_used_:      Sum of sizes of individual used blocks
+   * (decreases on deallocate) freed_bytes_:     Cumulative bytes freed (for
+   * fragmentation ratio calculation) used_bytes:       Currently used memory
+   * (same as total_used_)
+   *
+   * Example flow:
+   * allocate(100) → total_allocated=1024, used_bytes=100, freed_bytes=0
+   * allocate(200) → total_allocated=1024, used_bytes=300, freed_bytes=0
+   * deallocate(100) → total_allocated=1024, used_bytes=200, freed_bytes=100
+   * reset() → total_allocated=1024, used_bytes=0, freed_bytes=0 (chunks kept)
+   * clear() → total_allocated=0, used_bytes=0, freed_bytes=0 (chunks freed)
+   */
+
   // Statistics
-  size_t get_total_allocated() const { return total_allocated_; }
-  size_t get_freed_bytes() const { return freed_bytes_; }
-  size_t get_live_bytes() const { return total_allocated_ - freed_bytes_; }
-  size_t get_chunk_count() const { return chunks_.size(); }
+  size_t get_total_allocated() const override {
+    return total_allocated_;
+  }  // Total chunk memory
+  size_t get_freed_bytes() const {
+    return freed_bytes_;
+  }  // Cumulative deallocations (for fragmentation)
+  size_t get_used_bytes() const {
+    return total_used_;
+  }  // Currently used memory
+  size_t get_chunk_count() const override { return chunks_.size(); }
   size_t get_free_block_count() const {
     size_t count = 0;
-    for (const auto& [size, blocks] : free_blocks_by_size_) {
+    for (const auto& blocks : free_blocks_by_size_ | std::views::values) {
       count += blocks.size();
     }
     return count;
@@ -215,8 +245,12 @@ class FreeListArena {
   std::map<size_t, std::set<BlockHeader*>> free_blocks_by_size_;
 
   // Statistics
-  size_t total_allocated_ = 0;
-  size_t freed_bytes_ = 0;
+  size_t total_allocated_ =
+      0;  // Total chunk memory allocated (never decreases except clear())
+  size_t total_used_ =
+      0;  // Sum of sizes of individual live blocks (decreases on deallocate)
+  size_t freed_bytes_ =
+      0;  // Cumulative bytes freed (for fragmentation ratio calculation)
 
   void allocate_new_chunk(size_t size) {
     auto new_chunk = std::make_unique<char[]>(size);
@@ -226,6 +260,9 @@ class FreeListArena {
     chunk_sizes_.push_back(size);
     chunk_allocated_sizes_.push_back(0);  // Start with 0 allocated
     current_offset_ = 0;
+
+    // Track total chunk memory allocated (persists across reset)
+    total_allocated_ += size;
   }
 
   // Find which chunk contains this pointer
@@ -310,14 +347,15 @@ class FreeListArena {
     header->is_free = false;
 
     char* data_ptr = current_chunk_ + data_aligned_offset;
-    log_debug(
-        "ALLOCATE_NEW: data_ptr={}, header={}, size={}, total_size={}, "
-        "offset={}",
-        data_ptr, static_cast<void*>(header), aligned_size, total_size,
-        current_offset_);
+    // log_debug(
+    //     "ALLOCATE_NEW: data_ptr={}, header={}, size={}, total_size={}, "
+    //     "offset={}",
+    //     data_ptr, static_cast<void*>(header), aligned_size, total_size,
+    //     current_offset_);
 
     current_offset_ = data_aligned_offset + aligned_size;
-    total_allocated_ += aligned_size;
+    // Track individual block allocation (live memory usage)
+    total_used_ += aligned_size;
 
     // Update allocated size for current chunk
     chunk_allocated_sizes_.back() = current_offset_;
@@ -373,8 +411,8 @@ class FreeListArena {
 
   void add_to_free_list(void* ptr, size_t size) {
     BlockHeader* header = get_block_header(ptr);
-    log_debug("ADD_TO_FREE_LIST: ptr={}, header={}, size={}", ptr,
-              static_cast<void*>(header), size);
+    // log_debug("ADD_TO_FREE_LIST: ptr={}, header={}, size={}", ptr,
+    //           static_cast<void*>(header), size);
     free_blocks_by_size_[size].insert(header);
   }
 
@@ -385,23 +423,23 @@ class FreeListArena {
       if (it->second.empty()) {
         free_blocks_by_size_.erase(it);
       }
-      log_debug("COALESCE: removed block from free list");
+      // log_debug("COALESCE: removed block from free list");
     }
   }
 
-  // Find next block using physical adjacency
+  // Find the next block using physical adjacency
   BlockHeader* find_next_block(BlockHeader* header) {
     // Need byte-level arithmetic (header + header->size would be wrong pointer
     // math)
     char* current_ptr = reinterpret_cast<char*>(header);
     char* next_ptr = current_ptr + BlockHeader::HEADER_SIZE + header->size;
 
-    // Check if next block is within the same chunk
+    // Check if the next block is within the same chunk
     char* chunk_start = find_chunk_start(header);
     if (!chunk_start) {
       // Defensive check - should not happen with valid blocks
-      log_debug("FIND_NEXT: header={}, no chunk found",
-                static_cast<void*>(header));
+      // log_debug("FIND_NEXT: header={}, no chunk found",
+      //           static_cast<void*>(header));
       return nullptr;
     }
 
@@ -416,37 +454,38 @@ class FreeListArena {
     char* chunk_allocated_end =
         chunk_start + chunk_allocated_sizes_[chunk_index];
 
-    log_debug(
-        "FIND_NEXT: header={}, next_ptr={}, chunk_start={}, "
-        "chunk_allocated_end={}",
-        static_cast<void*>(header), next_ptr, chunk_start, chunk_allocated_end);
+    // log_debug(
+    //     "FIND_NEXT: header={}, next_ptr={}, chunk_start={}, "
+    //     "chunk_allocated_end={}",
+    //     static_cast<void*>(header), next_ptr, chunk_start,
+    //     chunk_allocated_end);
 
     // Check if next block would be within allocated portion of chunk
     // Must ensure entire header fits (not just start position)
     if (next_ptr + BlockHeader::HEADER_SIZE <= chunk_allocated_end) {
       BlockHeader* next_header = reinterpret_cast<BlockHeader*>(next_ptr);
       // Using physical traversal - don't rely on header.next pointer
-      log_debug("FIND_NEXT: found next block={}, size={}, is_free={}",
-                static_cast<void*>(next_header), next_header->size,
-                next_header->is_free);
+      // log_debug("FIND_NEXT: found next block={}, size={}, is_free={}",
+      //           static_cast<void*>(next_header), next_header->size,
+      //           next_header->is_free);
       return next_header;
     }
 
-    log_debug("FIND_NEXT: next block would be outside allocated portion");
+    // log_debug("FIND_NEXT: next block would be outside allocated portion");
     return nullptr;  // Next block would be outside allocated portion
   }
 
   void coalesce_blocks(void* ptr) {
     BlockHeader* header = get_block_header(ptr);
 
-    log_debug("COALESCE START: ptr={}, header={}, size={}", ptr,
-              static_cast<void*>(header), header->size);
+    // log_debug("COALESCE START: ptr={}, header={}, size={}", ptr,
+    //           static_cast<void*>(header), header->size);
 
     // Coalesce with next block (forward coalescing)
     BlockHeader* next = find_next_block(header);
     if (next && next->is_free) {
-      log_debug("COALESCE: merging with NEXT block={}, size={}",
-                static_cast<void*>(next), next->size);
+      // log_debug("COALESCE: merging with NEXT block={}, size={}",
+      //           static_cast<void*>(next), next->size);
 
       // Remove next block from free list
       remove_block_from_free_list(next);
@@ -454,18 +493,19 @@ class FreeListArena {
       // Merge blocks
       size_t old_size = header->size;
       header->size += BlockHeader::HEADER_SIZE + next->size;
-      log_debug("COALESCE: merged forward - old_size={}, new_size={}", old_size,
-                header->size);
+      // log_debug("COALESCE: merged forward - old_size={}, new_size={}",
+      // old_size,
+      //           header->size);
     } else {
-      log_debug("COALESCE: no next block to merge (next={}, is_free={})",
-                static_cast<void*>(next), next ? next->is_free : false);
+      // log_debug("COALESCE: no next block to merge (next={}, is_free={})",
+      //           static_cast<void*>(next), next ? next->is_free : false);
     }
 
     // Coalesce with previous block (backward coalescing)
     BlockHeader* prev = find_prev_block(header);
     if (prev && prev->is_free) {
-      log_debug("COALESCE: merging with PREV block={}, size={}",
-                static_cast<void*>(prev), prev->size);
+      // log_debug("COALESCE: merging with PREV block={}, size={}",
+      //           static_cast<void*>(prev), prev->size);
 
       // Remove prev block from free list
       remove_block_from_free_list(prev);
@@ -473,19 +513,20 @@ class FreeListArena {
       // Merge blocks
       size_t old_size = prev->size;
       prev->size += BlockHeader::HEADER_SIZE + header->size;
-      log_debug("COALESCE: merged backward - old_size={}, new_size={}",
-                old_size, prev->size);
+      // log_debug("COALESCE: merged backward - old_size={}, new_size={}",
+      //           old_size, prev->size);
 
       // Update header to point to merged block
       header = prev;
     } else {
-      log_debug("COALESCE: no prev block to merge (prev={}, is_free={})",
-                static_cast<void*>(prev), prev ? prev->is_free : false);
+      // log_debug("COALESCE: no prev block to merge (prev={}, is_free={})",
+      //           static_cast<void*>(prev), prev ? prev->is_free : false);
     }
 
     // Add the coalesced block back to free list
-    log_debug("COALESCE: adding final block to free list: header={}, size={}",
-              static_cast<void*>(header), header->size);
+    // log_debug("COALESCE: adding final block to free list: header={},
+    // size={}",
+    //           static_cast<void*>(header), header->size);
     add_to_free_list(reinterpret_cast<char*>(header) + BlockHeader::HEADER_SIZE,
                      header->size);
   }

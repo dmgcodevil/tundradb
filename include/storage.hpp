@@ -22,10 +22,12 @@ class Storage {
   std::string metadata_dir_;
   std::string data_dir_;
   DatabaseConfig config_;
+  std::shared_ptr<NodeManager> node_manager_;
 
  public:
   explicit Storage(std::string data_dir,
                    std::shared_ptr<SchemaRegistry> schema_registry,
+                   std::shared_ptr<NodeManager> node_manager_,
                    DatabaseConfig config = DatabaseConfig());
 
   arrow::Result<bool> initialize();
