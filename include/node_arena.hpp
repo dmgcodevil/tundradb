@@ -125,23 +125,6 @@ class NodeArena {
     mem_arena_->deallocate(handle.ptr);
   }
 
-  [[deprecated]]
-  Value get_field_value(const NodeHandle& handle,
-                        const std::string& schema_name,
-                        const std::string& field_name) const {
-    if (layout_registry_ == nullptr) {
-      // Logger::get_instance().error("null layout registry");
-      return Value{};  // null value for invalid handle
-    }
-    const std::shared_ptr<SchemaLayout> layout =
-        layout_registry_->get_layout(schema_name);
-    if (!layout) {
-      // Logger::get_instance().error("null value for unknown schema");
-      return Value{};  // null value for unknown schema
-    }
-    return get_field_value(handle, layout, field_name);
-  }
-
   /**
    * Get field value from a node using its handle
    */
@@ -157,17 +140,6 @@ class NodeArena {
 
     return layout->get_field_value(static_cast<const char*>(handle.ptr),
                                    field_name);
-  }
-
-  [[deprecated]]
-  bool set_field_value(const NodeHandle& handle, const std::string& schema_name,
-                       const std::string& field_name, const Value& value) {
-    std::shared_ptr<SchemaLayout> layout =
-        layout_registry_->get_layout(schema_name);
-    if (!layout) {
-      return false;  // unknown schema
-    }
-    return set_field_value(handle, layout, field_name, value);
   }
 
   /**

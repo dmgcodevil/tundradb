@@ -86,7 +86,7 @@ class Node {
         return arrow::Status::KeyError("Field not found: ", field_name);
       }
 
-      arena_->set_field_value(*handle_, schema_name, field_name, value);
+      arena_->set_field_value(*handle_, layout_, field_name, value);
       // Logger::get_instance().debug("set value is done");
       return true;
     }
