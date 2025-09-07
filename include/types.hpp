@@ -23,7 +23,7 @@ struct StringRef {
   uint32_t arena_id;  // Which string arena contains this string
 
   StringRef() : data(nullptr), length(0), arena_id(0) {}
-  StringRef(const char* ptr, uint32_t len, uint32_t id = 0)
+  StringRef(const char* ptr, const uint32_t len, const uint32_t id = 0)
       : data(ptr), length(len), arena_id(id) {}
 
   bool is_null() const { return length == 0 || data == nullptr; }
@@ -56,7 +56,7 @@ enum class ValueType {
 /**
  * Get the maximum size for fixed-size string types
  */
-inline size_t get_string_max_size(ValueType type) {
+inline size_t get_string_max_size(const ValueType type) {
   switch (type) {
     case ValueType::FIXED_STRING16:
       return 16;
@@ -74,12 +74,12 @@ inline size_t get_string_max_size(ValueType type) {
 /**
  * Check if a ValueType is a string type
  */
-inline bool is_string_type(ValueType type) {
+inline bool is_string_type(const ValueType type) {
   return type == ValueType::STRING || type == ValueType::FIXED_STRING16 ||
          type == ValueType::FIXED_STRING32 || type == ValueType::FIXED_STRING64;
 }
 
-static size_t get_type_size(ValueType type) {
+static size_t get_type_size(const ValueType type) {
   if (is_string_type(type)) {
     // ALL string types stored as StringRef in node layout
     return sizeof(StringRef);  // 12 bytes on 64-bit systems
@@ -98,7 +98,7 @@ static size_t get_type_size(ValueType type) {
   }
 }
 
-static size_t get_type_alignment(ValueType type) {
+static size_t get_type_alignment(const ValueType type) {
   if (is_string_type(type)) {
     // ALL string types stored as StringRef in node layout
     return alignof(StringRef);  // Usually 8 bytes (pointer alignment)
@@ -117,7 +117,7 @@ static size_t get_type_alignment(ValueType type) {
   }
 }
 
-inline std::string to_string(ValueType type) {
+inline std::string to_string(const ValueType type) {
   switch (type) {
     case ValueType::NA:
       return "Null";
@@ -155,7 +155,8 @@ class Value {
         data_(v) {}  // Store as StringRef for all string types
 
   // Constructor for creating StringRef value with specific string type
-  Value(StringRef v, ValueType string_type) : type_(string_type), data_(v) {
+  Value(StringRef v, const ValueType string_type)
+      : type_(string_type), data_(v) {
     // Ensure it's actually a string type
     assert(is_string_type(string_type));
   }
@@ -214,12 +215,11 @@ class Value {
         return std::to_string(as_int64());
       case ValueType::DOUBLE:
         return std::to_string(as_double());
-      case ValueType::STRING:
-        return as_string();
       case ValueType::FIXED_STRING16:
       case ValueType::FIXED_STRING32:
       case ValueType::FIXED_STRING64:
-        return as_string_ref().to_string();  // No quotes
+      case ValueType::STRING:
+        return as_string();
       case ValueType::BOOL:
         return as_bool() ? "true" : "false";
       default:
@@ -245,7 +245,7 @@ class Value {
 };
 
 // Stream operator for ValueType
-inline std::ostream& operator<<(std::ostream& os, ValueType type) {
+inline std::ostream& operator<<(std::ostream& os, const ValueType type) {
   return os << to_string(type);
 }
 
@@ -287,7 +287,7 @@ static ValueType arrow_type_to_value_type(
 }
 
 static std::shared_ptr<arrow::DataType> value_type_to_arrow_type(
-    ValueType type) {
+    const ValueType type) {
   switch (type) {
     case ValueType::NA:
       return arrow::null();

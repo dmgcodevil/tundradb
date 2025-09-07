@@ -28,7 +28,7 @@ arrow::Result<bool> SnapshotManager::initialize() {
           log_error("Failed to load schema: " +
                     arrow_schema_result.status().ToString());
         }
-        auto arrow_shema = arrow_schema_result.ValueOrDie();
+        const auto &arrow_shema = arrow_schema_result.ValueOrDie();
         auto add_schema_result =
             schema_registry_->add_arrow(schema_metadata.name, arrow_shema);
         if (!add_schema_result.ok()) {

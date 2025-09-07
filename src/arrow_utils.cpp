@@ -12,23 +12,23 @@ bool initialize_arrow_compute() {
   if (!initialized) {
     try {
       // Initialize Arrow core
-      arrow::GlobalOptions options;
-      auto init_status = arrow::Initialize(options);
-      if (!init_status.ok()) {
+      const arrow::GlobalOptions options;
+      if (const auto init_status = arrow::Initialize(options);
+          !init_status.ok()) {
         log_error("Failed to initialize Arrow: {}", init_status.ToString());
         return false;
       }
 
       // Initialize Arrow Compute module (required for Arrow 21.0.0+)
       // This registers all compute functions including string operations
-      auto compute_init_status = arrow::compute::Initialize();
-      if (!compute_init_status.ok()) {
+      if (const auto compute_init_status = arrow::compute::Initialize();
+          !compute_init_status.ok()) {
         log_error("Failed to initialize Arrow Compute: {}",
                   compute_init_status.ToString());
         return false;
       }
 
-      auto registry = arrow::compute::GetFunctionRegistry();
+      const auto registry = arrow::compute::GetFunctionRegistry();
       if (!registry) {
         log_error("Failed to get Arrow Compute function registry");
         return false;
@@ -39,22 +39,18 @@ bool initialize_arrow_compute() {
                function_names.size());
 
       // Check for essential functions
-      bool has_equal = std::find(function_names.begin(), function_names.end(),
-                                 "equal") != function_names.end();
-      bool has_string_funcs =
-          std::find(function_names.begin(), function_names.end(),
-                    "starts_with") != function_names.end();
+      const bool has_equal =
+          std::ranges::find(function_names, "equal") != function_names.end();
+      const bool has_string_funcs =
+          std::ranges::find(function_names, "starts_with") !=
+          function_names.end();
 
-      if (has_equal) {
-        log_info(
-            "Arrow Compute comparison functions available - using native "
-            "implementation");
-      } else {
+      if (!has_equal) {
         log_warn("Arrow Compute comparison functions not found");
       }
 
-      if (has_string_funcs) {
-        log_info("Arrow Compute string functions available");
+      if (!has_string_funcs) {
+        log_warn("Arrow Compute string functions not found");
       }
 
       initialized = true;

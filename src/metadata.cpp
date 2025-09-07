@@ -15,7 +15,7 @@ namespace tundradb {
 MetadataManager::MetadataManager(const std::string &metadata_dir_path)
     : metadata_dir(metadata_dir_path) {}
 
-arrow::Result<bool> MetadataManager::initialize() {
+arrow::Result<bool> MetadataManager::initialize() const {
   log_info("Initializing MetadataManager with directory: " + metadata_dir);
 
   try {
@@ -55,7 +55,7 @@ arrow::Result<bool> MetadataManager::initialize() {
 }
 
 arrow::Result<std::string> MetadataManager::write_manifest(
-    const Manifest &manifest) {
+    const Manifest &manifest) const {
   log_info("Writing manifest: " + manifest.id);
   try {
     std::string manifest_path =
@@ -71,7 +71,8 @@ arrow::Result<std::string> MetadataManager::write_manifest(
   }
 }
 
-arrow::Result<Manifest> MetadataManager::read_manifest(const std::string &id) {
+arrow::Result<Manifest> MetadataManager::read_manifest(
+    const std::string &id) const {
   log_info("Reading manifest: " + id);
   try {
     const std::string manifest_path =
@@ -89,7 +90,7 @@ arrow::Result<Manifest> MetadataManager::read_manifest(const std::string &id) {
 }
 
 arrow::Result<std::string> MetadataManager::write_metadata(
-    const Metadata &metadata) {
+    const Metadata &metadata) const {
   log_info("Writing metadata");
   try {
     const std::string metadata_id = std::to_string(now_millis());
@@ -109,7 +110,7 @@ arrow::Result<std::string> MetadataManager::write_metadata(
 }
 
 arrow::Result<Metadata> MetadataManager::read_metadata(
-    const std::string &path) {
+    const std::string &path) const {
   log_info("Reading metadata from: " + path);
   try {
     if (const std::ifstream file(path); !file.is_open()) {
@@ -123,7 +124,7 @@ arrow::Result<Metadata> MetadataManager::read_metadata(
 }
 
 arrow::Result<std::string> MetadataManager::write_db_info(
-    const DatabaseInfo &db_info) {
+    const DatabaseInfo &db_info) const {
   log_info("Writing database info");
   try {
     std::string db_info_path = metadata_dir + "/db_info.json";
@@ -138,7 +139,7 @@ arrow::Result<std::string> MetadataManager::write_db_info(
   }
 }
 
-arrow::Result<DatabaseInfo> MetadataManager::read_db_info() {
+arrow::Result<DatabaseInfo> MetadataManager::read_db_info() const {
   log_info("Reading database info");
   try {
     const std::string db_info_path = metadata_dir + "/db_info.json";
@@ -160,7 +161,7 @@ arrow::Result<DatabaseInfo> MetadataManager::read_db_info() {
   }
 }
 
-arrow::Result<Metadata> MetadataManager::load_current_metadata() {
+arrow::Result<Metadata> MetadataManager::load_current_metadata() const {
   log_info("Loading current metadata");
   try {
     auto db_info_result = read_db_info();

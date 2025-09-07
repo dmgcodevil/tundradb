@@ -42,8 +42,8 @@ template <typename T>
 arrow::Result<bool> write_json_file(const T& object,
                                     const std::string& file_path) {
   try {
-    std::filesystem::path path(file_path);
-    if (!path.parent_path().empty()) {
+    if (const std::filesystem::path path(file_path);
+        !path.parent_path().empty()) {
       std::error_code ec;
       std::filesystem::create_directories(path.parent_path(), ec);
       if (ec) {

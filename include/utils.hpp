@@ -48,90 +48,6 @@ static int64_t now_millis() {
       .count();
 }
 
-/*
-static arrow::Result<Value> arrow_scalar_to_value(const
-std::shared_ptr<arrow::Scalar>& scalar) { if (!scalar->is_valid) { return
-Value();  // Null value
-  }
-
-  switch (scalar->type->id()) {
-    case arrow::Type::INT64: {
-      auto typed_scalar = std::static_pointer_cast<arrow::Int64Scalar>(scalar);
-      return Value(typed_scalar->value);
-    }
-    case arrow::Type::INT32: {
-      auto typed_scalar = std::static_pointer_cast<arrow::Int32Scalar>(scalar);
-      return Value(static_cast<int64_t>(typed_scalar->value));
-    }
-    case arrow::Type::INT16: {
-      auto typed_scalar = std::static_pointer_cast<arrow::Int16Scalar>(scalar);
-      return Value(static_cast<int64_t>(typed_scalar->value));
-    }
-    case arrow::Type::INT8: {
-      auto typed_scalar = std::static_pointer_cast<arrow::Int8Scalar>(scalar);
-      return Value(static_cast<int64_t>(typed_scalar->value));
-    }
-    case arrow::Type::UINT64: {
-      auto typed_scalar = std::static_pointer_cast<arrow::UInt64Scalar>(scalar);
-      return Value(static_cast<int64_t>(typed_scalar->value));
-    }
-    case arrow::Type::UINT32: {
-      auto typed_scalar = std::static_pointer_cast<arrow::UInt32Scalar>(scalar);
-      return Value(static_cast<int64_t>(typed_scalar->value));
-    }
-    case arrow::Type::UINT16: {
-      auto typed_scalar = std::static_pointer_cast<arrow::UInt16Scalar>(scalar);
-      return Value(static_cast<int64_t>(typed_scalar->value));
-    }
-    case arrow::Type::UINT8: {
-      auto typed_scalar = std::static_pointer_cast<arrow::UInt8Scalar>(scalar);
-      return Value(static_cast<int64_t>(typed_scalar->value));
-    }
-    case arrow::Type::DOUBLE: {
-      auto typed_scalar = std::static_pointer_cast<arrow::DoubleScalar>(scalar);
-      return Value(typed_scalar->value);
-    }
-    case arrow::Type::FLOAT: {
-      auto typed_scalar = std::static_pointer_cast<arrow::FloatScalar>(scalar);
-      return Value(static_cast<double>(typed_scalar->value));
-    }
-    case arrow::Type::STRING: {
-      auto typed_scalar = std::static_pointer_cast<arrow::StringScalar>(scalar);
-      return Value(typed_scalar->value->ToString());
-    }
-    case arrow::Type::LARGE_STRING: {
-      auto typed_scalar =
-std::static_pointer_cast<arrow::LargeStringScalar>(scalar); return
-Value(typed_scalar->value->ToString());
-    }
-    case arrow::Type::BOOL: {
-      auto typed_scalar =
-std::static_pointer_cast<arrow::BooleanScalar>(scalar); return
-Value(typed_scalar->value);
-    }
-    case arrow::Type::NA:
-      return Value();  // Null value
-    default:
-      return arrow::Status::NotImplemented("Unsupported Arrow type for Value
-conversion: ", scalar->type->ToString());
-  }
-}
-
-static arrow::Result<Value> arrow_array_to_value(const
-std::shared_ptr<arrow::Array>& array, int64_t index = 0) { if (index >=
-array->length()) { return arrow::Status::IndexError("Index out of bounds: ",
-index, " >= ", array->length());
-  }
-
-  if (array->IsNull(index)) {
-    return Value();  // Null value
-  }
-
-  ARROW_ASSIGN_OR_RAISE(auto scalar, array->GetScalar(index));
-  return arrow_scalar_to_value(scalar);
-}
-*/
-
 template <typename SetType>
 static arrow::Result<std::shared_ptr<arrow::Table>> filter_table_by_id(
     const std::shared_ptr<arrow::Table>& table, const SetType& filter_ids) {
@@ -569,21 +485,23 @@ arrow::Result<T> get_first_value_from_array(
       return arrow::Status::Invalid("Expected Int64 array, got: ",
                                     array->type()->ToString());
     }
-    auto typed_array = std::static_pointer_cast<arrow::Int64Array>(array);
+    const auto typed_array = std::static_pointer_cast<arrow::Int64Array>(array);
     return typed_array->Value(0);
   } else if constexpr (std::is_same_v<T, std::string>) {
     if (array->type_id() != arrow::Type::STRING) {
       return arrow::Status::Invalid("Expected String array, got: ",
                                     array->type()->ToString());
     }
-    auto typed_array = std::static_pointer_cast<arrow::StringArray>(array);
+    const auto typed_array =
+        std::static_pointer_cast<arrow::StringArray>(array);
     return typed_array->GetString(0);
   } else if constexpr (std::is_same_v<T, double>) {
     if (array->type_id() != arrow::Type::DOUBLE) {
       return arrow::Status::Invalid("Expected Double array, got: ",
                                     array->type()->ToString());
     }
-    auto typed_array = std::static_pointer_cast<arrow::DoubleArray>(array);
+    const auto typed_array =
+        std::static_pointer_cast<arrow::DoubleArray>(array);
     return typed_array->Value(0);
   } else if constexpr (std::is_same_v<T, bool>) {
     if (array->type_id() != arrow::Type::BOOL) {

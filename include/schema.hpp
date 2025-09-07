@@ -8,7 +8,6 @@
 #include <unordered_map>
 #include <vector>
 
-#include "arrow_utils.hpp"
 #include "logger.hpp"
 #include "types.hpp"
 
@@ -21,7 +20,7 @@ struct Field {
   bool nullable_ = true;
 
  public:
-  Field(std::string name, ValueType type, bool nullable = true)
+  Field(std::string name, const ValueType type, bool nullable = true)
       : name_(std::move(name)), type_(type), nullable_(nullable) {}
 
   [[nodiscard]] const std::string &name() const { return name_; }
@@ -39,7 +38,7 @@ struct Field {
   static arrow::Result<Field> from_arrow(
       const std::shared_ptr<arrow::Field> &field);
 
-  [[nodiscard]] arrow::Result<arrow::Field> to_arrow() const;
+  [[nodiscard]] arrow::Result<std::shared_ptr<arrow::Field>> to_arrow() const;
 };
 
 struct Schema {
@@ -84,7 +83,7 @@ class SchemaRegistry {
   SchemaRegistry() = default;
 
   arrow::Result<bool> create(const std::string &name,
-                             std::shared_ptr<arrow::Schema> schema);
+                             const std::shared_ptr<arrow::Schema> &schema);
 
   arrow::Result<bool> add_arrow(const std::string &name,
                                 std::shared_ptr<arrow::Schema> schema);

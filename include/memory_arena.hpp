@@ -24,7 +24,7 @@ class MemoryArena : public MemArena {
     allocate_new_chunk();
   }
 
-  virtual ~MemoryArena() { clear(); }
+  virtual ~MemoryArena() { MemoryArena::clear(); }
 
   // Non-copyable but movable
   MemoryArena(const MemoryArena&) = delete;  // Copy constructor - DISABLED
