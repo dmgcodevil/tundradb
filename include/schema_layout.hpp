@@ -241,23 +241,9 @@ class SchemaLayout {
     return field_index_.contains(name);
   }
 
-  constexpr size_t get_field_index(const std::string& name) const {
-    if (name == "id") {
-      return 0;
-    }
-    if (name == "name") {
-      return 1;
-    }
-    if (name == "age") {
-      return 2;
-    }
-    return -1;
-  }
-
   const FieldLayout* get_field_layout(const std::string& name) const {
-    // const auto it = field_index_.find(name);
-    // return it != field_index_.end() ? &fields_[it->second] : nullptr;
-    return &fields_[get_field_index(name)];
+    const auto it = field_index_.find(name);
+    return it != field_index_.end() ? &fields_[it->second] : nullptr;
   }
 
   const std::vector<FieldLayout>& get_fields() const { return fields_; }
