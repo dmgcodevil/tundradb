@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "../libs/json/json.hpp"
+#include "arrow_utils.hpp"
 #include "config.hpp"
 #include "edge_store.hpp"
 #include "file_utils.hpp"
@@ -648,6 +649,12 @@ class Database {
         config_(config),
         persistence_enabled_(config.is_persistence_enabled()),
         edge_store_(std::make_shared<EdgeStore>(0, config.get_chunk_size())) {
+    // Initialize Arrow Compute module early in database lifecycle
+    if (!initialize_arrow_compute()) {
+      log_error("Failed to initialize Arrow Compute module");
+      // Continue anyway, some operations might still work
+    }
+
     if (persistence_enabled_) {
       const std::string &db_path = config.get_db_path();
       if (db_path.empty()) {

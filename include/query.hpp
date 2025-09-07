@@ -531,6 +531,13 @@ class LogicalExpr : public Clause, public WhereExpr {
                                          std::move(right));
   }
 
+  // Public accessors
+  [[nodiscard]] const std::shared_ptr<WhereExpr>& left() const { return left_; }
+  [[nodiscard]] const std::shared_ptr<WhereExpr>& right() const {
+    return right_;
+  }
+  [[nodiscard]] LogicalOp op() const { return op_; }
+
   arrow::Result<bool> matches(
       const std::shared_ptr<Node>& node) const override {
     if (!left_ || !right_) {

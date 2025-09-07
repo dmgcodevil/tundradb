@@ -118,9 +118,7 @@ class NodeManager {
     node_arena_ = node_arena_factory::create_free_list_arena(layout_registry_);
   }
 
-  ~NodeManager() {
-    node_arena_->clear();
-  }
+  ~NodeManager() { node_arena_->clear(); }
 
   arrow::Result<std::shared_ptr<Node>> get_node(const int64_t id) {
     return nodes[id];
@@ -191,9 +189,10 @@ class NodeManager {
         }
       }
 
-      auto node = std::make_shared<Node>(
-          id, schema_name, EMPTY_DATA,
-          std::make_unique<NodeHandle>(node_handle), node_arena_, schema_, layout_);
+      auto node =
+          std::make_shared<Node>(id, schema_name, EMPTY_DATA,
+                                 std::make_unique<NodeHandle>(node_handle),
+                                 node_arena_, schema_, layout_);
       nodes[id] = node;
       return node;
     } else {

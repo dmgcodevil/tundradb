@@ -183,6 +183,7 @@ add_library(core
         src/table_info.cpp
         src/utils.cpp
         src/schema.cpp
+        src/arrow_utils.cpp
 )
 
 target_include_directories(core
@@ -204,6 +205,15 @@ target_link_libraries(core
         ${CDS_LIB}
         TBB::tbb
 )
+
+# Add Arrow Compute library for Linux (Arrow 21.0.0+)
+if(TARGET Arrow::arrow_compute_shared)
+    target_link_libraries(core PUBLIC Arrow::arrow_compute_shared)
+    message(STATUS "Linking Arrow Compute library")
+elseif(EXISTS "/usr/lib/x86_64-linux-gnu/libarrow_compute.so")
+    target_link_libraries(core PUBLIC /usr/lib/x86_64-linux-gnu/libarrow_compute.so)
+    message(STATUS "Linking Arrow Compute library (direct path)")
+endif()
 
 # Explicitly link core against UUID
 #target_link_libraries(core
