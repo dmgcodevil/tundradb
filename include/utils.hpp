@@ -28,6 +28,19 @@ static std::string generate_uuid() {
   return uuid_str;
 }
 
+static int64_t generate_unique_snapshot_id() {
+  static std::atomic<int32_t> counter{0};
+  auto now = std::chrono::system_clock::now();
+  int64_t timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             now.time_since_epoch())
+                             .count();
+
+  // Use upper 32 bits for timestamp, lower 32 bits for counter
+  // This gives us ~49 days before timestamp rollover in the upper bits
+  int32_t count = counter.fetch_add(1);
+  return (timestamp_ms << 32) | (count & 0xFFFFFFFF);
+}
+
 static int64_t now_millis() {
   auto now = std::chrono::system_clock::now();
   return std::chrono::duration_cast<std::chrono::milliseconds>(

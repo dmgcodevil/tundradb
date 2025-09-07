@@ -174,7 +174,7 @@ arrow::Result<Snapshot> SnapshotManager::commit() {
   }
 
   Snapshot new_snapshot;
-  new_snapshot.id = timestamp_ms;
+  new_snapshot.id = generate_unique_snapshot_id();  // timestamp_ms;
   new_snapshot.timestamp_ms = timestamp_ms;
 
   if (this->metadata_.get_current_snapshot() != nullptr) {
