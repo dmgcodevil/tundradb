@@ -47,7 +47,7 @@ class FreeListArena : public MemArena {
     allocate_new_chunk(chunk_size_);
   }
 
-  ~FreeListArena() override { clear(); }
+  ~FreeListArena() override { FreeListArena::clear(); }
 
   // Non-copyable but movable
   FreeListArena(const FreeListArena&) = delete;
