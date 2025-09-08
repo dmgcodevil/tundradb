@@ -34,6 +34,8 @@ class DatabaseConfig {
 
   bool persistence_enabled = true;
 
+  bool validation_enabled = true;
+
   friend class DatabaseConfigBuilder;
 
  public:
@@ -48,6 +50,7 @@ class DatabaseConfig {
   }
   std::string get_db_path() const { return db_path; }
   bool is_persistence_enabled() const { return persistence_enabled; }
+  bool is_validation_enabled() const { return validation_enabled; }
 };
 
 class DatabaseConfigBuilder {
@@ -89,6 +92,11 @@ class DatabaseConfigBuilder {
 
   DatabaseConfigBuilder &with_persistence_enabled(const bool enabled) {
     config.persistence_enabled = enabled;
+    return *this;
+  }
+
+  DatabaseConfigBuilder &with_validation_enabled(const bool enabled) {
+    config.validation_enabled = enabled;
     return *this;
   }
 

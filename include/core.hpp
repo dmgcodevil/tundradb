@@ -380,16 +380,18 @@ class ShardManager {
       while (prev->has_space() && !curr->empty()) {
         auto node = curr->poll_first().ValueOrDie();
         prev->extend(node).ValueOrDie();
-        log_debug("node id: " + std::to_string(node->id) +
-                  " moved from shard: " + std::to_string(i) +
-                  " to shard: " + std::to_string(i - 1));
-        log_debug("prev shard id: " + std::to_string(i - 1) +
-                  " min_id=" + std::to_string(prev->min_id) +
-                  " max_id=" + std::to_string(prev->max_id));
+        if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+          log_debug("node id: " + std::to_string(node->id) +
+                    " moved from shard: " + std::to_string(i) +
+                    " to shard: " + std::to_string(i - 1));
+          log_debug("prev shard id: " + std::to_string(i - 1) +
+                    " min_id=" + std::to_string(prev->min_id) +
+                    " max_id=" + std::to_string(prev->max_id));
 
-        log_debug("curr shard id: " + std::to_string(i) +
-                  " min_id=" + std::to_string(curr->min_id) +
-                  " max_id=" + std::to_string(curr->max_id));
+          log_debug("curr shard id: " + std::to_string(i) +
+                    " min_id=" + std::to_string(curr->min_id) +
+                    " max_id=" + std::to_string(curr->max_id));
+        }
       }
     }
 
@@ -424,7 +426,9 @@ class ShardManager {
   }
 
   arrow::Result<bool> insert_node(const std::shared_ptr<Node> &node) {
-    log_debug("inserting node id " + std::to_string(node->id));
+    if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+      log_debug("inserting node id " + std::to_string(node->id));
+    }
     const auto it = shards_.find(node->schema_name);
     if (it == shards_.end()) {
       shards_[node->schema_name] = std::vector<std::shared_ptr<Shard>>();
@@ -443,8 +447,11 @@ class ShardManager {
       if (node->id >= shard->min_id && node->id <= shard->max_id &&
           shard->has_space()) {
         if (auto result = shard->add(node); result.ok()) {
-          log_debug("node id: '" + std::to_string(node->id) +
-                    "' inserted to shard id: " + std::to_string(shard->id));
+          if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+            log_debug("node id: '" + std::to_string(node->id) +
+                      "' inserted to shard id: " + std::to_string(shard->id));
+          }
+
           return true;
         }
         // if there was an error, we'll try the next shard
@@ -644,7 +651,8 @@ class Database {
       : schema_registry_(std::make_shared<SchemaRegistry>()),
         shard_manager_(
             std::make_shared<ShardManager>(schema_registry_, config)),
-        node_manager_(std::make_shared<NodeManager>(schema_registry_)),
+        node_manager_(std::make_shared<NodeManager>(
+            schema_registry_, config.is_validation_enabled())),
         config_(config),
         persistence_enabled_(config.is_persistence_enabled()),
         edge_store_(std::make_shared<EdgeStore>(0, config.get_chunk_size())) {
@@ -710,7 +718,7 @@ class Database {
     }
     ARROW_ASSIGN_OR_RAISE(auto node,
                           node_manager_->create_node(schema_name, data));
-    ARROW_RETURN_NOT_OK(shard_manager_->insert_node(node));
+    ARROW_RETURN_NOT_OK(shard_manager_->insert_node(node));  // TODO optimize
     return node;
   }
 

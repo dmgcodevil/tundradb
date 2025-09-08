@@ -1,6 +1,7 @@
 #ifndef NODE_ARENA_HPP
 #define NODE_ARENA_HPP
 
+#include <cassert>
 #include <memory>
 #include <string>
 
@@ -75,6 +76,9 @@ class NodeArena {
       return NodeHandle{};  // null handle for unknown schema
     }
 
+    return allocate_node(layout);
+  }
+  NodeHandle allocate_node(const std::shared_ptr<SchemaLayout>& layout) {
     size_t node_size = layout->get_total_size_with_bitset();
     size_t alignment = layout->get_alignment();
 
@@ -85,8 +89,7 @@ class NodeArena {
 
     // Initialize the node data with default values
     layout->initialize_node_data(static_cast<char*>(node_data));
-
-    return NodeHandle(node_data, node_size, schema_name);
+    return NodeHandle(node_data, node_size, layout->get_schema_name());
   }
 
   /**
@@ -156,47 +159,47 @@ class NodeArena {
     }
 
     // Handle string deallocation for any field that might contain strings
-    Value storage_value = value;
+    // Value storage_value = value;
     const FieldLayout* field_layout = layout->get_field_layout(field_name);
-    if (field_layout) {
-      // If the field currently contains a string, deallocate it first
-      if (is_string_type(field_layout->type)) {
-        Value old_value =
-            layout->get_field_value(static_cast<char*>(handle.ptr), field_name);
-        if (!old_value.is_null() && old_value.type() != ValueType::NA) {
-          try {
-            StringRef old_str_ref = old_value.as_string_ref();
-            // Logger::get_instance().debug("deallocate old string: {}",
-            //                              old_str_ref.to_string());
-            if (!old_str_ref.is_null()) {
-              string_arena_->deallocate_string(old_str_ref);
-            }
-          } catch (...) {
-            // Old value wasn't a StringRef, ignore
-          }
-        }
-      }
+    assert(field_layout != nullptr);
 
-      if (value.type() == ValueType::STRING) {
-        // Check if it's a temporary std::string that needs to be stored in
-        // arena
+    // If the field currently contains a string, deallocate it first
+    if (is_string_type(field_layout->type) &&
+        is_field_set(static_cast<char*>(handle.ptr), field_layout->index)) {
+      Value old_value = layout->get_field_value(static_cast<char*>(handle.ptr),
+                                                *field_layout);
+      if (!old_value.is_null() && old_value.type() != ValueType::NA) {
         try {
-          const std::string& str_content = value.as_string();
-          StringRef str_ref = string_arena_->store_string_auto(str_content);
-          // Logger::get_instance().debug("store string: {}",
-          // str_ref.to_string());
-          storage_value =
-              Value{str_ref, field_layout->type};  // Preserve field type
+          StringRef old_str_ref = old_value.as_string_ref();
+          // Logger::get_instance().debug("deallocate old string: {}",
+          //                              old_str_ref.to_string());
+          if (!old_str_ref.is_null()) {
+            string_arena_->deallocate_string(old_str_ref);
+          }
         } catch (...) {
-          // Already a StringRef, use as-is
-          storage_value = value;
+          // Old value wasn't a StringRef, ignore
         }
       }
     }
+    // Value storage_value;
+    if (value.type() == ValueType::STRING) {
+      // Check if it's a temporary std::string that needs to be stored in
+      // arena
+      const std::string& str_content = value.as_string();
+      StringRef str_ref = string_arena_->store_string_auto(str_content);
+      // Logger::get_instance().debug("store string: {}",
+      // str_ref.to_string());
+
+      return layout->set_field_value(static_cast<char*>(handle.ptr),
+                                     *field_layout,
+                                     Value{str_ref, field_layout->type});
+    } else {
+      return layout->set_field_value(static_cast<char*>(handle.ptr),
+                                     *field_layout, value);
+    }
+
     // Logger::get_instance().debug("storage_value: {}",
     //                              storage_value.to_string());
-    return layout->set_field_value(static_cast<char*>(handle.ptr), field_name,
-                                   storage_value);
   }
 
   /**

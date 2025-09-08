@@ -186,11 +186,12 @@ class StringArena {
  public:
   StringArena() {
     // Create pools for different string size categories
-    pools_[ValueType::STRING] =
-        std::make_unique<StringPool>(SIZE_MAX);  // No limit
-    pools_[ValueType::FIXED_STRING16] = std::make_unique<StringPool>(16);
-    pools_[ValueType::FIXED_STRING32] = std::make_unique<StringPool>(32);
-    pools_[ValueType::FIXED_STRING64] = std::make_unique<StringPool>(64);
+    pools_ = std::vector<std::unique_ptr<StringPool>>();
+    pools_.reserve(4);  // Reserve space for 4 pools
+    pools_.emplace_back(std::make_unique<StringPool>(16));
+    pools_.emplace_back(std::make_unique<StringPool>(32));
+    pools_.emplace_back(std::make_unique<StringPool>(64));
+    pools_.emplace_back(std::make_unique<StringPool>(SIZE_MAX));
   }
 
   /**
@@ -201,16 +202,27 @@ class StringArena {
     if (!is_string_type(type)) {
       return StringRef{};  // Not a string type
     }
+    const uint32_t pool_id = type_to_index(type);
+    return pools_[pool_id]->store_string(str, pool_id);
+  }
 
-    const auto it = pools_.find(type);
-    if (it == pools_.end()) {
-      return StringRef{};  // Unknown string type
+  uint32_t type_to_index(const ValueType type) const {
+    switch (type) {
+      case ValueType::FIXED_STRING16:
+        return 0;
+      case ValueType::FIXED_STRING32:
+        return 1;
+      case ValueType::FIXED_STRING64:
+        return 2;
+      case ValueType::STRING:
+        return 3;
+      default:
+        return -1;  // Invalid type
     }
+  }
 
-    // Get pool ID from the type (for identification)
-    const uint32_t pool_id = static_cast<uint32_t>(type);
-
-    return it->second->store_string(str, pool_id);
+  StringPool* get_pool_by_type(const ValueType type) const {
+    return pools_[type_to_index(type)].get();
   }
 
   /**
@@ -244,64 +256,49 @@ class StringArena {
    * Get string content from reference
    */
   std::string_view get_string_view(const StringRef& ref) const {
-    const auto type = static_cast<ValueType>(ref.arena_id);
-    if (const auto it = pools_.find(type); it != pools_.end()) {
-      return it->second->get_string_view(ref);
-    }
-    return std::string_view{};
+    return pools_[ref.arena_id]->get_string_view(ref);
   }
 
   /**
    * Deallocate a string
    */
   void deallocate_string(const StringRef& ref) {
-    const auto type = static_cast<ValueType>(ref.arena_id);
-    if (const auto it = pools_.find(type); it != pools_.end()) {
-      it->second->deallocate_string(ref);
-    }
+    pools_[ref.arena_id]->deallocate_string(ref);
   }
 
   /**
    * Configure deduplication for all pools
    */
   void enable_deduplication(const bool enable = true) {
-    for (const auto& pool : pools_ | std::views::values) {
+    for (const auto& pool : pools_) {
       pool->enable_deduplication(enable);
     }
   }
 
-  /**
-   * Get pool for a specific string type
-   */
-  StringPool* get_pool(const ValueType type) {
-    const auto it = pools_.find(type);
-    return it != pools_.end() ? it->second.get() : nullptr;
-  }
-
   // Statistics
   void print_statistics() const {
-    printf("StringArena Statistics:\n");
-    for (const auto& [type, pool] : pools_) {
-      printf("  %s pool: max_size=%zu, allocated=%zu bytes, strings=%zu\n",
-             to_string(type).c_str(), pool->get_max_size(),
-             pool->get_total_allocated(), pool->get_string_count());
-    }
+    // printf("StringArena Statistics:\n");
+    // for (const auto& [type, pool] : pools_) {
+    //   printf("  %s pool: max_size=%zu, allocated=%zu bytes, strings=%zu\n",
+    //          to_string(type).c_str(), pool->get_max_size(),
+    //          pool->get_total_allocated(), pool->get_string_count());
+    // }
   }
 
   void reset() {
-    for (const auto& pool : pools_ | std::views::values) {
+    for (const auto& pool : pools_) {
       pool->reset();
     }
   }
 
   void clear() {
-    for (const auto& pool : pools_ | std::views::values) {
+    for (const auto& pool : pools_) {
       pool->clear();
     }
   }
 
  private:
-  std::unordered_map<ValueType, std::unique_ptr<StringPool>> pools_;
+  std::vector<std::unique_ptr<StringPool>> pools_;
 };
 
 }  // namespace tundradb

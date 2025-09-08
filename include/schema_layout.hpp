@@ -43,6 +43,7 @@ inline void set_field_bit(char* bitset, const size_t field_index,
  * Describes the layout of a single field within a schema
  */
 struct FieldLayout {
+  const size_t index;
   std::string name;
   ValueType type;
   size_t offset;     // Byte offset from start of node data
@@ -50,10 +51,12 @@ struct FieldLayout {
   size_t alignment;  // Required alignment
   bool nullable;     // Whether field can be null
 
-  FieldLayout(std::string field_name, const ValueType field_type,
-              const size_t field_offset, const size_t field_size,
-              const size_t field_alignment, const bool is_nullable = true)
-      : name(std::move(field_name)),
+  FieldLayout(const size_t index, std::string field_name,
+              const ValueType field_type, const size_t field_offset,
+              const size_t field_size, const size_t field_alignment,
+              const bool is_nullable = true)
+      : index(index),
+        name(std::move(field_name)),
         type(field_type),
         offset(field_offset),
         size(field_size),
@@ -100,8 +103,9 @@ class SchemaLayout {
     size_t aligned_offset = align_up(total_size_, field_alignment);
 
     // Create field layout (offset is relative to data start, not absolute)
-    field_index_[name] = fields_.size();
-    fields_.emplace_back(name, type, aligned_offset, field_size,
+    auto index = fields_.size();
+    field_index_[name] = index;
+    fields_.emplace_back(index, name, type, aligned_offset, field_size,
                          field_alignment, nullable);
 
     // Update total size (size of data portion only)
@@ -150,6 +154,19 @@ class SchemaLayout {
     return read_value_from_memory(field_ptr, field.type);
   }
 
+  Value get_field_value(const char* node_data, const FieldLayout& field) const {
+    // Check if this field has been set using the bit set
+    if (!is_field_set(node_data, field.index)) {
+      return Value();  // null value for unset field
+    }
+
+    // Field has been set, read it from memory
+    const char* data_start = node_data + get_data_offset();
+    const char* field_ptr = data_start + field.offset;
+
+    return read_value_from_memory(field_ptr, field.type);
+  }
+
   /**
    * Set field value in node data
    */
@@ -165,6 +182,23 @@ class SchemaLayout {
 
     // Update the bit set to indicate this field has been set
     set_field_bit(node_data, field_index, !value.is_null());
+
+    // If the value is null, we don't need to write it to memory
+    if (value.is_null()) {
+      return true;  // Successfully "set" to null
+    }
+
+    // Write the actual value to memory
+    char* data_start = node_data + get_data_offset();
+    char* field_ptr = data_start + field.offset;
+
+    return write_value_to_memory(field_ptr, field.type, value);
+  }
+
+  bool set_field_value(char* node_data, const FieldLayout& field,
+                       const Value& value) {
+    // Update the bit set to indicate this field has been set
+    set_field_bit(node_data, field.index, !value.is_null());
 
     // If the value is null, we don't need to write it to memory
     if (value.is_null()) {

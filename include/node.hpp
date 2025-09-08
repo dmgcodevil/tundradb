@@ -13,8 +13,6 @@
 
 namespace tundradb {
 
-constexpr bool USE_NODE_ARENA = true;
-
 enum UpdateType {
   SET,
   // todo APPEND for List/Array
@@ -47,9 +45,7 @@ class Node {
         schema_name(std::move(schema_name)) {}
 
   ~Node() {
-    if (!USE_NODE_ARENA) {
-      data_.clear();
-    }
+    data_.clear();
     // TODO slow
     // if (USE_NODE_ARENA && arena_ && handle_) {
     //   arena_->deallocate_node(*handle_);
@@ -61,7 +57,7 @@ class Node {
   }
 
   arrow::Result<Value> get_value(const std::string &field_name) const {
-    if (USE_NODE_ARENA) {
+    if (arena_ != nullptr) {
       if (schema_->get_field(field_name) == nullptr) {
         // Logger::get_instance().debug("Field not found");
         return arrow::Status::KeyError("Field not found: ", field_name);
@@ -80,7 +76,7 @@ class Node {
 
   arrow::Result<bool> update(const std::string &field_name, Value value,
                              UpdateType update_type) {
-    if (USE_NODE_ARENA) {
+    if (arena_ != nullptr) {
       if (schema_->get_field(field_name) == nullptr) {
         // Logger::get_instance().debug("Field not found");
         return arrow::Status::KeyError("Field not found: ", field_name);
@@ -112,7 +108,11 @@ class Node {
 
 class NodeManager {
  public:
-  explicit NodeManager(std::shared_ptr<SchemaRegistry> schema_registry) {
+  explicit NodeManager(std::shared_ptr<SchemaRegistry> schema_registry,
+                       const bool validation_enabled = true,
+                       const bool use_node_arena = true) {
+    validation_enabled_ = validation_enabled;
+    use_node_arena_ = use_node_arena;
     schema_registry_ = std::move(schema_registry);
     layout_registry_ = std::make_shared<LayoutRegistry>();
     node_arena_ = node_arena_factory::create_free_list_arena(layout_registry_);
@@ -138,32 +138,35 @@ class NodeManager {
 
     // ARROW_ASSIGN_OR_RAISE(const auto schema,
     //                       schema_registry_->get(schema_name));
-    if (!add && data.contains("id")) {
-      return arrow::Status::Invalid("'id' column is auto generated");
-    }
-
-    if (add && !data.contains("id")) {
-      return arrow::Status::Invalid("'id' is missing");
-    }
-
-    for (const auto &field : schema_->fields()) {
-      // check required
-      if (field->name() != "id" && !field->nullable() &&
-          (!data.contains(field->name()) ||
-           data.find(field->name())->second.is_null())) {
-        return arrow::Status::Invalid("Field '", field->name(),
-                                      "' is required");
+    if (validation_enabled_) {
+      if (!add && data.contains("id")) {
+        return arrow::Status::Invalid("'id' column is auto generated");
       }
 
-      if (data.contains(field->name())) {
-        const auto value = data.find(field->name())->second;
-        if (field->type() != value.type()) {
-          return arrow::Status::Invalid(
-              "Type mismatch for field '", field->name(), "'. Expected ",
-              to_string(field->type()), " but got ", to_string(value.type()));
+      if (add && !data.contains("id")) {
+        return arrow::Status::Invalid("'id' is missing");
+      }
+
+      for (const auto &field : schema_->fields()) {
+        // check required
+        if (field->name() != "id" && !field->nullable() &&
+            (!data.contains(field->name()) ||
+             data.find(field->name())->second.is_null())) {
+          return arrow::Status::Invalid("Field '", field->name(),
+                                        "' is required");
+        }
+
+        if (data.contains(field->name())) {
+          const auto value = data.find(field->name())->second;
+          if (field->type() != value.type()) {
+            return arrow::Status::Invalid(
+                "Type mismatch for field '", field->name(), "'. Expected ",
+                to_string(field->type()), " but got ", to_string(value.type()));
+          }
         }
       }
     }
+
     int64_t id = 0;
     if (!add) {
       id = id_counter.fetch_add(1);
@@ -171,8 +174,8 @@ class NodeManager {
       id = data.at("id").as_int64();
     }
 
-    if (USE_NODE_ARENA) {
-      NodeHandle node_handle = node_arena_->allocate_node(schema_name);
+    if (use_node_arena_) {
+      NodeHandle node_handle = node_arena_->allocate_node(layout_);
       // Logger::get_instance().debug("node has been allocated at {}",
       //                              node_handle.ptr);
       node_arena_->set_field_value(node_handle, layout_, "id", Value{id});
@@ -228,6 +231,8 @@ class NodeManager {
   std::shared_ptr<SchemaRegistry> schema_registry_;
   std::shared_ptr<LayoutRegistry> layout_registry_;
   std::shared_ptr<NodeArena> node_arena_;
+  bool validation_enabled_;
+  bool use_node_arena_;
 
   // cache schema
   std::string schema_name_;
