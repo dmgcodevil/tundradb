@@ -195,7 +195,8 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
         // Convert Value to Arrow scalar and append to builder
         auto value = res.ValueOrDie();
         if (value) {
-          auto scalar_result = value_ptr_to_arrow_scalar(value, arrow_type_to_value_type(field->type()));
+          auto scalar_result = value_ptr_to_arrow_scalar(
+              value, arrow_type_to_value_type(field->type()));
           if (!scalar_result.ok()) {
             log_error("Failed to convert value to scalar for field '{}': {}",
                       field_name, scalar_result.status().ToString());
@@ -1167,7 +1168,9 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows_bfs(
     }
     tree.insert_row(r);
   }
-  tree.print();
+  if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+    tree.print();
+  }
   auto merged = tree.merge_rows();
   if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
     for (const auto& row : merged) {
