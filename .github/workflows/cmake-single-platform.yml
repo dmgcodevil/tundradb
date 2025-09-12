@@ -45,7 +45,8 @@ jobs:
           libtbb-dev \
           libgtest-dev \
           libbenchmark-dev \
-          libcds-dev
+          libcds-dev \
+          llvm clang lldb
 
         # Install GCC 13 (supports C++23)
         sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test

@@ -26,7 +26,15 @@ find_package(Parquet REQUIRED)
 find_package(ArrowCompute QUIET)
 find_package(ArrowAcero QUIET)
 
-find_package(LLVM REQUIRED CONFIG PATHS /opt/homebrew/opt/llvm/lib/cmake/llvm)
+
+
+# Find CDS library
+if(APPLE)
+    find_package(LLVM REQUIRED CONFIG PATHS /opt/homebrew/opt/llvm/lib/cmake/llvm)
+else()
+    find_package(LLVM REQUIRED)
+endif()
+
 include_directories(${LLVM_INCLUDE_DIRS})
 add_definitions(${LLVM_DEFINITIONS})
 
