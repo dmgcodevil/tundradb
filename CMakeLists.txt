@@ -26,6 +26,18 @@ find_package(Parquet REQUIRED)
 find_package(ArrowCompute QUIET)
 find_package(ArrowAcero QUIET)
 
+
+
+# Find CDS library
+if(APPLE)
+    find_package(LLVM REQUIRED CONFIG PATHS /opt/homebrew/opt/llvm/lib/cmake/llvm)
+else()
+    find_package(LLVM REQUIRED)
+endif()
+
+include_directories(${LLVM_INCLUDE_DIRS})
+add_definitions(${LLVM_DEFINITIONS})
+
 # Add specific paths for ArrowDataset
 list(APPEND CMAKE_PREFIX_PATH "/usr/lib/x86_64-linux-gnu/cmake/ArrowDataset")
 list(APPEND CMAKE_PREFIX_PATH "/usr/lib/x86_64-linux-gnu/cmake")
@@ -253,6 +265,8 @@ target_link_libraries(tundra_shell
         Parquet::parquet_shared
         ${UUID_LIBRARY}
         ${ANTLR4_RUNTIME}
+        LLVMSupport
+        LLVMCore
 )
 
 # ANTLR Integration

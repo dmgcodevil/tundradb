@@ -56,12 +56,29 @@ class Node {
     data_[field_name] = std::move(value);
   }
 
+  arrow::Result<const char *> get_value_ptr(
+      const std::string &field_name) const {
+    if (arena_ != nullptr) {
+      // if (schema_->get_field(field_name) == nullptr) {
+      //   // Logger::get_instance().debug("Field not found");
+      //   return arrow::Status::KeyError("Field not found: ", field_name);
+      // }
+      return arena_->get_field_value_ptr(*handle_, layout_, field_name);
+    }
+
+    const auto it = data_.find(field_name);
+    if (it == data_.end()) {
+      return arrow::Status::KeyError("Field not found: ", field_name);
+    }
+    return arrow::Status::NotImplemented("");
+  }
+
   arrow::Result<Value> get_value(const std::string &field_name) const {
     if (arena_ != nullptr) {
-      if (schema_->get_field(field_name) == nullptr) {
-        // Logger::get_instance().debug("Field not found");
-        return arrow::Status::KeyError("Field not found: ", field_name);
-      }
+      // if (schema_->get_field(field_name) == nullptr) {
+      //   // Logger::get_instance().debug("Field not found");
+      //   return arrow::Status::KeyError("Field not found: ", field_name);
+      // }
       return arena_->get_field_value(*handle_, layout_, field_name);
     }
 
@@ -77,10 +94,10 @@ class Node {
   arrow::Result<bool> update(const std::string &field_name, Value value,
                              UpdateType update_type) {
     if (arena_ != nullptr) {
-      if (schema_->get_field(field_name) == nullptr) {
-        // Logger::get_instance().debug("Field not found");
-        return arrow::Status::KeyError("Field not found: ", field_name);
-      }
+      // if (schema_->get_field(field_name) == nullptr) {
+      //   // Logger::get_instance().debug("Field not found");
+      //   return arrow::Status::KeyError("Field not found: ", field_name);
+      // }
 
       arena_->set_field_value(*handle_, layout_, field_name, value);
       // Logger::get_instance().debug("set value is done");

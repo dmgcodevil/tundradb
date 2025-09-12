@@ -7,6 +7,7 @@
 #include <unordered_map>
 
 #include "free_list_arena.hpp"
+#include "memory_arena.hpp"
 #include "types.hpp"
 
 namespace tundradb {

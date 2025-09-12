@@ -157,49 +157,52 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
   for (const auto& node : nodes) {
     for (int i = 0; i < schema->num_fields(); i++) {
       const auto& field = schema->field(i);
-      auto field_result = node->get_value(field->name());
+      auto field_result = node->get_value_ptr(field->name());
       if (!field_result.ok()) {
         ARROW_RETURN_NOT_OK(builders[i]->AppendNull());
       } else {
-        const auto& value = field_result.ValueOrDie();
-        if (value.is_null()) {
+        const auto value_ptr = field_result.ValueOrDie();
+        if (value_ptr == nullptr) {
           ARROW_RETURN_NOT_OK(builders[i]->AppendNull());
         } else {
           switch (field->type()->id()) {
             case arrow::Type::INT32: {
               ARROW_RETURN_NOT_OK(
                   dynamic_cast<arrow::Int32Builder*>(builders[i].get())
-                      ->Append(value.as_int32()));
+                      ->Append(*reinterpret_cast<const int32_t*>(value_ptr)));
               break;
             }
             case arrow::Type::INT64: {
               ARROW_RETURN_NOT_OK(
                   dynamic_cast<arrow::Int64Builder*>(builders[i].get())
-                      ->Append(value.as_int64()));
+                      ->Append(*reinterpret_cast<const int64_t*>(value_ptr)));
               break;
             }
             case arrow::Type::FLOAT: {
+              //         return Value{*reinterpret_cast<const double*>(ptr)};
               ARROW_RETURN_NOT_OK(
                   dynamic_cast<arrow::FloatBuilder*>(builders[i].get())
-                      ->Append(value.as_float()));
+                      ->Append(*reinterpret_cast<const float*>(value_ptr)));
               break;
             }
             case arrow::Type::DOUBLE: {
               ARROW_RETURN_NOT_OK(
                   dynamic_cast<arrow::DoubleBuilder*>(builders[i].get())
-                      ->Append(value.as_double()));
+                      ->Append(*reinterpret_cast<const double*>(value_ptr)));
               break;
             }
             case arrow::Type::BOOL: {
               ARROW_RETURN_NOT_OK(
                   dynamic_cast<arrow::BooleanBuilder*>(builders[i].get())
-                      ->Append(value.as_bool()));
+                      ->Append(*reinterpret_cast<const bool*>(value_ptr)));
               break;
             }
             case arrow::Type::STRING: {
+              auto str_ref = *reinterpret_cast<const StringRef*>(value_ptr);
+
               ARROW_RETURN_NOT_OK(
                   dynamic_cast<arrow::StringBuilder*>(builders[i].get())
-                      ->Append(value.as_string()));
+                      ->Append(str_ref.to_string()));
               break;
             }
             default:

@@ -89,6 +89,30 @@ arrow::Result<std::shared_ptr<arrow::Scalar>> value_to_arrow_scalar(
   }
 }
 
+arrow::Result<std::shared_ptr<arrow::Scalar>> value_ptr_to_arrow_scalar(
+    const char* ptr, const ValueType type) {
+  switch (type) {
+    case ValueType::INT32:
+      return arrow::MakeScalar(*reinterpret_cast<const int32_t*>(ptr));
+    case ValueType::INT64:
+      return arrow::MakeScalar(*reinterpret_cast<const int64_t*>(ptr));
+    case ValueType::DOUBLE:
+      return arrow::MakeScalar(*reinterpret_cast<const double*>(ptr));
+    case ValueType::STRING: {
+      auto str_ref = *reinterpret_cast<const StringRef*>(ptr);
+      return arrow::MakeScalar(str_ref.to_string());
+    }
+    case ValueType::BOOL:
+      return arrow::MakeScalar(*reinterpret_cast<const bool*>(ptr));
+    case ValueType::NA:
+      return arrow::MakeNullScalar(arrow::null());
+    default:
+      return arrow::Status::NotImplemented(
+          "Unsupported Value type for Arrow scalar conversion: ",
+          tundradb::to_string(type));
+  }
+}
+
 // Convert CompareOp to appropriate Arrow compute function
 arrow::compute::Expression apply_comparison_op(
     const arrow::compute::Expression& field,
@@ -162,15 +186,17 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
   for (const auto& node : nodes) {
     // Add each field's value to the appropriate builder
     for (int i = 0; i < schema->num_fields(); i++) {
-      const auto& field_name = schema->field(i)->name();
+      auto field = schema->field(i);
+      const auto& field_name = field->name();
 
       // Find the value in the node's data
-      auto res = node->get_value(field_name);
+      auto res = node->get_value_ptr(field_name);
       if (res.ok()) {
         // Convert Value to Arrow scalar and append to builder
         auto value = res.ValueOrDie();
-        if (!value.is_null()) {
-          auto scalar_result = value_to_arrow_scalar(value);
+        if (value) {
+          auto scalar_result = value_ptr_to_arrow_scalar(
+              value, arrow_type_to_value_type(field->type()));
           if (!scalar_result.ok()) {
             log_error("Failed to convert value to scalar for field '{}': {}",
                       field_name, scalar_result.status().ToString());
@@ -602,14 +628,16 @@ struct Row {
                           const std::shared_ptr<Node>& node) {
     for (const auto& field : node->get_schema()->fields()) {
       auto full_name = schema_ref.value() + "." + field->name();
-      this->set_cell(full_name, node->get_value(field->name()).ValueOrDie());
+      this->set_cell(full_name, node->get_value_ptr(field->name()).ValueOrDie(),
+                     field->type());
     }
   }
 
   // New set_cell method for Value objects
-  void set_cell(const std::string& name, const Value& value) {
-    if (!value.is_null()) {
-      auto scalar_result = value_to_arrow_scalar(value);
+  void set_cell(const std::string& name, const char* ptr,
+                const ValueType type) {
+    if (ptr) {
+      auto scalar_result = value_ptr_to_arrow_scalar(ptr, type);
       if (scalar_result.ok()) {
         cells[name] = scalar_result.ValueOrDie();
         return;
@@ -858,9 +886,12 @@ struct RowNode {
             if (schema_ids_r2.contains(schema) &&
                 schema_ids_r2[schema] != id1) {
               // Found a conflict - same schema but different IDs
-              log_debug(
-                  "Conflict detected: Schema '{}' has different IDs: {} vs {}",
-                  schema, id1, schema_ids_r2[schema]);
+              if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+                log_debug(
+                    "Conflict detected: Schema '{}' has different IDs: {} vs "
+                    "{}",
+                    schema, id1, schema_ids_r2[schema]);
+              }
               can_merge = false;
               break;
             }
@@ -878,9 +909,11 @@ struct RowNode {
                 // Both rows have this field with non-null values - check if
                 // they match
                 if (!value1->Equals(*(it->second))) {
-                  log_debug(
-                      "Conflict detected: Field '{}' has different values",
-                      field_name);
+                  if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+                    log_debug(
+                        "Conflict detected: Field '{}' has different values",
+                        field_name);
+                  }
                   can_merge = false;
                   break;
                 }
@@ -1007,23 +1040,25 @@ void log_grouped_connections(
     int64_t node_id,
     const std::unordered_map<std::string, std::vector<GraphConnection>>&
         grouped_connections) {
-  if (grouped_connections.empty()) {
-    log_debug("Node {} has no grouped connections", node_id);
-    return;
-  }
+  if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+    if (grouped_connections.empty()) {
+      log_debug("Node {} has no grouped connections", node_id);
+      return;
+    }
 
-  log_debug("Node {} has connections to {} target schemas:", node_id,
-            grouped_connections.size());
+    log_debug("Node {} has connections to {} target schemas:", node_id,
+              grouped_connections.size());
 
-  for (const auto& [target_schema, connections] : grouped_connections) {
-    log_debug("  To schema '{}': {} connections", target_schema,
-              connections.size());
+    for (const auto& [target_schema, connections] : grouped_connections) {
+      log_debug("  To schema '{}': {} connections", target_schema,
+                connections.size());
 
-    for (size_t i = 0; i < connections.size(); ++i) {
-      const auto& conn = connections[i];
-      log_debug("    [{}] {} -[{}]-> {}.{} (target_id: {})", i,
-                conn.source.value(), conn.edge_type, conn.target.value(),
-                conn.target.schema(), conn.target_id);
+      for (size_t i = 0; i < connections.size(); ++i) {
+        const auto& conn = connections[i];
+        log_debug("    [{}] {} -[{}]-> {}.{} (target_id: {})", i,
+                  conn.source.value(), conn.edge_type, conn.target.value(),
+                  conn.target.schema(), conn.target_id);
+      }
     }
   }
 }
@@ -1083,7 +1118,9 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows_bfs(
           auto r = *item.row;
           r.path = item.path;
           r.id = row_id_counter++;
-          log_debug("add row: {}", r.ToString());
+          if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+            log_debug("add row: {}", r.ToString());
+          }
           result->push_back(r);
         }
 
@@ -1100,7 +1137,9 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows_bfs(
             next.path = item.path;
             next.path.push_back(PathSegment{connections[0].target.value(),
                                             connections[0].target_id});
-            log_debug("continue the path: {}", join_schema_path(next.path));
+            if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+              log_debug("continue the path: {}", join_schema_path(next.path));
+            }
             queue.push(next);
           } else {
             for (const auto& conn : connections) {
@@ -1110,8 +1149,10 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows_bfs(
               next.path = item.path;
               next.path.push_back(
                   PathSegment{conn.target.value(), conn.target_id});
-              log_debug("create a new path {}, node={}",
-                        join_schema_path(next.path), conn.target_id);
+              if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+                log_debug("create a new path {}, node={}",
+                          join_schema_path(next.path), conn.target_id);
+              }
               queue.push(next);
             }
           }
@@ -1122,13 +1163,19 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows_bfs(
   RowNode tree;
   tree.path_segment = PathSegment{"root", -1};
   for (const auto& r : *result) {
-    log_debug("bfs result: {}", r.ToString());
+    if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+      log_debug("bfs result: {}", r.ToString());
+    }
     tree.insert_row(r);
   }
-  tree.print();
+  if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+    tree.print();
+  }
   auto merged = tree.merge_rows();
-  for (const auto& row : merged) {
-    log_debug("merge result: {}", row.ToString());
+  if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+    for (const auto& row : merged) {
+      log_debug("merge result: {}", row.ToString());
+    }
   }
   return std::make_shared<std::vector<Row>>(merged);
 }
@@ -1669,21 +1716,27 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
         ARROW_ASSIGN_OR_RAISE(auto target_schema,
                               query_state.resolve_schema(traverse->target()));
         query_state.traversals.push_back(*traverse);
-        log_debug("Processing TRAVERSE {}-({})->{}",
-                  traverse->source().toString(), traverse->edge_type(),
-                  traverse->target().toString());
+        if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+          log_debug("Processing TRAVERSE {}-({})->{}",
+                    traverse->source().toString(), traverse->edge_type(),
+                    traverse->target().toString());
+        }
         auto source = traverse->source();
         if (!query_state.tables.contains(source.value())) {
-          log_debug("Source table '{}' not found. Loading",
-                    traverse->source().toString());
+          if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+            log_debug("Source table '{}' not found. Loading",
+                      traverse->source().toString());
+          }
           ARROW_ASSIGN_OR_RAISE(auto source_table,
                                 this->get_table(source_schema));
           ARROW_RETURN_NOT_OK(
               query_state.update_table(source_table, traverse->source()));
         }
 
-        log_debug("Traversing from {} source nodes",
-                  query_state.ids[source.value()].size());
+        if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+          log_debug("Traversing from {} source nodes",
+                    query_state.ids[source.value()].size());
+        }
         std::set<int64_t> matched_source_ids;
         std::set<int64_t> matched_target_ids;
         std::set<int64_t> unmatched_source_ids;
@@ -1834,8 +1887,10 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
     }
   }
 
-  log_debug("Query processing complete, building result");
-  log_debug("Query state: {}", query_state.ToString());
+  if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+    log_debug("Query processing complete, building result");
+    log_debug("Query state: {}", query_state.ToString());
+  }
 
   auto output_schema_res = build_denormalized_schema(query_state);
   if (!output_schema_res.ok()) {

@@ -144,6 +144,7 @@ target_link_libraries(sharding_test
         GTest::Main
         pthread
         ${UUID_LIBRARY}
+        LLVMSupport LLVMCore
 )
 
 target_link_libraries(snapshot_test
@@ -154,6 +155,7 @@ target_link_libraries(snapshot_test
         GTest::GTest
         GTest::Main
         pthread
+        LLVMSupport LLVMCore
 )
 
 # Configure the concurrency test
@@ -164,6 +166,7 @@ target_link_libraries(concurrency_test
         GTest::Main
         pthread
         TBB::tbb
+        LLVMSupport LLVMCore
 )
 
 target_link_libraries(concurrent_set_stress_test
@@ -173,6 +176,7 @@ target_link_libraries(concurrent_set_stress_test
         GTest::Main
         pthread
         TBB::tbb
+        LLVMSupport LLVMCore
 )
 
 # Link against required libraries
@@ -184,6 +188,7 @@ target_link_libraries(edge_store_test
         GTest::Main
         pthread
         TBB::tbb
+        LLVMSupport LLVMCore
 )
 
 # Link against required libraries
@@ -195,6 +200,7 @@ target_link_libraries(table_info_test
         GTest::Main
         pthread
         TBB::tbb
+        LLVMSupport LLVMCore
 )
 
 # Link against required libraries
@@ -206,6 +212,7 @@ target_link_libraries(schema_utils_test
         GTest::Main
         pthread
         TBB::tbb
+        LLVMSupport LLVMCore
 )
 
 # Link against required libraries
@@ -218,6 +225,7 @@ target_link_libraries(database_test
         GTest::Main
         pthread
         TBB::tbb
+        LLVMSupport LLVMCore
 )
 
 target_link_libraries(join_test
@@ -229,6 +237,7 @@ target_link_libraries(join_test
         GTest::Main
         pthread
         TBB::tbb
+        LLVMSupport LLVMCore
 )
 
 # Link benchmark test with Google Benchmark and other dependencies
@@ -242,6 +251,7 @@ target_link_libraries(benchmark_test
         GTest::Main
         pthread
         TBB::tbb
+        LLVMSupport LLVMCore
 )
 
 target_link_libraries(where_pushdown_join_test
@@ -254,6 +264,7 @@ target_link_libraries(where_pushdown_join_test
         GTest::Main
         pthread
         TBB::tbb
+        LLVMSupport LLVMCore
 )
 
 target_link_libraries(where_expression_test
@@ -265,6 +276,7 @@ target_link_libraries(where_expression_test
         GTest::Main
         pthread
         TBB::tbb
+        LLVMSupport LLVMCore
 )
 
 target_link_libraries(memory_arena_test
@@ -287,6 +299,7 @@ target_link_libraries(node_arena_test
         GTest::GTest
         GTest::Main
         spdlog::spdlog
+        LLVMSupport LLVMCore
 )
 
 target_link_libraries(string_refcount_test
@@ -297,6 +310,7 @@ target_link_libraries(string_refcount_test
         GTest::GTest
         GTest::Main
         spdlog::spdlog
+        LLVMSupport LLVMCore
 )
 
 target_link_libraries(node_test
@@ -307,6 +321,7 @@ target_link_libraries(node_test
         GTest::GTest
         GTest::Main
         spdlog::spdlog
+        LLVMSupport LLVMCore
 )
 
 # Apply sanitizer flags to all test targets if enabled
