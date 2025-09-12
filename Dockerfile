@@ -30,6 +30,7 @@ RUN apt-get update && apt-get install -y \
     vim \
     nano \
     htop \
+    llvm clang lldb \
     && rm -rf /var/lib/apt/lists/*
 
 # Set GCC 13 as default
