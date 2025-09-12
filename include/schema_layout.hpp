@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "llvm/ADT/StringMap.h"
 #include "mem_utils.hpp"
 #include "schema.hpp"
 #include "types.hpp"
@@ -129,42 +130,37 @@ class SchemaLayout {
     return get_data_offset() + total_size_;
   }
 
-  /**
-   * Get field value from node data
-   */
-  Value get_field_value(const char* node_data,
-                        const std::string& field_name) const {
-    const auto it = field_index_.find(field_name);
-    if (it == field_index_.end()) {
-      return Value();  // null value for missing field
-    }
-
-    const size_t field_index = it->second;
-    const FieldLayout& field = fields_[field_index];
-
+  const char* get_field_value_ptr(const char* node_data,
+                                  const FieldLayout& field) const {
     // Check if this field has been set using the bit set
-    if (!is_field_set(node_data, field_index)) {
-      return Value();  // null value for unset field
+    if (!is_field_set(node_data, field.index)) {
+      return nullptr;  // null value for unset field
     }
 
     // Field has been set, read it from memory
     const char* data_start = node_data + get_data_offset();
     const char* field_ptr = data_start + field.offset;
+    return field_ptr;
+  }
 
-    return read_value_from_memory(field_ptr, field.type);
+  const char* get_field_value_ptr(const char* node_data,
+                                  const std::string& field_name) const {
+    const size_t field_index = get_field_index(field_name);
+    const FieldLayout& field = fields_[field_index];
+    return get_field_value_ptr(node_data, field);
+  }
+
+  Value get_field_value(const char* node_data,
+                        const std::string& field_name) const {
+    const size_t field_index = get_field_index(field_name);
+    const FieldLayout& field = fields_[field_index];
+    return Value::read_value_from_memory(get_field_value_ptr(node_data, field),
+                                         field.type);
   }
 
   Value get_field_value(const char* node_data, const FieldLayout& field) const {
-    // Check if this field has been set using the bit set
-    if (!is_field_set(node_data, field.index)) {
-      return Value();  // null value for unset field
-    }
-
-    // Field has been set, read it from memory
-    const char* data_start = node_data + get_data_offset();
-    const char* field_ptr = data_start + field.offset;
-
-    return read_value_from_memory(field_ptr, field.type);
+    return Value::read_value_from_memory(get_field_value_ptr(node_data, field),
+                                         field.type);
   }
 
   /**
@@ -241,37 +237,19 @@ class SchemaLayout {
     return field_index_.contains(name);
   }
 
-  const FieldLayout* get_field_layout(const std::string& name) const {
+  size_t get_field_index(const std::string& name) const {
     const auto it = field_index_.find(name);
-    return it != field_index_.end() ? &fields_[it->second] : nullptr;
+    return it != field_index_.end() ? it->second : -1;
+  }
+
+  const FieldLayout* get_field_layout(const std::string& name) const {
+    auto idx = get_field_index(name);
+    return idx == -1 ? nullptr : &fields_[idx];
   }
 
   const std::vector<FieldLayout>& get_fields() const { return fields_; }
 
  private:
-  static Value read_value_from_memory(const char* ptr, const ValueType type) {
-    switch (type) {
-      case ValueType::INT64:
-        return Value{*reinterpret_cast<const int64_t*>(ptr)};
-      case ValueType::INT32:
-        return Value{*reinterpret_cast<const int32_t*>(ptr)};
-      case ValueType::DOUBLE:
-        return Value{*reinterpret_cast<const double*>(ptr)};
-      case ValueType::BOOL:
-        return Value{*reinterpret_cast<const bool*>(ptr)};
-      case ValueType::STRING:
-      case ValueType::FIXED_STRING16:
-      case ValueType::FIXED_STRING32:
-      case ValueType::FIXED_STRING64:
-        // All string types stored as StringRef, but preserve the field's
-        // declared type
-        return Value{*reinterpret_cast<const StringRef*>(ptr), type};
-      case ValueType::NA:
-      default:
-        return Value{};
-    }
-  }
-
   static bool write_value_to_memory(char* ptr, const ValueType type,
                                     const Value& value) {
     switch (type) {
@@ -323,7 +301,7 @@ class SchemaLayout {
 
   std::string schema_name_;
   std::vector<FieldLayout> fields_;
-  std::unordered_map<std::string, size_t> field_index_;
+  llvm::StringMap<size_t> field_index_;
   size_t total_size_;
   size_t alignment_;
   bool finalized_ = false;
@@ -411,25 +389,6 @@ class LayoutRegistry {
 
  private:
   std::unordered_map<std::string, std::shared_ptr<SchemaLayout>> layouts_;
-
-  // Helper function to convert Arrow types to ValueTypes
-  static ValueType arrow_type_to_value_type(
-      const std::shared_ptr<arrow::DataType>& arrow_type) {
-    switch (arrow_type->id()) {
-      case arrow::Type::INT32:
-        return ValueType::INT32;
-      case arrow::Type::INT64:
-        return ValueType::INT64;
-      case arrow::Type::DOUBLE:
-        return ValueType::DOUBLE;
-      case arrow::Type::BOOL:
-        return ValueType::BOOL;
-      case arrow::Type::STRING:
-        return ValueType::STRING;  // Will be stored as StringRef
-      default:
-        return ValueType::NA;
-    }
-  }
 };
 
 }  // namespace tundradb

@@ -131,6 +131,20 @@ class NodeArena {
   /**
    * Get field value from a node using its handle
    */
+  const char* get_field_value_ptr(const NodeHandle& handle,
+                                  const std::shared_ptr<SchemaLayout>& layout,
+                                  const std::string& field_name) const {
+    // Logger::get_instance().debug("get_field_value: {}.{}", schema_name,
+    //                              field_name);
+    if (handle.is_null()) {
+      // Logger::get_instance().error("null value for invalid handle");
+      return nullptr;  // null value for invalid handle
+    }
+
+    return layout->get_field_value_ptr(static_cast<const char*>(handle.ptr),
+                                       field_name);
+  }
+
   Value get_field_value(const NodeHandle& handle,
                         const std::shared_ptr<SchemaLayout>& layout,
                         const std::string& field_name) const {
@@ -138,7 +152,7 @@ class NodeArena {
     //                              field_name);
     if (handle.is_null()) {
       // Logger::get_instance().error("null value for invalid handle");
-      return Value{};  // null value for invalid handle
+      return nullptr;  // null value for invalid handle
     }
 
     return layout->get_field_value(static_cast<const char*>(handle.ptr),

@@ -227,6 +227,32 @@ class Value {
     }
   }
 
+  static Value read_value_from_memory(const char* ptr, const ValueType type) {
+    if (ptr == nullptr) {
+      return Value{};
+    }
+    switch (type) {
+      case ValueType::INT64:
+        return Value{*reinterpret_cast<const int64_t*>(ptr)};
+      case ValueType::INT32:
+        return Value{*reinterpret_cast<const int32_t*>(ptr)};
+      case ValueType::DOUBLE:
+        return Value{*reinterpret_cast<const double*>(ptr)};
+      case ValueType::BOOL:
+        return Value{*reinterpret_cast<const bool*>(ptr)};
+      case ValueType::STRING:
+      case ValueType::FIXED_STRING16:
+      case ValueType::FIXED_STRING32:
+      case ValueType::FIXED_STRING64:
+        // All string types stored as StringRef, but preserve the field's
+        // declared type
+        return Value{*reinterpret_cast<const StringRef*>(ptr), type};
+      case ValueType::NA:
+      default:
+        return Value{};
+    }
+  }
+
   // Equality operator
   bool operator==(const Value& other) const {
     if (type_ != other.type_) {
@@ -254,7 +280,7 @@ inline std::ostream& operator<<(std::ostream& os, const Value& value) {
   return os << value.to_string();
 }
 
-static ValueType arrow_type_to_value_type(
+static constexpr ValueType arrow_type_to_value_type(
     const std::shared_ptr<arrow::DataType>& arrow_type) {
   switch (arrow_type->id()) {
     case arrow::Type::INT32:
@@ -281,8 +307,7 @@ static ValueType arrow_type_to_value_type(
     case arrow::Type::NA:
       return ValueType::NA;
     default:
-      // For unsupported types, default to String representation
-      return ValueType::STRING;
+      return ValueType::NA;
   }
 }
 
