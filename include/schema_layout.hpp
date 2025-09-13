@@ -84,10 +84,7 @@ class SchemaLayout {
   /**
    * Get the offset where actual field data starts (after bit set + alignment)
    */
-  size_t get_data_offset() const {
-    const size_t bitset_size = get_bitset_size();
-    return align_up(bitset_size, alignment_);
-  }
+  size_t get_data_offset() const { return data_offset_; }
 
   /**
    * Add a field to the schema layout
@@ -120,6 +117,7 @@ class SchemaLayout {
   void finalize() {
     // Add padding at the end to ensure array alignment
     total_size_ = align_up(total_size_, alignment_);
+    data_offset_ = align_up(get_bitset_size(), alignment_);
     finalized_ = true;
   }
 
@@ -127,7 +125,7 @@ class SchemaLayout {
    * Get the total size including bit set and data
    */
   size_t get_total_size_with_bitset() const {
-    return get_data_offset() + total_size_;
+    return data_offset_ + total_size_;
   }
 
   const char* get_field_value_ptr(const char* node_data,
@@ -138,7 +136,7 @@ class SchemaLayout {
     }
 
     // Field has been set, read it from memory
-    const char* data_start = node_data + get_data_offset();
+    const char* data_start = node_data + data_offset_;  // get_data_offset();
     const char* field_ptr = data_start + field.offset;
     return field_ptr;
   }
@@ -185,7 +183,7 @@ class SchemaLayout {
     }
 
     // Write the actual value to memory
-    char* data_start = node_data + get_data_offset();
+    char* data_start = node_data + data_offset_;  // get_data_offset();
     char* field_ptr = data_start + field.offset;
 
     return write_value_to_memory(field_ptr, field.type, value);
@@ -202,7 +200,7 @@ class SchemaLayout {
     }
 
     // Write the actual value to memory
-    char* data_start = node_data + get_data_offset();
+    char* data_start = node_data + data_offset_;  // get_data_offset();
     char* field_ptr = data_start + field.offset;
 
     return write_value_to_memory(field_ptr, field.type, value);
@@ -217,7 +215,7 @@ class SchemaLayout {
     std::memset(node_data, 0, bitset_size);
 
     // Zero out all data memory
-    char* data_start = node_data + get_data_offset();
+    char* data_start = node_data + data_offset_;  // get_data_offset();
     std::memset(data_start, 0, total_size_);
 
     // Set any non-zero default values if needed
@@ -305,6 +303,7 @@ class SchemaLayout {
   size_t total_size_;
   size_t alignment_;
   bool finalized_ = false;
+  size_t data_offset_;
 };
 
 /**
