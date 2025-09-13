@@ -4,6 +4,7 @@
 #include <arrow/dataset/scanner.h>
 #include <arrow/datum.h>
 #include <arrow/table.h>
+#include <llvm/ADT/DenseSet.h>
 #include <tbb/concurrent_unordered_set.h>
 #include <tbb/parallel_for.h>
 #include <tbb/task_arena.h>
@@ -380,7 +381,7 @@ std::set<int64_t> get_roots(
 struct QueryState {
   SchemaRef from;
   std::unordered_map<std::string, std::shared_ptr<arrow::Table>> tables;
-  std::unordered_map<std::string, std::set<int64_t>> ids;
+  std::unordered_map<std::string, llvm::DenseSet<int64_t>> ids;
   std::unordered_map<std::string, std::string> aliases;
   std::unordered_map<std::string,
                      std::map<int64_t, std::vector<GraphConnection>>>
@@ -406,7 +407,7 @@ struct QueryState {
     return aliases[schema_ref.value()];
   }
 
-  const std::set<int64_t>& get_ids(const SchemaRef& schema_ref) {
+  const llvm::DenseSet<int64_t>& get_ids(const SchemaRef& schema_ref) {
     return ids[schema_ref.value()];
   }
 
@@ -1180,9 +1181,9 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows_bfs(
   return std::make_shared<std::vector<Row>>(merged);
 }
 
-template <NodeIds NodeIdsT>
+// template <NodeIds NodeIdsT>
 arrow::Result<std::shared_ptr<std::vector<Row>>> populate_batch_rows(
-    const NodeIdsT& node_ids, const SchemaRef& schema_ref,
+    const llvm::DenseSet<int64_t>& node_ids, const SchemaRef& schema_ref,
     const std::shared_ptr<arrow::Schema>& output_schema,
     const QueryState& query_state, const TraverseType join_type,
     tbb::concurrent_unordered_set<std::string>& global_visited) {
@@ -1220,15 +1221,15 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_batch_rows(
   return rows;
 }
 
-std::vector<std::vector<int64_t>> batch_node_ids(const std::set<int64_t>& ids,
-                                                 const size_t batch_size) {
-  std::vector<std::vector<int64_t>> batches;
+std::vector<llvm::DenseSet<int64_t>> batch_node_ids(
+    const llvm::DenseSet<int64_t>& ids, const size_t batch_size) {
+  std::vector<llvm::DenseSet<int64_t>> batches;
   batches.reserve(ids.size() / batch_size + 1);
-  std::vector<int64_t> current_batch;
+  llvm::DenseSet<int64_t> current_batch;
   current_batch.reserve(batch_size);
 
   for (const auto& id : ids) {
-    current_batch.push_back(id);
+    current_batch.insert(id);
 
     if (current_batch.size() >= batch_size) {
       batches.push_back(std::move(current_batch));
@@ -1622,6 +1623,24 @@ arrow::Result<std::shared_ptr<arrow::Table>> inline_where(
   return curr_table;
 }
 
+template <class SetA, class SetB, class OutSet>
+void dense_intersection(const SetA& a, const SetB& b, OutSet& out) {
+  const auto& small = a.size() < b.size() ? a : b;
+  const auto& large = a.size() < b.size() ? b : a;
+  out.clear();
+  out.reserve(std::min(a.size(), b.size()));
+  for (const auto& x : small)
+    if (large.contains(x)) out.insert(x);
+}
+
+template <class SetA, class SetB, class OutSet>
+void dense_difference(const SetA& a, const SetB& b, OutSet& out) {
+  out.clear();
+  out.reserve(a.size());
+  for (const auto& x : a)
+    if (!b.contains(x)) out.insert(x);
+}
+
 arrow::Result<std::shared_ptr<QueryResult>> Database::query(
     const Query& query) const {
   QueryState query_state;
@@ -1741,9 +1760,9 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           log_debug("Traversing from {} source nodes",
                     query_state.ids[source.value()].size());
         }
-        std::set<int64_t> matched_source_ids;
-        std::set<int64_t> matched_target_ids;
-        std::set<int64_t> unmatched_source_ids;
+        llvm::DenseSet<int64_t> matched_source_ids;
+        llvm::DenseSet<int64_t> matched_target_ids;
+        llvm::DenseSet<int64_t> unmatched_source_ids;
         for (auto source_id : query_state.ids[source.value()]) {
           auto outgoing_edges =
               edge_store_->get_outgoing_edges(source_id, traverse->edge_type())
@@ -1832,13 +1851,11 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           // after b:0 -> c:1 we need to intersect it with ids[c] =
           // intersect({0}, {1}) => {}
           auto target_ids = query_state.get_ids(traverse->target());
-          std::set<int64_t> intersect_ids;
+          llvm::DenseSet<int64_t> intersect_ids;
           if (target_ids.empty()) {
             intersect_ids = matched_target_ids;
           } else {
-            std::ranges::set_intersection(
-                target_ids, matched_target_ids,
-                std::inserter(intersect_ids, intersect_ids.begin()));
+            dense_intersection(target_ids, matched_target_ids, intersect_ids);
           }
 
           query_state.ids[traverse->target().value()] = intersect_ids;
@@ -1857,9 +1874,8 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
               "target_ids=[{}]",
               traverse->target().value(), join_container(matched_source_ids),
               join_container(target_ids));
-          std::set<int64_t> result;
-          std::ranges::set_difference(target_ids, matched_source_ids,
-                                      std::inserter(result, result.begin()));
+          llvm::DenseSet<int64_t> result;
+          dense_difference(target_ids, matched_source_ids, result);
           query_state.ids[traverse->target().value()] = result;
         }
 
