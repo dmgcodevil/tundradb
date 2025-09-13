@@ -5,6 +5,8 @@
 #include <arrow/datum.h>
 #include <arrow/table.h>
 #include <llvm/ADT/DenseSet.h>
+#include <llvm/ADT/SmallVector.h>
+#include <llvm/ADT/StringMap.h>
 #include <tbb/concurrent_unordered_set.h>
 #include <tbb/parallel_for.h>
 #include <tbb/task_arena.h>
@@ -381,13 +383,12 @@ std::set<int64_t> get_roots(
 struct QueryState {
   SchemaRef from;
   std::unordered_map<std::string, std::shared_ptr<arrow::Table>> tables;
-  std::unordered_map<std::string, llvm::DenseSet<int64_t>> ids;
+  llvm::StringMap<llvm::DenseSet<int64_t>> ids;
   std::unordered_map<std::string, std::string> aliases;
-  std::unordered_map<std::string,
-                     std::map<int64_t, std::vector<GraphConnection>>>
+  llvm::StringMap<
+      llvm::DenseMap<int64_t, llvm::SmallVector<GraphConnection, 4>>>
       connections;  // outgoing
-
-  std::unordered_map<int64_t, std::vector<GraphConnection>> incoming;
+  llvm::DenseMap<int64_t, llvm::SmallVector<GraphConnection, 4>> incoming;
 
   std::shared_ptr<NodeManager> node_manager;
   std::shared_ptr<SchemaRegistry> schema_registry;
@@ -451,7 +452,7 @@ struct QueryState {
 
     ss << "  IDs (" << ids.size() << "):\n";
     for (const auto& [alias, id_set] : ids) {
-      ss << "    - " << alias << ": " << id_set.size() << " IDs\n";
+      ss << "    - " << alias.str() << ": " << id_set.size() << " IDs\n";
     }
 
     ss << "  Aliases (" << aliases.size() << "):\n";
@@ -463,7 +464,7 @@ struct QueryState {
        << " source nodes):";
     for (const auto& [from, conns] : connections) {
       for (const auto& [from_id, conn_vec] : conns) {
-        ss << "from " << from << ":" << from_id << ":\n";
+        ss << "from " << from.str() << ":" << from_id << ":\n";
         for (const auto& conn : conn_vec) {
           ss << "    - " << conn.target.value() << ":" << conn.target_id
              << "\n";
@@ -1778,7 +1779,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
                       outgoing_edges.size(), traverse->edge_type());
           }
 
-          std::vector<std::shared_ptr<Node>> target_nodes;
+          bool source_had_match = false;
           for (auto edge : outgoing_edges) {
             auto target_id = edge->get_target_id();
             if (query_state.ids.contains(traverse->target().value()) &&
@@ -1808,7 +1809,19 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
                               source_id, traverse->edge_type(),
                               traverse->target().value(), target_node->id);
                   }
-                  target_nodes.push_back(target_node);
+                  // record match immediately to avoid extra containers/copies
+                  if (!source_had_match) {
+                    matched_source_ids.insert(source_id);
+                    source_had_match = true;
+                  }
+                  matched_target_ids.insert(target_node->id);
+                  auto conn =
+                      GraphConnection{traverse->source(),    source_id,
+                                      traverse->edge_type(), "",
+                                      traverse->target(),    target_node->id};
+                  query_state.connections[traverse->source().value()][source_id]
+                      .push_back(conn);
+                  query_state.incoming[target_node->id].push_back(conn);
                 }
               }
             } else {
@@ -1817,19 +1830,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
                        node_result.status().ToString());
             }
           }
-          if (!target_nodes.empty()) {
-            matched_source_ids.insert(source_id);
-            for (const auto& target_node : target_nodes) {
-              matched_target_ids.insert(target_node->id);
-              auto conn = GraphConnection{
-                  traverse->source(), source_id,      traverse->edge_type(), "",
-                  traverse->target(), target_node->id};
-
-              query_state.connections[traverse->source().value()][source_id]
-                  .push_back(conn);
-              query_state.incoming[target_node->id].push_back(conn);
-            }
-          } else {
+          if (!source_had_match) {
             if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
               log_debug("no edge found from {}:{}", source.value(), source_id);
             }
