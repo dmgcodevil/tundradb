@@ -20,23 +20,24 @@ namespace tundradb {
  * Helper functions for bit set manipulation to track which fields are set
  */
 inline size_t get_bitset_size_bytes(const size_t num_fields) {
-  return (num_fields + 7) / 8;  // Round up to nearest byte
+  size_t bit_words = (num_fields + 63) / 64;
+  size_t bitset_bytes = bit_words * sizeof(uint64_t);
+  return bitset_bytes;
 }
 
-inline bool is_field_set(const char* bitset, const size_t field_index) {
-  const size_t byte_index = field_index / 8;
-  const size_t bit_index = field_index % 8;
-  return (bitset[byte_index] & (1 << bit_index)) != 0;
+inline bool is_field_set(const char* base, const size_t idx) {
+  auto words = reinterpret_cast<const uint64_t*>(base);
+  return (words[idx >> 6] >> (idx & 63)) & 1ULL;
 }
 
-inline void set_field_bit(char* bitset, const size_t field_index,
-                          const bool is_set) {
-  const size_t byte_index = field_index / 8;
-  const size_t bit_index = field_index % 8;
+inline void set_field_bit(char* base, size_t idx, bool is_set) {
+  auto words = reinterpret_cast<uint64_t*>(base);
+  uint64_t mask = 1ULL << (idx & 63);
+  uint64_t& w = words[idx >> 6];
   if (is_set) {
-    bitset[byte_index] |= (1 << bit_index);
+    w |= mask;
   } else {
-    bitset[byte_index] &= ~(1 << bit_index);
+    w &= ~mask;
   }
 }
 

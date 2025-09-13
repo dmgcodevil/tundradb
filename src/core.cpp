@@ -1629,16 +1629,22 @@ void dense_intersection(const SetA& a, const SetB& b, OutSet& out) {
   const auto& large = a.size() < b.size() ? b : a;
   out.clear();
   out.reserve(std::min(a.size(), b.size()));
-  for (const auto& x : small)
-    if (large.contains(x)) out.insert(x);
+  for (const auto& x : small) {
+    if (large.contains(x)) {
+      out.insert(x);
+    }
+  }
 }
 
 template <class SetA, class SetB, class OutSet>
 void dense_difference(const SetA& a, const SetB& b, OutSet& out) {
   out.clear();
   out.reserve(a.size());
-  for (const auto& x : a)
-    if (!b.contains(x)) out.insert(x);
+  for (const auto& x : a) {
+    if (!b.contains(x)) {
+      out.insert(x);
+    }
+  }
 }
 
 arrow::Result<std::shared_ptr<QueryResult>> Database::query(
@@ -1767,8 +1773,10 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           auto outgoing_edges =
               edge_store_->get_outgoing_edges(source_id, traverse->edge_type())
                   .ValueOrDie();  // todo check result
-          log_debug("Node {} has {} outgoing edges of type '{}'", source_id,
-                    outgoing_edges.size(), traverse->edge_type());
+          if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+            log_debug("Node {} has {} outgoing edges of type '{}'", source_id,
+                      outgoing_edges.size(), traverse->edge_type());
+          }
 
           std::vector<std::shared_ptr<Node>> target_nodes;
           for (auto edge : outgoing_edges) {
@@ -1795,9 +1803,11 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
                   }
                 }
                 if (passes_all_filters) {
-                  log_debug("found edge {}:{} -[{}]-> {}:{}", source.value(),
-                            source_id, traverse->edge_type(),
-                            traverse->target().value(), target_node->id);
+                  if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+                    log_debug("found edge {}:{} -[{}]-> {}:{}", source.value(),
+                              source_id, traverse->edge_type(),
+                              traverse->target().value(), target_node->id);
+                  }
                   target_nodes.push_back(target_node);
                 }
               }
@@ -1820,7 +1830,9 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
               query_state.incoming[target_node->id].push_back(conn);
             }
           } else {
-            log_debug("no edge found from {}:{}", source.value(), source_id);
+            if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+              log_debug("no edge found from {}:{}", source.value(), source_id);
+            }
             unmatched_source_ids.insert(source_id);
           }
         }
@@ -1859,9 +1871,12 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           }
 
           query_state.ids[traverse->target().value()] = intersect_ids;
-          log_debug("intersect_ids count: {}", intersect_ids.size());
-          log_debug("{} intersect_ids: {}", traverse->target().toString(),
-                    join_container(intersect_ids));
+          if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+            log_debug("intersect_ids count: {}", intersect_ids.size());
+            log_debug("{} intersect_ids: {}", traverse->target().toString(),
+                      join_container(intersect_ids));
+          }
+
         } else if (traverse->traverse_type() == TraverseType::Left) {
           query_state.ids[traverse->target().value()].insert(
               matched_target_ids.begin(), matched_target_ids.end());
@@ -1869,11 +1884,13 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           auto target_ids =
               get_ids_from_table(get_table(target_schema).ValueOrDie())
                   .ValueOrDie();
-          log_debug(
-              "traverse type: '{}', matched_source_ids=[{}], "
-              "target_ids=[{}]",
-              traverse->target().value(), join_container(matched_source_ids),
-              join_container(target_ids));
+          if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+            log_debug(
+                "traverse type: '{}', matched_source_ids=[{}], "
+                "target_ids=[{}]",
+                traverse->target().value(), join_container(matched_source_ids),
+                join_container(target_ids));
+          }
           llvm::DenseSet<int64_t> result;
           dense_difference(target_ids, matched_source_ids, result);
           query_state.ids[traverse->target().value()] = result;
