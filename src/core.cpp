@@ -1187,6 +1187,7 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_batch_rows(
     const QueryState& query_state, const TraverseType join_type,
     tbb::concurrent_unordered_set<std::string>& global_visited) {
   auto rows = std::make_shared<std::vector<Row>>();
+  rows->reserve(node_ids.size());
   std::set<std::string> local_visited;
   // For INNER join: only process nodes that have connections
   // For LEFT join: process all nodes from the "left" side
@@ -1220,8 +1221,9 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_batch_rows(
 }
 
 std::vector<std::vector<int64_t>> batch_node_ids(const std::set<int64_t>& ids,
-                                                 size_t batch_size) {
+                                                 const size_t batch_size) {
   std::vector<std::vector<int64_t>> batches;
+  batches.reserve(ids.size() / batch_size + 1);
   std::vector<int64_t> current_batch;
   current_batch.reserve(batch_size);
 
@@ -1255,10 +1257,12 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows(
 
   // Map schemas to their join types
   std::unordered_map<std::string, TraverseType> schema_join_types;
-  schema_join_types[query_state.from.value()] =
-      TraverseType::Inner;  // FROM is always inner by default
+  schema_join_types.reserve(traverses.size());
   if (traverses.empty()) {
     schema_join_types[query_state.from.value()] = TraverseType::Left;
+  } else {
+    // FROM is always inner by default
+    schema_join_types[query_state.from.value()] = TraverseType::Inner;
   }
 
   // Only apply LEFT JOIN to FROM schema if the FROM schema is directly involved
