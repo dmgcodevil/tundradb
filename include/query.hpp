@@ -22,11 +22,15 @@ struct SchemaRef {
   std::string schema_;
   std::string value_;
   bool declaration_;
+  // Cached 16-bit tag for fast path operations (e.g., BFS packing)
+  uint16_t schema_tag_ = 0;
 
  public:
   [[nodiscard]] std::string schema() const { return schema_; }
   [[nodiscard]] std::string value() const { return value_; }
   [[nodiscard]] bool is_declaration() const { return declaration_; }
+  [[nodiscard]] uint16_t tag() const { return schema_tag_; }
+  void set_tag(uint16_t t) { schema_tag_ = t; }
 
   static SchemaRef parse(const std::string& s) {
     SchemaRef r;
@@ -154,6 +158,10 @@ class Traverse final : public Clause {
   [[nodiscard]] const std::string& edge_type() const { return edge_type_; }
   [[nodiscard]] const SchemaRef& target() const { return target_; }
   [[nodiscard]] TraverseType traverse_type() const { return traverse_type_; }
+
+  // Internal mutation helpers for precomputing tags
+  SchemaRef& mutable_source() { return source_; }
+  SchemaRef& mutable_target() { return target_; }
 };
 
 struct Select final : Clause {

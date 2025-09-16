@@ -6,6 +6,7 @@
 #include <arrow/datum.h>
 #include <arrow/result.h>
 #include <arrow/table.h>
+#include <llvm/ADT/DenseSet.h>
 #include <uuid/uuid.h>
 
 #include <iostream>
@@ -84,7 +85,7 @@ static arrow::Result<std::shared_ptr<arrow::Table>> filter_table_by_id(
   return filtered_table.table();
 }
 
-static arrow::Result<std::set<int64_t>> get_ids_from_table(
+static arrow::Result<llvm::DenseSet<int64_t>> get_ids_from_table(
     std::shared_ptr<arrow::Table> table) {
   log_debug("Extracting IDs from table with {} rows", table->num_rows());
 
@@ -95,7 +96,8 @@ static arrow::Result<std::set<int64_t>> get_ids_from_table(
   }
 
   auto id_column = table->column(id_idx);
-  std::set<int64_t> result_ids;
+  llvm::DenseSet<int64_t> result_ids;
+  result_ids.reserve(table->num_rows());
 
   for (int chunk_idx = 0; chunk_idx < id_column->num_chunks(); chunk_idx++) {
     auto chunk = std::static_pointer_cast<arrow::Int64Array>(
