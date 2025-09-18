@@ -3,6 +3,23 @@
 #include "logger.hpp"
 namespace tundradb {
 
+// EdgeView::iterator implementation
+void EdgeView::iterator::advance_to_valid() {
+  while (edge_ids_it_ != edge_ids_end_) {
+    tbb::concurrent_hash_map<int64_t, std::shared_ptr<Edge>>::const_accessor
+        edge_acc;
+    if (store_->edges.find(edge_acc, edge_ids_it_->first)) {
+      auto edge = edge_acc->second;
+      if (type_filter_.empty() || edge->get_type() == type_filter_) {
+        current_edge_ = edge;
+        return;
+      }
+    }
+    ++edge_ids_it_;
+  }
+  current_edge_.reset();
+}
+
 arrow::Result<std::shared_ptr<Edge>> EdgeStore::create_edge(
     int64_t source_id, const std::string& type, int64_t target_id,
     std::unordered_map<std::string, std::shared_ptr<arrow::Array>> properties) {
@@ -124,13 +141,13 @@ arrow::Result<std::vector<std::shared_ptr<Edge>>> EdgeStore::get_edges_from_map(
   }
 
   std::vector<std::shared_ptr<Edge>> result;
-  const auto edge_ids = acc->second.get_all();
-  result.reserve(edge_ids->size());
+  const auto edge_ids = acc->second.get_all_unsafe();
+  result.reserve(edge_ids.size());
 
-  for (const auto& edge_id : *edge_ids) {
+  for (const auto& edge_id : edge_ids) {
     tbb::concurrent_hash_map<int64_t, std::shared_ptr<Edge>>::const_accessor
         edge_acc;
-    if (edges.find(edge_acc, edge_id)) {
+    if (edges.find(edge_acc, edge_id.first)) {
       if (auto edge = edge_acc->second;
           type.empty() || edge->get_type() == type) {
         result.push_back(edge);
@@ -149,6 +166,28 @@ arrow::Result<std::vector<std::shared_ptr<Edge>>> EdgeStore::get_outgoing_edges(
 arrow::Result<std::vector<std::shared_ptr<Edge>>> EdgeStore::get_incoming_edges(
     const int64_t id, const std::string& type) const {
   return get_edges_from_map(incoming_edges_, id, type);
+}
+
+arrow::Result<EdgeView> EdgeStore::get_outgoing_edges_view(
+    const int64_t id, const std::string& type) const {
+  tbb::concurrent_hash_map<int64_t, ConcurrentSet<int64_t>>::const_accessor acc;
+  if (!outgoing_edges_.find(acc, id)) {
+    // Return empty view - create a temporary empty ConcurrentSet
+    static const ConcurrentSet<int64_t> empty_set;
+    return EdgeView(this, empty_set, type);
+  }
+  return EdgeView(this, acc->second, type);
+}
+
+arrow::Result<EdgeView> EdgeStore::get_incoming_edges_view(
+    const int64_t id, const std::string& type) const {
+  tbb::concurrent_hash_map<int64_t, ConcurrentSet<int64_t>>::const_accessor acc;
+  if (!incoming_edges_.find(acc, id)) {
+    // Return empty view - create a temporary empty ConcurrentSet
+    static const ConcurrentSet<int64_t> empty_set;
+    return EdgeView(this, empty_set, type);
+  }
+  return EdgeView(this, acc->second, type);
 }
 
 arrow::Result<std::vector<std::shared_ptr<Edge>>> EdgeStore::get_by_type(

@@ -94,6 +94,25 @@ class ConcurrentSet {
     return snapshot;
   }
 
+  class LockedView {
+   public:
+    using iterator =
+        typename tbb::concurrent_hash_map<T, std::monostate>::const_iterator;
+
+    LockedView(const tbb::concurrent_hash_map<T, std::monostate>& data)
+        : data_(data) {}
+
+    iterator begin() const { return data_.begin(); }
+    iterator end() const { return data_.end(); }
+
+    size_t size() const { return data_.size(); }
+
+   private:
+    const tbb::concurrent_hash_map<T, std::monostate>& data_;
+  };
+
+  LockedView get_all_unsafe() const { return LockedView(data_); }
+
   /**
    * @brief Clear all elements from the set
    *

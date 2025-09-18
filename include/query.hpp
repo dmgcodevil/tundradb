@@ -184,6 +184,7 @@ class ComparisonExpr : public Clause, public WhereExpr {
   CompareOp op_;
   Value value_;
   bool inlined_ = false;
+  std::string field_name;
 
   static arrow::Result<bool> compare_values(const Value& value, CompareOp op,
                                             const Value& where_value) {
@@ -308,7 +309,13 @@ class ComparisonExpr : public Clause, public WhereExpr {
 
  public:
   ComparisonExpr(std::string field, CompareOp op, Value value)
-      : field_(std::move(field)), op_(op), value_(std::move(value)) {}
+      : field_(std::move(field)), op_(op), value_(std::move(value)) {
+    if (const size_t dot_pos = field_.find('.'); dot_pos != std::string::npos) {
+      field_name = field_.substr(dot_pos + 1);
+    } else {
+      field_name = field_;
+    }
+  }
 
   [[nodiscard]] const std::string& field() const { return field_; }
   [[nodiscard]] CompareOp op() const { return op_; }
@@ -400,14 +407,6 @@ class ComparisonExpr : public Clause, public WhereExpr {
 
     // parse field name to extract variable and field parts
     // expected format: "variable.field" (e.g., "user.age", "company.name")
-    const size_t dot_pos = field_.find('.');
-    std::string field_name;
-
-    if (dot_pos != std::string::npos) {
-      field_name = field_.substr(dot_pos + 1);
-    } else {
-      field_name = field_;
-    }
 
     ARROW_ASSIGN_OR_RAISE(auto field_value, node->get_value(field_name));
     return compare_values(field_value, op_, value_);
