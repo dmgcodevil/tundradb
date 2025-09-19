@@ -168,6 +168,40 @@ class Value {
 
   ValueType type() const { return type_; }
 
+  const char* data_ptr() const {
+    // Logger::get_instance().debug("data_ptr");
+    switch (type_) {
+      case ValueType::INT32:
+        return reinterpret_cast<const char*>(&std::get<int32_t>(data_));
+      case ValueType::INT64:
+        return reinterpret_cast<const char*>(&std::get<int64_t>(data_));
+      case ValueType::FLOAT:
+        return reinterpret_cast<const char*>(&std::get<float>(data_));
+      case ValueType::DOUBLE:
+        return reinterpret_cast<const char*>(&std::get<double>(data_));
+      case ValueType::BOOL:
+        return reinterpret_cast<const char*>(&std::get<bool>(data_));
+      case ValueType::STRING:
+      case ValueType::FIXED_STRING16:
+      case ValueType::FIXED_STRING32:
+      case ValueType::FIXED_STRING64: {
+        return reinterpret_cast<const char*>(&std::get<StringRef>(data_));
+
+        // if (std::holds_alternative<StringRef>(data_)) {
+        //   Logger::get_instance().debug("bob");
+        //   return std::get<StringRef>(data_).data;
+        // } else if (std::holds_alternative<std::string>(data_)) {
+        //   Logger::get_instance().debug("dod");
+        //   return std::get<std::string>(data_).data();
+        // }
+        // return nullptr;
+      }
+      case ValueType::NA:
+      default:
+        return nullptr;
+    }
+  }
+
   template <typename T>
   const T& get() const {
     return std::get<T>(data_);

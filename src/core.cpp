@@ -107,7 +107,12 @@ arrow::Result<std::shared_ptr<arrow::Scalar>> value_ptr_to_arrow_scalar(
       return arrow::MakeScalar(*reinterpret_cast<const double*>(ptr));
     case ValueType::STRING: {
       auto str_ref = *reinterpret_cast<const StringRef*>(ptr);
-      return arrow::MakeScalar(str_ref.to_string());
+      if (str_ref.is_null()) {
+        return arrow::MakeNullScalar(arrow::utf8());
+      }
+      // Create string directly from StringRef without intermediate to_string()
+      // call
+      return arrow::MakeScalar(std::string(str_ref.data, str_ref.length));
     }
     case ValueType::BOOL:
       return arrow::MakeScalar(*reinterpret_cast<const bool*>(ptr));
@@ -171,14 +176,15 @@ arrow::compute::Expression where_condition_to_expression(
 arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
     const std::shared_ptr<arrow::Schema>& schema,
     const std::vector<std::shared_ptr<Node>>& nodes) {
-  log_debug("Creating table from {} nodes with schema '{}'", nodes.size(),
-            schema->ToString());
+  // log_debug("Creating table from {} nodes with schema '{}'", nodes.size(),
+  //           schema->ToString());
 
   // Create builders for each field
   std::vector<std::unique_ptr<arrow::ArrayBuilder>> builders;
+  builders.reserve(schema->fields().size());
   for (const auto& field : schema->fields()) {
-    log_debug("Creating builder for field '{}' with type {}", field->name(),
-              field->type()->ToString());
+    // log_debug("Creating builder for field '{}' with type {}", field->name(),
+    //           field->type()->ToString());
     auto builder_result = arrow::MakeBuilder(field->type());
     if (!builder_result.ok()) {
       log_error("Failed to create builder for field '{}': {}", field->name(),
@@ -189,21 +195,20 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
   }
 
   // Populate builders with data from each node
-  log_debug("Adding data from {} nodes to builders", nodes.size());
+  // log_debug("Adding data from {} nodes to builders", nodes.size());
   for (const auto& node : nodes) {
     // Add each field's value to the appropriate builder
     for (int i = 0; i < schema->num_fields(); i++) {
-      auto field = schema->field(i);
+      const auto& field = schema->field(i);
       const auto& field_name = field->name();
 
       // Find the value in the node's data
-      auto res = node->get_value_ptr(field_name);
-      if (res.ok()) {
+      ValueType value_type;
+      const char* value = node->get_value_ptr(field_name, &value_type);
+
         // Convert Value to Arrow scalar and append to builder
-        auto value = res.ValueOrDie();
         if (value) {
-          auto scalar_result = value_ptr_to_arrow_scalar(
-              value, arrow_type_to_value_type(field->type()));
+          auto scalar_result = value_ptr_to_arrow_scalar(value, value_type);
           if (!scalar_result.ok()) {
             log_error("Failed to convert value to scalar for field '{}': {}",
                       field_name, scalar_result.status().ToString());
@@ -218,7 +223,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
             return status;
           }
         } else {
-          log_debug("Null value for field '{}', appending null", field_name);
+          // log_debug("Null value for field '{}', appending null", field_name);
           auto status = builders[i]->AppendNull();
           if (!status.ok()) {
             log_error("Failed to append null for field '{}': {}", field_name,
@@ -226,20 +231,22 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
             return status;
           }
         }
-      } else {
-        log_debug("Field '{}' not found in node, appending null", field_name);
-        auto status = builders[i]->AppendNull();
-        if (!status.ok()) {
-          log_error("Failed to append null for field '{}': {}", field_name,
-                    status.ToString());
-          return status;
-        }
       }
-    }
+    // else {
+    //     // log_debug("Field '{}' not found in node, appending null",
+    //     // field_name);
+    //     auto status = builders[i]->AppendNull();
+    //     if (!status.ok()) {
+    //       log_error("Failed to append null for field '{}': {}", field_name,
+    //                 status.ToString());
+    //       return status;
+    //     }
+    //   }
+    // }
   }
 
   // Finish building arrays
-  log_debug("Finalizing arrays from builders");
+  // log_debug("Finalizing arrays from builders");
   std::vector<std::shared_ptr<arrow::Array>> arrays;
   arrays.reserve(builders.size());
   for (auto& builder : builders) {
@@ -253,26 +260,26 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
   }
 
   // Create table
-  log_debug("Creating table with {} rows and {} columns",
-            arrays.empty() ? 0 : arrays[0]->length(), arrays.size());
+  // log_debug("Creating table with {} rows and {} columns",
+  //           arrays.empty() ? 0 : arrays[0]->length(), arrays.size());
   return arrow::Table::Make(schema, arrays);
 }
 
 arrow::Result<std::shared_ptr<arrow::Table>> filter(
     std::shared_ptr<arrow::Table> table, const WhereExpr& condition,
     bool strip_var) {
-  log_debug("Filtering table with WhereCondition: {}", condition.toString());
+  // log_debug("Filtering table with WhereCondition: {}", condition.toString());
 
   try {
     // Convert WhereCondition to Arrow compute expression
     auto filter_expr = where_condition_to_expression(condition, strip_var);
 
-    log_debug("Creating in-memory dataset from table with {} rows",
-              table->num_rows());
+    // log_debug("Creating in-memory dataset from table with {} rows",
+    //           table->num_rows());
     auto dataset = std::make_shared<arrow::dataset::InMemoryDataset>(table);
 
     // Create scanner builder
-    log_debug("Creating scanner builder");
+    // log_debug("Creating scanner builder");
     auto scan_builder_result = dataset->NewScan();
     if (!scan_builder_result.ok()) {
       log_error("Failed to create scanner builder: {}",
@@ -281,14 +288,14 @@ arrow::Result<std::shared_ptr<arrow::Table>> filter(
     }
     auto scan_builder = scan_builder_result.ValueOrDie();
 
-    log_debug("Applying compound filter to scanner builder");
+    // log_debug("Applying compound filter to scanner builder");
     auto filter_status = scan_builder->Filter(filter_expr);
     if (!filter_status.ok()) {
       log_error("Failed to apply filter: {}", filter_status.ToString());
       return filter_status;
     }
 
-    log_debug("Finishing scanner");
+    // log_debug("Finishing scanner");
     auto scanner_result = scan_builder->Finish();
     if (!scanner_result.ok()) {
       log_error("Failed to finish scanner: {}",
@@ -297,7 +304,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> filter(
     }
     auto scanner = scanner_result.ValueOrDie();
 
-    log_debug("Executing scan to table");
+    // log_debug("Executing scan to table");
     auto table_result = scanner->ToTable();
     if (!table_result.ok()) {
       log_error("Failed to convert scan results to table: {}",
@@ -306,8 +313,8 @@ arrow::Result<std::shared_ptr<arrow::Table>> filter(
     }
 
     auto result_table = table_result.ValueOrDie();
-    log_debug("Filter completed: {} rows in, {} rows out", table->num_rows(),
-              result_table->num_rows());
+    // log_debug("Filter completed: {} rows in, {} rows out", table->num_rows(),
+    //           result_table->num_rows());
     return result_table;
 
   } catch (const std::exception& e) {
@@ -567,7 +574,7 @@ struct QueryState {
 
 arrow::Result<std::shared_ptr<arrow::Schema>> build_denormalized_schema(
     const QueryState& query_state) {
-  log_debug("Building schema for denormalized table");
+  // log_debug("Building schema for denormalized table");
 
   std::set<std::string> processed_fields;
   std::vector<std::shared_ptr<arrow::Field>> fields;
@@ -576,7 +583,7 @@ arrow::Result<std::shared_ptr<arrow::Schema>> build_denormalized_schema(
   // First add fields from the FROM schema
   std::string from_schema = query_state.from.value();
 
-  log_debug("Adding fields from FROM schema '{}'", from_schema);
+  // log_debug("Adding fields from FROM schema '{}'", from_schema);
 
   auto schema_result = query_state.schema_registry->get_arrow(
       query_state.aliases.at(from_schema));
@@ -603,7 +610,7 @@ arrow::Result<std::shared_ptr<arrow::Schema>> build_denormalized_schema(
   }
 
   for (const auto& schema_ref : unique_schemas) {
-    log_debug("Adding fields from schema '{}'", schema_ref.value());
+    // log_debug("Adding fields from schema '{}'", schema_ref.value());
 
     schema_result = query_state.schema_registry->get_arrow(
         query_state.aliases.at(schema_ref.value()));
@@ -688,7 +695,7 @@ struct Row {
     for (size_t i = 0; i < n; ++i) {
       const auto& field = fields[i];
       const auto& full_name = fq_field_names[i];
-      this->set_cell(full_name, node->get_value_ptr(field->name()).ValueOrDie(),
+      this->set_cell(full_name, node->get_value_ptr(field->name(), nullptr),
                      field->type());
     }
     // schema_ids[node->get_schema()->name()] = node->id;
@@ -1016,7 +1023,7 @@ struct RowNode {
       }
       final_merged_rows = std::move(temp_product_accumulator);
       if (final_merged_rows.empty()) {
-        log_debug("product_accumulator is empty. stop merge");
+        // log_debug("product_accumulator is empty. stop merge");
         break;
       }
     }
@@ -1394,14 +1401,14 @@ arrow::Result<std::shared_ptr<std::vector<std::shared_ptr<Row>>>> populate_rows(
     }
   }
 
-  log_debug("Processing {} schemas with their respective join types",
-            ordered_schemas.size());
+  // log_debug("Processing {} schemas with their respective join types",
+  //           ordered_schemas.size());
 
   // Process each schema in order
   for (const auto& schema_ref : ordered_schemas) {
     TraverseType join_type = schema_join_types[schema_ref.value()];
-    log_debug("Processing schema '{}' with join type {}", schema_ref.value(),
-              static_cast<int>(join_type));
+    // log_debug("Processing schema '{}' with join type {}", schema_ref.value(),
+    //           static_cast<int>(join_type));
 
     if (!query_state.ids.contains(schema_ref.value())) {
       log_warn("Schema '{}' not found in query state IDs", schema_ref.value());
@@ -1477,8 +1484,8 @@ arrow::Result<std::shared_ptr<std::vector<std::shared_ptr<Row>>>> populate_rows(
     }
   }
 
-  log_debug("Generated {} total rows after processing all schemas",
-            rows->size());
+  // log_debug("Generated {} total rows after processing all schemas",
+  //           rows->size());
   return rows;
 }
 
@@ -1697,7 +1704,7 @@ std::vector<std::shared_ptr<WhereExpr>> get_where_to_inline(
     if (clauses[i]->type() == Clause::Type::WHERE) {
       auto where_expr = std::dynamic_pointer_cast<WhereExpr>(clauses[i]);
       if (where_expr->can_inline(target_var)) {
-        log_debug("inline where: '{}'", where_expr->toString());
+        // log_debug("inline where: '{}'", where_expr->toString());
         inlined.push_back(where_expr);
       }
     }
@@ -1711,7 +1718,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> inline_where(
     const std::vector<std::shared_ptr<WhereExpr>>& where_exprs) {
   auto curr_table = std::move(table);
   for (const auto& exp : where_exprs) {
-    log_debug("inline where '{}'", exp->toString());
+    // log_debug("inline where '{}'", exp->toString());
     auto result = filter(curr_table, *exp, true);
     if (!result.ok()) {
       log_error(
@@ -1754,14 +1761,14 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
     const Query& query) const {
   QueryState query_state;
   auto result = std::make_shared<QueryResult>();
-  log_debug("Executing query starting from schema '{}'",
-            query.from().toString());
+  // log_debug("Executing query starting from schema '{}'",
+  //           query.from().toString());
   query_state.node_manager = this->node_manager_;
   query_state.schema_registry = this->schema_registry_;
   query_state.from = query.from();
 
   {
-    log_debug("processing 'from' {}", query.from().toString());
+    // log_debug("processing 'from' {}", query.from().toString());
     // Precompute tag for FROM schema (alias-based hash)
     query_state.from = query.from();
     query_state.from.set_tag(QueryState::compute_alias_tag(query_state.from));
@@ -1798,7 +1805,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
     }
   }
 
-  log_debug("Processing {} query clauses", query.clauses().size());
+  // log_debug("Processing {} query clauses", query.clauses().size());
 
   // Precompute 16-bit alias-based tags for all SchemaRefs
   // Also precompute fully-qualified field names per alias used in the query
@@ -1809,7 +1816,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
       case Clause::Type::WHERE: {
         auto where = std::dynamic_pointer_cast<WhereExpr>(clause);
         if (where->inlined()) {
-          log_debug("where '{}' is inlined, skip", where->toString());
+          // log_debug("where '{}' is inlined, skip", where->toString());
           continue;
         }
         auto variables = where->get_all_variables();
@@ -1820,7 +1827,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
               where->toString());
         }
         if (variables.size() == 1) {
-          log_debug("Processing WHERE clause: '{}'", where->toString());
+          // log_debug("Processing WHERE clause: '{}'", where->toString());
 
           std::unordered_map<std::string, std::set<int64_t>> new_front_ids;
           std::string variable = *variables.begin();
@@ -1838,8 +1845,8 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           ARROW_RETURN_NOT_OK(query_state.update_table(
               filtered_table_result.ValueOrDie(), SchemaRef::parse(variable)));
         } else {
-          log_debug("Add compound WHERE expression: '{}' to post process",
-                    where->toString());
+          // log_debug("Add compound WHERE expression: '{}' to post process",
+          //           where->toString());
           post_where.emplace_back(where);
         }
         break;
@@ -1971,11 +1978,11 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
         if (traverse->traverse_type() == TraverseType::Inner &&
             !unmatched_source_ids.empty()) {
           for (auto id : unmatched_source_ids) {
-            log_debug("remove unmatched node={}:{}", source.value(), id);
+            // log_debug("remove unmatched node={}:{}", source.value(), id);
             query_state.remove_node(id, source);
           }
-          log_debug("rebuild table for schema {}:{}", source.value(),
-                    query_state.aliases[source.value()]);
+          // log_debug("rebuild table for schema {}:{}", source.value(),
+          //           query_state.aliases[source.value()]);
           auto table_result =
               filter_table_by_id(query_state.tables[source.value()],
                                  query_state.ids[source.value()]);
@@ -1984,8 +1991,8 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           }
           query_state.tables[source.value()] = table_result.ValueOrDie();
         }
-        log_debug("found {} neighbors for {}", matched_target_ids.size(),
-                  traverse->target().toString());
+        // log_debug("found {} neighbors for {}", matched_target_ids.size(),
+        //           traverse->target().toString());
 
         if (traverse->traverse_type() == TraverseType::Inner) {
           // intersect
@@ -2066,7 +2073,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
     return output_schema_res.status();
   }
   const auto output_schema = output_schema_res.ValueOrDie();
-  log_debug("output_schema={}", output_schema->ToString());
+  // log_debug("output_schema={}", output_schema->ToString());
 
   auto row_res = populate_rows(query.execution_config(), query_state,
                                query_state.traversals, output_schema);
@@ -2083,7 +2090,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
   auto output_table = output_table_res.ValueOrDie();
   for (const auto& expr : post_where) {
     result->mutable_execution_stats().num_where_clauses_post_processed++;
-    log_debug("post process where: {}", expr->toString());
+    // log_debug("post process where: {}", expr->toString());
     output_table = filter(output_table, *expr, false).ValueOrDie();
   }
   result->set_table(apply_select(query.select(), output_table));

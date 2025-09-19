@@ -6,7 +6,8 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
-
+#include <iostream>
+#include "llvm/ADT/DenseMap.h"
 #include "node_arena.hpp"
 #include "schema.hpp"
 #include "types.hpp"
@@ -20,7 +21,7 @@ enum UpdateType {
 
 class Node {
  private:
-  std::unordered_map<std::string, Value> data_;
+  llvm::StringMap<Value> data_;
   std::unique_ptr<NodeHandle> handle_;
   std::shared_ptr<NodeArena> arena_;
   std::shared_ptr<Schema> schema_;
@@ -31,7 +32,7 @@ class Node {
   std::string schema_name;
 
   explicit Node(const int64_t id, std::string schema_name,
-                std::unordered_map<std::string, Value> initial_data,
+                llvm::StringMap<Value> initial_data,
                 std::unique_ptr<NodeHandle> handle = nullptr,
                 std::shared_ptr<NodeArena> arena = nullptr,
                 std::shared_ptr<Schema> schema = nullptr,
@@ -56,21 +57,29 @@ class Node {
     data_[field_name] = std::move(value);
   }
 
-  arrow::Result<const char *> get_value_ptr(
-      const std::string &field_name) const {
+  const char * get_value_ptr(const std::string &field_name, ValueType* out_type) const {
     if (arena_ != nullptr) {
       // if (schema_->get_field(field_name) == nullptr) {
       //   // Logger::get_instance().debug("Field not found");
       //   return arrow::Status::KeyError("Field not found: ", field_name);
       // }
-      return arena_->get_field_value_ptr(*handle_, layout_, field_name);
+      return arena_->get_field_value_ptr(*handle_, layout_, field_name, out_type);
     }
 
+    // const char * get_value_ptr(const std::string &field_name) const {
+    //   return get_value_ptr(field_name, nullptr);
+    // }
     const auto it = data_.find(field_name);
-    if (it == data_.end()) {
-      return arrow::Status::KeyError("Field not found: ", field_name);
-    }
-    return arrow::Status::NotImplemented("");
+    // if (it == data_.end()) {
+    //   return arrow::Status::KeyError("Field not found: ", field_name);
+    // }
+    // Logger::get_instance().debug("get value ptr {}", field_name);
+    // const char * p = it->second.data_ptr();
+    // auto v = Value::read_value_from_memory(p, it->second.type());
+    // Logger::get_instance().debug("get value ptr {}={}", field_name,
+    // v.to_string() );
+    return it->second.data_ptr();
+    // return arrow::Status::NotImplemented("");
   }
 
   arrow::Result<Value> get_value(const std::string &field_name) const {
@@ -132,10 +141,20 @@ class NodeManager {
     use_node_arena_ = use_node_arena;
     schema_registry_ = std::move(schema_registry);
     layout_registry_ = std::make_shared<LayoutRegistry>();
-    node_arena_ = node_arena_factory::create_free_list_arena(layout_registry_);
+    if (use_node_arena) {
+      node_arena_ =
+          node_arena_factory::create_free_list_arena(layout_registry_);
+    }
   }
 
-  ~NodeManager() { node_arena_->clear(); }
+  ~NodeManager() {
+    if (node_arena_) {
+      node_arena_->clear();
+    }
+    if (string_arena_) {
+      string_arena_->clear();
+    }
+  }
 
   arrow::Result<std::shared_ptr<Node>> get_node(const int64_t id) {
     return nodes[id];
@@ -216,7 +235,7 @@ class NodeManager {
       nodes[id] = node;
       return node;
     } else {
-      std::unordered_map<std::string, Value> normalized_data;
+      llvm::StringMap<Value> normalized_data;
       normalized_data["id"] = Value{id};
 
       for (const auto &field : schema_->fields()) {
@@ -225,7 +244,18 @@ class NodeManager {
           normalized_data[field->name()] = Value();
         } else {
           const auto value = data.find(field->name())->second;
-          normalized_data[field->name()] = value;
+          if (is_string_type(value.type())) {
+            auto str_ref =
+                string_arena_->store_string(value.get<std::string>());
+            normalized_data[field->name()] = Value{str_ref};
+            // Logger::get_instance().debug("string arena: {}",
+            // normalized_data[field->name()].to_string());
+            // Logger::get_instance().debug("string arena2: {}",
+            //   Value::read_value_from_memory(normalized_data[field->name()].data_ptr(),
+            //   ValueType::STRING).to_string() );
+          } else {
+            normalized_data[field->name()] = value;
+          }
         }
       }
 
@@ -248,6 +278,7 @@ class NodeManager {
   std::shared_ptr<SchemaRegistry> schema_registry_;
   std::shared_ptr<LayoutRegistry> layout_registry_;
   std::shared_ptr<NodeArena> node_arena_;
+  std::shared_ptr<StringArena> string_arena_ = std::make_shared<StringArena>();
   bool validation_enabled_;
   bool use_node_arena_;
 
@@ -258,7 +289,7 @@ class NodeManager {
   // cache layout
   std::shared_ptr<SchemaLayout> layout_;
 
-  const std::unordered_map<std::string, Value> EMPTY_DATA{};
+  const llvm::StringMap<Value> EMPTY_DATA{};
 
   // since node creation is single threaded, we can cache the layout
   // w/o synchronization
@@ -279,7 +310,9 @@ class NodeManager {
     if (schema_name_ == schema_name) return;
     schema_name_ = schema_name;
     schema_ = schema_registry_->get(schema_name).ValueOrDie();
-    layout_ = create_or_get_layout(schema_name);
+    if (use_node_arena_) {
+      layout_ = create_or_get_layout(schema_name);
+    }
   }
 };
 

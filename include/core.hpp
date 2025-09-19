@@ -765,28 +765,31 @@ class Database {
 
   arrow::Result<std::shared_ptr<arrow::Table>> get_table(
       const std::string &schema_name, size_t chunk_size = 10000) const {
-    ARROW_ASSIGN_OR_RAISE(auto schema,
-                          schema_registry_->get_arrow(schema_name));
+    auto shard = shard_manager_->get_shard(schema_name, 0).ValueOrDie();
+    return shard->get_table();
 
-    ARROW_ASSIGN_OR_RAISE(auto all_nodes,
-                          shard_manager_->get_nodes(schema_name));
-
-    if (all_nodes.empty()) {
-      std::vector<std::shared_ptr<arrow::ChunkedArray>> empty_columns;
-      empty_columns.reserve(schema->num_fields());
-      for (int i = 0; i < schema->num_fields(); i++) {
-        empty_columns.push_back(std::make_shared<arrow::ChunkedArray>(
-            std::vector<std::shared_ptr<arrow::Array>>{}));
-      }
-      return arrow::Table::Make(schema, empty_columns);
-    }
-
-    std::ranges::sort(all_nodes, [](const std::shared_ptr<Node> &a,
-                                    const std::shared_ptr<Node> &b) {
-      return a->id < b->id;
-    });
-
-    return create_table(schema, all_nodes, chunk_size);
+    // ARROW_ASSIGN_OR_RAISE(auto schema,
+    //                       schema_registry_->get_arrow(schema_name));
+    //
+    // ARROW_ASSIGN_OR_RAISE(auto all_nodes,
+    //                       shard_manager_->get_nodes(schema_name));
+    //
+    // if (all_nodes.empty()) {
+    //   std::vector<std::shared_ptr<arrow::ChunkedArray>> empty_columns;
+    //   empty_columns.reserve(schema->num_fields());
+    //   for (int i = 0; i < schema->num_fields(); i++) {
+    //     empty_columns.push_back(std::make_shared<arrow::ChunkedArray>(
+    //         std::vector<std::shared_ptr<arrow::Array>>{}));
+    //   }
+    //   return arrow::Table::Make(schema, empty_columns);
+    // }
+    //
+    // std::ranges::sort(all_nodes, [](const std::shared_ptr<Node> &a,
+    //                                 const std::shared_ptr<Node> &b) {
+    //   return a->id < b->id;
+    // });
+    //
+    // return create_table(schema, all_nodes, chunk_size);
   }
 
   arrow::Result<size_t> get_shard_count(const std::string &schema_name) const {

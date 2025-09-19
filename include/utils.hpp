@@ -159,11 +159,14 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
   for (const auto& node : nodes) {
     for (int i = 0; i < schema->num_fields(); i++) {
       const auto& field = schema->field(i);
-      auto field_result = node->get_value_ptr(field->name());
-      if (!field_result.ok()) {
-        ARROW_RETURN_NOT_OK(builders[i]->AppendNull());
-      } else {
-        const auto value_ptr = field_result.ValueOrDie();
+      auto value_ptr = node->get_value_ptr(field->name(), nullptr);
+
+
+      // if (!field_result.ok()) {
+      //   ARROW_RETURN_NOT_OK(builders[i]->AppendNull());
+      // }
+      // else {
+        // const auto value_ptr = field_result.ValueOrDie();
         if (value_ptr == nullptr) {
           ARROW_RETURN_NOT_OK(builders[i]->AppendNull());
         } else {
@@ -210,7 +213,7 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
             default:
               return arrow::Status::NotImplemented("Unsupported type: ",
                                                    field->type()->ToString());
-          }
+
         }
       }
     }
