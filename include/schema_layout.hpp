@@ -240,12 +240,12 @@ class SchemaLayout {
   }
 
   size_t get_field_index(const std::string& name) const {
-    // const auto it = field_index_.find(name);
-    // return it != field_index_.end() ? it->second : -1;
-    if (name[0] == 'i' && name.size() == 2) return 0;
-    if (name[0] == 'n' || name[0] == 'i') return 1;
-    if (name[0] == 'a') return 2;
-    if (name[0] == 'c') return 3;
+    const auto it = field_index_.find(name);
+    return it != field_index_.end() ? it->second : -1;
+    // if (name[0] == 'i' && name.size() == 2) return 0;
+    // if (name[0] == 'n' || name[0] == 'i') return 1;
+    // if (name[0] == 'a') return 2;
+    // if (name[0] == 'c') return 3;
     return  -1;
   }
 

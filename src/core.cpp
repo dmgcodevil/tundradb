@@ -37,6 +37,77 @@ namespace tundradb {
 
 constexpr static uint64_t NODE_MASK = (1ULL << 48) - 1;
 
+
+// Deterministic 16-bit tag from alias string (SchemaRef::value()).
+// https://www.ietf.org/archive/id/draft-eastlake-fnv-21.html
+static uint16_t compute_tag(const SchemaRef& ref) {
+  // FNV-1a 32-bit, then fold to 16 bits.
+  const std::string& s = ref.value();
+  uint32_t h = 2166136261u;
+  for (unsigned char c : s) {
+    h ^= c;
+    h *= 16777619u;
+  }
+  h ^= (h >> 16);
+  return static_cast<uint16_t>(h & 0xFFFFu);
+}
+
+/**
+ * @brief Creates a packed 64-bit hash code for schema+node_id pairs
+ *
+ * This function combines a schema identifier and node ID into a single 64-bit
+ * value for efficient storage and comparison in hash sets/maps. This eliminates
+ * the need for expensive string concatenation and hashing that was previously
+ * used for tracking visited nodes during graph traversal.
+ *
+ * @param schema The schema reference containing a pre-computed 16-bit tag
+ * @param node_id The node identifier (48-bit max)
+ *
+ * @return A 64-bit packed value with layout:
+ *         - Bits 63-48: Schema tag (16 bits)
+ *         - Bits 47-0:  Node ID (48 bits, masked)
+ *
+ * @details
+ * Memory Layout:
+ * ```
+ * 63    56    48    40    32    24    16     8     0
+ * |  Schema  |           Node ID (48 bits)          |
+ * | (16 bit) |                                       |
+ * ```
+ *
+ * Performance Benefits:
+ * - Replaces string operations: "User:12345" → single uint64_t
+ * - Enables fast integer comparison instead of string hashing
+ * - Reduces memory allocations (no temporary strings)
+ * - Compatible with llvm::DenseSet for O(1) lookups
+ *
+ * Constraints:
+ * - Node IDs must fit in 48 bits (max ~281 trillion nodes)
+ * - Schema tags must be unique within query context
+ * - NODE_MASK = (1ULL << 48) - 1 = 0x0000FFFFFFFFFFFF
+ *
+ * Example:
+ * ```cpp
+ * SchemaRef user_schema = SchemaRef::parse("u:User");
+ * user_schema.set_tag(0x1234);  // Pre-computed schema tag
+ *
+ * uint64_t packed = hash_code_(user_schema, 98765);
+ * // Result: 0x1234000000018149 (schema=0x1234, node=98765)
+ *
+ * // Usage in visited tracking:
+ * llvm::DenseSet<uint64_t> visited;
+ * visited.insert(packed);  // Fast O(1) integer hash
+ * ```
+ *
+ * @see SchemaRef::tag() for schema tag computation
+ * @see NODE_MASK constant definition
+ */
+static uint64_t hash_code_(const SchemaRef& schema, int64_t node_id) {
+  const uint16_t schema_id16 = schema.tag();
+  return (static_cast<uint64_t>(schema_id16) << 48) |
+         (static_cast<uint64_t>(node_id) & NODE_MASK);
+}
+
 // Utility function to join containers using C++23 ranges
 template <typename Container>
 std::string join_container(const Container& container,
@@ -106,12 +177,11 @@ arrow::Result<std::shared_ptr<arrow::Scalar>> value_ptr_to_arrow_scalar(
     case ValueType::DOUBLE:
       return arrow::MakeScalar(*reinterpret_cast<const double*>(ptr));
     case ValueType::STRING: {
-      auto str_ref = *reinterpret_cast<const StringRef*>(ptr);
+      const StringRef& str_ref = *reinterpret_cast<const StringRef*>(ptr);
       if (str_ref.is_null()) {
         return arrow::MakeNullScalar(arrow::utf8());
       }
-      // Create string directly from StringRef without intermediate to_string()
-      // call
+      // Create string directly from StringRef data - safer than custom scalar
       return arrow::MakeScalar(std::string(str_ref.data, str_ref.length));
     }
     case ValueType::BOOL:
@@ -176,15 +246,19 @@ arrow::compute::Expression where_condition_to_expression(
 arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
     const std::shared_ptr<arrow::Schema>& schema,
     const std::vector<std::shared_ptr<Node>>& nodes) {
-  // log_debug("Creating table from {} nodes with schema '{}'", nodes.size(),
-  //           schema->ToString());
+   IF_DEBUG_ENABLED {
+     log_debug("Creating table from {} nodes with schema '{}'", nodes.size(),
+               schema->ToString());
+   }
 
   // Create builders for each field
   std::vector<std::unique_ptr<arrow::ArrayBuilder>> builders;
   builders.reserve(schema->fields().size());
   for (const auto& field : schema->fields()) {
-    // log_debug("Creating builder for field '{}' with type {}", field->name(),
-    //           field->type()->ToString());
+     IF_DEBUG_ENABLED {
+       log_debug("Creating builder for field '{}' with type {}", field->name(),
+                 field->type()->ToString());
+     }
     auto builder_result = arrow::MakeBuilder(field->type());
     if (!builder_result.ok()) {
       log_error("Failed to create builder for field '{}': {}", field->name(),
@@ -195,7 +269,9 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
   }
 
   // Populate builders with data from each node
-  // log_debug("Adding data from {} nodes to builders", nodes.size());
+   IF_DEBUG_ENABLED {
+     log_debug("Adding data from {} nodes to builders", nodes.size());
+   }
   for (const auto& node : nodes) {
     // Add each field's value to the appropriate builder
     for (int i = 0; i < schema->num_fields(); i++) {
@@ -223,7 +299,9 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
             return status;
           }
         } else {
-          // log_debug("Null value for field '{}', appending null", field_name);
+           IF_DEBUG_ENABLED {
+             log_debug("Null value for field '{}', appending null", field_name);
+           }
           auto status = builders[i]->AppendNull();
           if (!status.ok()) {
             log_error("Failed to append null for field '{}': {}", field_name,
@@ -246,7 +324,9 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
   }
 
   // Finish building arrays
-  // log_debug("Finalizing arrays from builders");
+   IF_DEBUG_ENABLED {
+     log_debug("Finalizing arrays from builders");
+   }
   std::vector<std::shared_ptr<arrow::Array>> arrays;
   arrays.reserve(builders.size());
   for (auto& builder : builders) {
@@ -260,26 +340,34 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
   }
 
   // Create table
-  // log_debug("Creating table with {} rows and {} columns",
-  //           arrays.empty() ? 0 : arrays[0]->length(), arrays.size());
+   IF_DEBUG_ENABLED {
+     log_debug("Creating table with {} rows and {} columns",
+               arrays.empty() ? 0 : arrays[0]->length(), arrays.size());
+   }
   return arrow::Table::Make(schema, arrays);
 }
 
 arrow::Result<std::shared_ptr<arrow::Table>> filter(
     std::shared_ptr<arrow::Table> table, const WhereExpr& condition,
     bool strip_var) {
-  // log_debug("Filtering table with WhereCondition: {}", condition.toString());
+   IF_DEBUG_ENABLED {
+     log_debug("Filtering table with WhereCondition: {}", condition.toString());
+   }
 
   try {
     // Convert WhereCondition to Arrow compute expression
     auto filter_expr = where_condition_to_expression(condition, strip_var);
 
-    // log_debug("Creating in-memory dataset from table with {} rows",
-    //           table->num_rows());
+     IF_DEBUG_ENABLED {
+       log_debug("Creating in-memory dataset from table with {} rows",
+                 table->num_rows());
+     }
     auto dataset = std::make_shared<arrow::dataset::InMemoryDataset>(table);
 
     // Create scanner builder
-    // log_debug("Creating scanner builder");
+     IF_DEBUG_ENABLED {
+       log_debug("Creating scanner builder");
+     }
     auto scan_builder_result = dataset->NewScan();
     if (!scan_builder_result.ok()) {
       log_error("Failed to create scanner builder: {}",
@@ -288,14 +376,18 @@ arrow::Result<std::shared_ptr<arrow::Table>> filter(
     }
     auto scan_builder = scan_builder_result.ValueOrDie();
 
-    // log_debug("Applying compound filter to scanner builder");
+     IF_DEBUG_ENABLED {
+       log_debug("Applying compound filter to scanner builder");
+     }
     auto filter_status = scan_builder->Filter(filter_expr);
     if (!filter_status.ok()) {
       log_error("Failed to apply filter: {}", filter_status.ToString());
       return filter_status;
     }
 
-    // log_debug("Finishing scanner");
+     IF_DEBUG_ENABLED {
+       log_debug("Finishing scanner");
+     }
     auto scanner_result = scan_builder->Finish();
     if (!scanner_result.ok()) {
       log_error("Failed to finish scanner: {}",
@@ -304,7 +396,9 @@ arrow::Result<std::shared_ptr<arrow::Table>> filter(
     }
     auto scanner = scanner_result.ValueOrDie();
 
-    // log_debug("Executing scan to table");
+     IF_DEBUG_ENABLED {
+       log_debug("Executing scan to table");
+     }
     auto table_result = scanner->ToTable();
     if (!table_result.ok()) {
       log_error("Failed to convert scan results to table: {}",
@@ -313,8 +407,10 @@ arrow::Result<std::shared_ptr<arrow::Table>> filter(
     }
 
     auto result_table = table_result.ValueOrDie();
-    // log_debug("Filter completed: {} rows in, {} rows out", table->num_rows(),
-    //           result_table->num_rows());
+     IF_DEBUG_ENABLED {
+       log_debug("Filter completed: {} rows in, {} rows out", table->num_rows(),
+                 result_table->num_rows());
+     }
     return result_table;
 
   } catch (const std::exception& e) {
@@ -453,20 +549,6 @@ struct QueryState {
     return true;
   }
 
-  // Deterministic 16-bit tag from alias string (SchemaRef::value()).
-  // https://www.ietf.org/archive/id/draft-eastlake-fnv-21.html
-  static uint16_t compute_alias_tag(const SchemaRef& ref) {
-    // FNV-1a 32-bit, then fold to 16 bits.
-    const std::string& s = ref.value();
-    uint32_t h = 2166136261u;
-    for (unsigned char c : s) {
-      h ^= c;
-      h *= 16777619u;
-    }
-    h ^= (h >> 16);
-    return static_cast<uint16_t>(h & 0xFFFFu);
-  }
-
   const llvm::DenseSet<int64_t>& get_ids(const SchemaRef& schema_ref) {
     return ids[schema_ref.value()];
   }
@@ -574,7 +656,9 @@ struct QueryState {
 
 arrow::Result<std::shared_ptr<arrow::Schema>> build_denormalized_schema(
     const QueryState& query_state) {
-  // log_debug("Building schema for denormalized table");
+   IF_DEBUG_ENABLED {
+     log_debug("Building schema for denormalized table");
+   }
 
   std::set<std::string> processed_fields;
   std::vector<std::shared_ptr<arrow::Field>> fields;
@@ -583,7 +667,9 @@ arrow::Result<std::shared_ptr<arrow::Schema>> build_denormalized_schema(
   // First add fields from the FROM schema
   std::string from_schema = query_state.from.value();
 
-  // log_debug("Adding fields from FROM schema '{}'", from_schema);
+   IF_DEBUG_ENABLED {
+     log_debug("Adding fields from FROM schema '{}'", from_schema);
+   }
 
   auto schema_result = query_state.schema_registry->get_arrow(
       query_state.aliases.at(from_schema));
@@ -610,7 +696,9 @@ arrow::Result<std::shared_ptr<arrow::Schema>> build_denormalized_schema(
   }
 
   for (const auto& schema_ref : unique_schemas) {
-    // log_debug("Adding fields from schema '{}'", schema_ref.value());
+     IF_DEBUG_ENABLED {
+       log_debug("Adding fields from schema '{}'", schema_ref.value());
+     }
 
     schema_result = query_state.schema_registry->get_arrow(
         query_state.aliases.at(schema_ref.value()));
@@ -641,7 +729,7 @@ struct PathSegment {
   int64_t node_id;
 
   std::string toString() const {
-    return "";  // schema + ":" + std::to_string(node_id);
+    return std::to_string(schema) + ":" + std::to_string(node_id);
   }
 
   bool operator==(const PathSegment& other) const {
@@ -673,19 +761,19 @@ std::string join_schema_path(const std::vector<PathSegment>& schema_path) {
 
 struct Row {
   int64_t id;
-  std::unordered_map<std::string, std::shared_ptr<arrow::Scalar>> cells;
+  llvm::StringMap<ValueRef> cells;
   std::vector<PathSegment> path;
-  std::unordered_map<std::string, int64_t> schema_ids;  // can we use tag
+  llvm::StringMap<int64_t> schema_ids;  // can we use tag
   bool schema_ids_set = false;
 
-  void set_cell(const std::string& name,
-                std::shared_ptr<arrow::Scalar> scalar) {
-    cells[name] = std::move(scalar);
-  }
+  // void set_cell(const std::string& name,
+  //               std::shared_ptr<arrow::Scalar> scalar) {
+  //   cells[name] = std::move(scalar);
+  // }
 
-  bool has_value(const std::string& name) const {
-    return cells.contains(name) && cells.at(name) != nullptr &&
-           cells.at(name)->is_valid;
+  bool has_value(const llvm::StringRef name) const {
+    return cells.contains(name) && cells.at(name).data != nullptr;
+    // && cells.at(name)->is_valid;
   }
 
   void set_cell_from_node(const std::vector<std::string>& fq_field_names,
@@ -704,16 +792,8 @@ struct Row {
   // New set_cell method for Value objects
   void set_cell(const std::string& name, const char* ptr,
                 const ValueType type) {
-    if (ptr) {
-      auto scalar_result = value_ptr_to_arrow_scalar(ptr, type);
-      if (scalar_result.ok()) {
-        cells[name] = scalar_result.ValueOrDie();
-        return;
-      }
-    }
-
-    // Default to null if value is null or conversion fails
-    cells[name] = nullptr;
+     // Use try_emplace to construct ValueRef in-place (avoids assignment)
+     cells.try_emplace(name, ptr, type);
   }
 
   // void set_cell(const std::string& name, std::shared_ptr<arrow::Array> array)
@@ -735,23 +815,23 @@ struct Row {
   }
 
   // todo replace
-  const std::unordered_map<std::string, int64_t>& extract_schema_ids() {
+  const llvm::StringMap<int64_t>& extract_schema_ids() {
     if (schema_ids_set) {
       return schema_ids;
     }
     // std::unordered_map<std::string, int64_t> result;
     for (const auto& [field_name, value] : cells) {
-      if (!value || !value->is_valid) continue;
+      if (!value.data) continue;
 
       // Extract schema prefix (everything before the first dot)
       size_t dot_pos = field_name.find('.');
       if (dot_pos != std::string::npos) {
-        std::string schema = field_name.substr(0, dot_pos);
+        llvm::StringRef schema = field_name.substr(0, dot_pos);
 
         // Store ID for this schema if it's an ID field
         if (field_name.substr(dot_pos + 1) == "id") {
-          auto id_scalar = std::static_pointer_cast<arrow::Int64Scalar>(value);
-          schema_ids[schema] = id_scalar->value;
+          // auto id_scalar = value.get_as_int64(); // std::static_pointer_cast<arrow::Int64Scalar>(value);
+          schema_ids[schema] = value.as_int64();
         }
       }
     }
@@ -766,7 +846,7 @@ struct Row {
     // merged->id = this->id;
     for (const auto& [name, value] : other->cells) {
       if (!merged->has_value(name)) {
-        merged->cells[name] = value;
+        merged->cells.try_emplace(name, value.data, value.type);
       }
     }
     return merged;
@@ -778,42 +858,50 @@ struct Row {
     ss << "path='" << join_schema_path(path) << "', ";
 
     bool first = true;
-    for (const auto& [field_name, scalar] : cells) {
+    for (const auto& [field_name, value_ref] : cells) {
       if (!first) {
         ss << ", ";
       }
       first = false;
 
-      ss << field_name << ": ";
+      ss << field_name.str() << ": ";
 
-      if (!scalar) {
+      if (value_ref.data == nullptr) {
         ss << "NULL";
-      } else if (scalar->is_valid) {
-        // Handle different scalar types appropriately
-        switch (scalar->type->id()) {
-          case arrow::Type::INT64:
-            ss << std::static_pointer_cast<arrow::Int64Scalar>(scalar)->value;
+      } else {
+        // Handle different ValueRef types appropriately
+        switch (value_ref.type) {
+          case ValueType::INT32:
+            ss << value_ref.as_int32();
             break;
-          case arrow::Type::DOUBLE:
-            ss << std::static_pointer_cast<arrow::DoubleScalar>(scalar)->value;
+          case ValueType::INT64:
+            ss << value_ref.as_int64();
             break;
-          case arrow::Type::STRING:
-          case arrow::Type::LARGE_STRING:
-            ss << "\""
-               << std::static_pointer_cast<arrow::StringScalar>(scalar)->view()
-               << "\"";
+          case ValueType::FLOAT:
+            ss << *reinterpret_cast<const float*>(value_ref.data);
             break;
-          case arrow::Type::BOOL:
-            ss << (std::static_pointer_cast<arrow::BooleanScalar>(scalar)->value
-                       ? "true"
-                       : "false");
+          case ValueType::DOUBLE:
+            ss << value_ref.as_double();
+            break;
+          case ValueType::BOOL:
+            ss << (value_ref.as_bool() ? "true" : "false");
+            break;
+          case ValueType::STRING: {
+            const StringRef& str_ref = value_ref.as_string_ref();
+            if (str_ref.is_null()) {
+              ss << "NULL";
+            } else {
+              ss << "\"" << std::string(str_ref.data, str_ref.length) << "\"";
+            }
+            break;
+          }
+          case ValueType::NA:
+            ss << "NULL";
             break;
           default:
-            ss << scalar->ToString();
+            ss << "<unknown_type>";
             break;
         }
-      } else {
-        ss << "NULL";
       }
     }
 
@@ -827,18 +915,19 @@ static Row create_empty_row_from_schema(
   Row new_row;
   new_row.id = -1;
   for (const auto& field : final_output_schema->fields()) {
+    new_row.cells.try_emplace(field->name(), nullptr, arrow_type_to_value_type(field->type()));
     // Create a null scalar of the correct type
-    auto null_scalar = arrow::MakeNullScalar(field->type());
-    if (null_scalar != nullptr) {
-      new_row.cells[field->name()] = null_scalar;
-    } else {
-      // If creating a null scalar fails, use nullptr as a fallback
-      new_row.cells[field->name()] = nullptr;
-      if (Logger::get_instance().get_level() >= LogLevel::WARN) {
-        log_warn("Failed to create null scalar for field '{}' with type '{}'",
-                 field->name(), field->type()->ToString());
-      }
-    }
+    // auto null_scalar = arrow::MakeNullScalar(field->type());
+    // if (null_scalar != nullptr) {
+    //   new_row.cells[field->name()] = null_scalar;
+    // } else {
+    //   // If creating a null scalar fails, use nullptr as a fallback
+    //   new_row.cells.try_emplace(field->name(), nullptr, field->type());
+    //   if (Logger::get_instance().get_level() >= LogLevel::WARN) {
+    //     log_warn("Failed to create null scalar for field '{}' with type '{}'",
+    //              field->name(), field->type()->ToString());
+    //   }
+    // }
   }
   return new_row;
 }
@@ -966,9 +1055,9 @@ struct RowNode {
           bool can_merge = true;
 
           // Get variable prefixes (schema names) from cells
-          std::unordered_map<std::string, int64_t> schema_ids_r1 =
+          llvm::StringMap<int64_t> schema_ids_r1 =
               r1_from_current_group->extract_schema_ids();
-          std::unordered_map<std::string, int64_t> schema_ids_r2 =
+           llvm::StringMap<int64_t> schema_ids_r2 =
               r2_from_previous_product->extract_schema_ids();
 
           // Check for conflicts - same schema name but different IDs
@@ -976,7 +1065,7 @@ struct RowNode {
             if (schema_ids_r2.contains(schema) &&
                 schema_ids_r2[schema] != id1) {
               // Found a conflict - same schema but different IDs
-              if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+              IF_DEBUG_ENABLED {
                 log_debug(
                     "Conflict detected: Schema '{}' has different IDs: {} vs "
                     "{}",
@@ -991,15 +1080,15 @@ struct RowNode {
           if (can_merge) {
             for (const auto& [field_name, value1] :
                  r1_from_current_group->cells) {
-              if (!value1 || !value1->is_valid) continue;
+              if (!value1.data) continue;
 
               auto it = r2_from_previous_product->cells.find(field_name);
-              if (it != r2_from_previous_product->cells.end() && it->second &&
-                  it->second->is_valid) {
+              if (it != r2_from_previous_product->cells.end() && it->second.data)
+                   {
                 // Both rows have this field with non-null values - check if
                 // they match
-                if (!value1->Equals(*(it->second))) {
-                  if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+                if (!value1.equals(it->second)) {
+                   IF_DEBUG_ENABLED {
                     log_debug(
                         "Conflict detected: Field '{}' has different values",
                         field_name);
@@ -1023,90 +1112,94 @@ struct RowNode {
       }
       final_merged_rows = std::move(temp_product_accumulator);
       if (final_merged_rows.empty()) {
-        // log_debug("product_accumulator is empty. stop merge");
+         IF_DEBUG_ENABLED {
+           log_debug("product_accumulator is empty. stop merge");
+         }
         break;
       }
     }
     return final_merged_rows;
   }
 
-  std::string toString(bool recursive = true, int indent_level = 0) const {
-    // Helper to build indentation string based on level
-    auto get_indent = [](int level) { return std::string(level * 2, ' '); };
-
-    std::stringstream ss;
-    std::string indent = get_indent(indent_level);
-
-    // Print basic node info
-    ss << indent << "RowNode [path=" << path_segment.toString()
-       << ", depth=" << depth << "] {\n";
-
-    // Print Row
-    if (row.has_value()) {
-      ss << indent << "  Path: ";
-      if (row.value()->path.empty()) {
-        ss << "(empty)";
-      } else {
-        for (size_t i = 0; i < row.value()->path.size(); ++i) {
-          if (i > 0) ss << " → ";
-          ss << row.value()->path[i].schema << ":"
-             << row.value()->path[i].node_id;
-        }
-      }
-      ss << "\n";
-
-      // Print key cell values (limited to avoid overwhelming output)
-      ss << indent << "  Cells: ";
-      if (row.value()->cells.empty()) {
-        ss << "(empty)";
-      } else {
-        size_t count = 0;
-        ss << "{ ";
-        for (const auto& [key, value] : row.value()->cells) {
-          if (count++ > 0) ss << ", ";
-          if (count > 5) {  // Limit display
-            ss << "... +" << (row.value()->cells.size() - 5) << " more";
-            break;
-          }
-
-          ss << key << ": ";
-          if (!value) {
-            ss << "NULL";
-          } else {
-            ss << value->ToString();  // Assuming arrow::Scalar has ToString()
-          }
-        }
-        ss << " }";
-      }
-    }
-
-    ss << "\n";
-
-    // Print children count
-    ss << indent << "  Children: " << children.size() << "\n";
-
-    // Recursively print children if requested
-    if (recursive && !children.empty()) {
-      ss << indent << "  [\n";
-      for (const auto& child : children) {
-        if (child) {
-          ss << child->toString(true, indent_level + 2);
-        } else {
-          ss << get_indent(indent_level + 2) << "(null child)\n";
-        }
-      }
-      ss << indent << "  ]\n";
-    }
-
-    ss << indent << "}\n";
-    return ss.str();
-  }
+  // std::string toString(bool recursive = true, int indent_level = 0) const {
+  //   // Helper to build indentation string based on level
+  //   auto get_indent = [](int level) { return std::string(level * 2, ' '); };
+  //
+  //   std::stringstream ss;
+  //   std::string indent = get_indent(indent_level);
+  //
+  //   // Print basic node info
+  //   ss << indent << "RowNode [path=" << path_segment.toString()
+  //      << ", depth=" << depth << "] {\n";
+  //
+  //   // Print Row
+  //   if (row.has_value()) {
+  //     ss << indent << "  Path: ";
+  //     if (row.value()->path.empty()) {
+  //       ss << "(empty)";
+  //     } else {
+  //       for (size_t i = 0; i < row.value()->path.size(); ++i) {
+  //         if (i > 0) ss << " → ";
+  //         ss << row.value()->path[i].schema << ":"
+  //            << row.value()->path[i].node_id;
+  //       }
+  //     }
+  //     ss << "\n";
+  //
+  //     // Print key cell values (limited to avoid overwhelming output)
+  //     ss << indent << "  Cells: ";
+  //     if (row.value()->cells.empty()) {
+  //       ss << "(empty)";
+  //     } else {
+  //       size_t count = 0;
+  //       ss << "{ ";
+  //       for (const auto& [key, value] : row.value()->cells) {
+  //         if (count++ > 0) ss << ", ";
+  //         if (count > 5) {  // Limit display
+  //           ss << "... +" << (row.value()->cells.size() - 5) << " more";
+  //           break;
+  //         }
+  //
+  //         ss << key.str() << ": ";
+  //         if (!value) {
+  //           ss << "NULL";
+  //         } else {
+  //           ss << value->ToString();  // Assuming arrow::Scalar has ToString()
+  //         }
+  //       }
+  //       ss << " }";
+  //     }
+  //   }
+  //
+  //   ss << "\n";
+  //
+  //   // Print children count
+  //   ss << indent << "  Children: " << children.size() << "\n";
+  //
+  //   // Recursively print children if requested
+  //   if (recursive && !children.empty()) {
+  //     ss << indent << "  [\n";
+  //     for (const auto& child : children) {
+  //       if (child) {
+  //         ss << child->toString(true, indent_level + 2);
+  //       } else {
+  //         ss << get_indent(indent_level + 2) << "(null child)\n";
+  //       }
+  //     }
+  //     ss << indent << "  ]\n";
+  //   }
+  //
+  //   ss << indent << "}\n";
+  //   return ss.str();
+  // }
 
   friend std::ostream& operator<<(std::ostream& os, const RowNode& node) {
-    return os << node.toString();
+    return os << "";// node.toString();
   }
 
-  void print(bool recursive = true) const { log_debug(toString(recursive)); }
+  void print(bool recursive = true) const {
+    // log_debug(toString(recursive));
+  }
 };
 
 struct QueueItem {
@@ -1130,7 +1223,7 @@ void log_grouped_connections(
     const llvm::SmallDenseMap<llvm::StringRef,
                               llvm::SmallVector<GraphConnection, 4>, 4>&
         grouped_connections) {
-  if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+  IF_DEBUG_ENABLED {
     if (grouped_connections.empty()) {
       log_debug("Node {} has no grouped connections", node_id);
       return;
@@ -1155,12 +1248,11 @@ void log_grouped_connections(
   }
 }
 
-template <StringSet VisitedSet>
 arrow::Result<std::shared_ptr<llvm::SmallVector<std::shared_ptr<Row>, 4>>>
 populate_rows_bfs(int64_t node_id, const SchemaRef& start_schema,
                   const std::shared_ptr<arrow::Schema>& output_schema,
-                  const QueryState& query_state, VisitedSet& global_visited) {
-  if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+                  const QueryState& query_state, llvm::DenseSet<uint64_t>& global_visited) {
+  IF_DEBUG_ENABLED {
     log_debug("populate_rows_bfs::node={}:{}", start_schema.value(), node_id);
   }
   auto result = std::make_shared<llvm::SmallVector<std::shared_ptr<Row>, 4>>();
@@ -1186,12 +1278,10 @@ populate_rows_bfs(int64_t node_id, const SchemaRef& start_schema,
             item.schema_ref.value());
       }
       item.row->set_cell_from_node(it_fq->second, node);
-      // Pack 16-bit schema id (precomputed in SchemaRef) and 48-bit node id.
-      const uint16_t schema_id16 = item.schema_ref.tag();
-      const uint64_t packed = (static_cast<uint64_t>(schema_id16) << 48) |
-                              (static_cast<uint64_t>(item.node_id) & NODE_MASK);
-      global_visited.insert(item.schema_ref.value() + ":" +
-                            std::to_string(item.node_id));
+      const uint64_t packed = hash_code_(item.schema_ref, item.node_id);
+      // global_visited.insert(item.schema_ref.value() + ":" +
+      //                       std::to_string(item.node_id));
+      global_visited.insert(packed);
       item.path_visited_nodes.insert(packed);
 
       // group connections by target schema (small, stack-friendly)
@@ -1203,10 +1293,7 @@ populate_rows_bfs(int64_t node_id, const SchemaRef& start_schema,
         for (const auto& conn :
              query_state.connections.at(item.schema_ref.value())
                  .at(item.node_id)) {
-          const uint16_t tgt_schema_id16 = conn.target.tag();
-          const uint64_t tgt_packed =
-              (static_cast<uint64_t>(tgt_schema_id16) << 48) |
-              (static_cast<uint64_t>(conn.target_id) & NODE_MASK);
+          const uint64_t tgt_packed = hash_code_(conn.target, conn.target_id);
           if (!item.path_visited_nodes.contains(tgt_packed)) {
             if (query_state.ids.at(conn.target.value())
                     .contains(conn.target_id)) {
@@ -1225,7 +1312,7 @@ populate_rows_bfs(int64_t node_id, const SchemaRef& start_schema,
           auto r = item.row;
           r->path = item.path;
           r->id = row_id_counter++;
-          if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+          IF_DEBUG_ENABLED {
             log_debug("add row: {}", r->ToString());
           }
           result->push_back(r);
@@ -1244,7 +1331,7 @@ populate_rows_bfs(int64_t node_id, const SchemaRef& start_schema,
             next.path = item.path;
             next.path.push_back(PathSegment{connections[0].target.tag(),
                                             connections[0].target_id});
-            if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+            IF_DEBUG_ENABLED {
               log_debug("continue the path: {}", join_schema_path(next.path));
             }
             queue.push(next);
@@ -1256,7 +1343,7 @@ populate_rows_bfs(int64_t node_id, const SchemaRef& start_schema,
               next.path = item.path;
               next.path.push_back(
                   PathSegment{conn.target.tag(), conn.target_id});
-              if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+              IF_DEBUG_ENABLED {
                 log_debug("create a new path {}, node={}",
                           join_schema_path(next.path), conn.target_id);
               }
@@ -1270,16 +1357,16 @@ populate_rows_bfs(int64_t node_id, const SchemaRef& start_schema,
   RowNode tree;
   tree.path_segment = PathSegment{0, -1};
   for (const auto& r : *result) {
-    if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+    IF_DEBUG_ENABLED {
       log_debug("bfs result: {}", r->ToString());
     }
     tree.insert_row(r);
   }
-  if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+  IF_DEBUG_ENABLED {
     tree.print();
   }
   auto merged = tree.merge_rows();
-  if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+  IF_DEBUG_ENABLED {
     for (const auto& row : merged) {
       log_debug("merge result: {}", row->ToString());
     }
@@ -1288,23 +1375,23 @@ populate_rows_bfs(int64_t node_id, const SchemaRef& start_schema,
 }
 
 // template <NodeIds NodeIdsT>
-arrow::Result<std::shared_ptr<std::vector<std::shared_ptr<Row>>>>
+arrow::Result<std::shared_ptr<llvm::SmallVector<std::shared_ptr<Row>, 4>>>
 populate_batch_rows(
     const llvm::DenseSet<int64_t>& node_ids, const SchemaRef& schema_ref,
     const std::shared_ptr<arrow::Schema>& output_schema,
     const QueryState& query_state, const TraverseType join_type,
-    tbb::concurrent_unordered_set<std::string>& global_visited) {
-  auto rows = std::make_shared<std::vector<std::shared_ptr<Row>>>();
+    llvm::DenseSet<uint64_t>& global_visited) {
+  auto rows = std::make_shared<llvm::SmallVector<std::shared_ptr<Row>, 4>>();
   rows->reserve(node_ids.size());
-  std::set<std::string> local_visited;
+  llvm::DenseSet<uint64_t> local_visited;
   // For INNER join: only process nodes that have connections
   // For LEFT join: process all nodes from the "left" side
   for (const auto node_id : node_ids) {
-    auto key = schema_ref.value() + ":" + std::to_string(node_id);
-    if (!global_visited.insert(key).second) {
-      // Skip if already processed in an earlier traversal
-      continue;
-    }
+     const uint64_t packed = hash_code_(schema_ref, node_id);
+     if (!global_visited.insert(packed).second) {
+       // Skip if already processed in an earlier traversal
+       continue;
+     }
 
     // For INNER JOIN: Skip nodes without connections
     if (join_type == TraverseType::Inner &&
@@ -1361,7 +1448,7 @@ arrow::Result<std::shared_ptr<std::vector<std::shared_ptr<Row>>>> populate_rows(
     const std::shared_ptr<arrow::Schema>& output_schema) {
   auto rows = std::make_shared<std::vector<std::shared_ptr<Row>>>();
   std::mutex rows_mtx;
-  tbb::concurrent_unordered_set<std::string> global_visited;
+  llvm::DenseSet<uint64_t> global_visited;
 
   // Map schemas to their join types
   std::unordered_map<std::string, TraverseType> schema_join_types;
@@ -1401,14 +1488,18 @@ arrow::Result<std::shared_ptr<std::vector<std::shared_ptr<Row>>>> populate_rows(
     }
   }
 
-  // log_debug("Processing {} schemas with their respective join types",
-  //           ordered_schemas.size());
+   IF_DEBUG_ENABLED {
+     log_debug("Processing {} schemas with their respective join types",
+               ordered_schemas.size());
+   }
 
   // Process each schema in order
   for (const auto& schema_ref : ordered_schemas) {
     TraverseType join_type = schema_join_types[schema_ref.value()];
-    // log_debug("Processing schema '{}' with join type {}", schema_ref.value(),
-    //           static_cast<int>(join_type));
+     IF_DEBUG_ENABLED {
+       log_debug("Processing schema '{}' with join type {}", schema_ref.value(),
+                 static_cast<int>(join_type));
+     }
 
     if (!query_state.ids.contains(schema_ref.value())) {
       log_warn("Schema '{}' not found in query state IDs", schema_ref.value());
@@ -1426,7 +1517,7 @@ arrow::Result<std::shared_ptr<std::vector<std::shared_ptr<Row>>>> populate_rows(
         batch_size = execution_config.calculate_batch_size(schema_nodes.size());
       }
       auto batches = batch_node_ids(schema_nodes, batch_size);
-      if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+      IF_DEBUG_ENABLED {
         log_debug(
             "process concurrently. thread_count={}, batch_size={}, "
             "batches_count={}",
@@ -1478,14 +1569,16 @@ arrow::Result<std::shared_ptr<std::vector<std::shared_ptr<Row>>>> populate_rows(
                    std::make_move_iterator(res_value->end()));
     }
 
-    if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+    IF_DEBUG_ENABLED {
       log_debug("Processing schema '{}' nodes: [{}]", schema_ref.value(),
                 join_container(schema_nodes));
     }
   }
 
-  // log_debug("Generated {} total rows after processing all schemas",
-  //           rows->size());
+   IF_DEBUG_ENABLED {
+     log_debug("Generated {} total rows after processing all schemas",
+               rows->size());
+   }
   return rows;
 }
 
@@ -1549,8 +1642,8 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_rows(
     // Get all field names from all rows to create a complete schema
     std::set<std::string> all_field_names;
     for (const auto& row : *rows) {
-      for (const auto& field_name : row->cells | std::views::keys) {
-        all_field_names.insert(field_name);
+      for (const auto& entry : row->cells) {
+        all_field_names.insert(entry.first().str());
       }
     }
 
@@ -1562,8 +1655,8 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_rows(
       std::shared_ptr<arrow::DataType> field_type = nullptr;
       for (const auto& row : *rows) {
         auto it = row->cells.find(field_name);
-        if (it != row->cells.end() && it->second) {
-          if (auto array_result = arrow::MakeArrayFromScalar(*(it->second), 1);
+        if (it != row->cells.end() && it->second.data != nullptr) {
+          if (auto array_result = arrow::MakeArrayFromScalar(*(it->second.as_scalar().ValueOrDie()), 1);
               array_result.ok()) {
             field_type = array_result.ValueOrDie()->type();
             break;
@@ -1595,8 +1688,8 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_rows(
       const auto& field_name = output_schema->field(i)->name();
       auto it = row->cells.find(field_name);
 
-      if (it != row->cells.end() && it->second) {
-        if (auto res = builders[i]->AppendScalar(*it->second); !res.ok()) {
+      if (it != row->cells.end() && it->second.data) {
+        if (auto res = builders[i]->AppendScalar(*it->second.as_scalar().ValueOrDie()); !res.ok()) {
           return res;
         }
         // We have a value for this field
@@ -1704,7 +1797,9 @@ std::vector<std::shared_ptr<WhereExpr>> get_where_to_inline(
     if (clauses[i]->type() == Clause::Type::WHERE) {
       auto where_expr = std::dynamic_pointer_cast<WhereExpr>(clauses[i]);
       if (where_expr->can_inline(target_var)) {
-        // log_debug("inline where: '{}'", where_expr->toString());
+         IF_DEBUG_ENABLED {
+           log_debug("inline where: '{}'", where_expr->toString());
+         }
         inlined.push_back(where_expr);
       }
     }
@@ -1718,7 +1813,9 @@ arrow::Result<std::shared_ptr<arrow::Table>> inline_where(
     const std::vector<std::shared_ptr<WhereExpr>>& where_exprs) {
   auto curr_table = std::move(table);
   for (const auto& exp : where_exprs) {
-    // log_debug("inline where '{}'", exp->toString());
+     IF_DEBUG_ENABLED {
+       log_debug("inline where '{}'", exp->toString());
+     }
     auto result = filter(curr_table, *exp, true);
     if (!result.ok()) {
       log_error(
@@ -1761,17 +1858,21 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
     const Query& query) const {
   QueryState query_state;
   auto result = std::make_shared<QueryResult>();
-  // log_debug("Executing query starting from schema '{}'",
-  //           query.from().toString());
+   IF_DEBUG_ENABLED {
+     log_debug("Executing query starting from schema '{}'",
+               query.from().toString());
+   }
   query_state.node_manager = this->node_manager_;
   query_state.schema_registry = this->schema_registry_;
   query_state.from = query.from();
 
   {
-    // log_debug("processing 'from' {}", query.from().toString());
+     IF_DEBUG_ENABLED {
+       log_debug("processing 'from' {}", query.from().toString());
+     }
     // Precompute tag for FROM schema (alias-based hash)
     query_state.from = query.from();
-    query_state.from.set_tag(QueryState::compute_alias_tag(query_state.from));
+    query_state.from.set_tag(compute_tag(query_state.from));
     ARROW_ASSIGN_OR_RAISE(auto source_schema,
                           query_state.resolve_schema(query.from()));
     if (!this->schema_registry_->exists(source_schema)) {
@@ -1805,7 +1906,9 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
     }
   }
 
-  // log_debug("Processing {} query clauses", query.clauses().size());
+   IF_DEBUG_ENABLED {
+     log_debug("Processing {} query clauses", query.clauses().size());
+   }
 
   // Precompute 16-bit alias-based tags for all SchemaRefs
   // Also precompute fully-qualified field names per alias used in the query
@@ -1816,7 +1919,9 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
       case Clause::Type::WHERE: {
         auto where = std::dynamic_pointer_cast<WhereExpr>(clause);
         if (where->inlined()) {
-          // log_debug("where '{}' is inlined, skip", where->toString());
+           IF_DEBUG_ENABLED {
+             log_debug("where '{}' is inlined, skip", where->toString());
+           }
           continue;
         }
         auto variables = where->get_all_variables();
@@ -1827,7 +1932,9 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
               where->toString());
         }
         if (variables.size() == 1) {
-          // log_debug("Processing WHERE clause: '{}'", where->toString());
+           IF_DEBUG_ENABLED {
+             log_debug("Processing WHERE clause: '{}'", where->toString());
+           }
 
           std::unordered_map<std::string, std::set<int64_t>> new_front_ids;
           std::string variable = *variables.begin();
@@ -1845,8 +1952,10 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           ARROW_RETURN_NOT_OK(query_state.update_table(
               filtered_table_result.ValueOrDie(), SchemaRef::parse(variable)));
         } else {
-          // log_debug("Add compound WHERE expression: '{}' to post process",
-          //           where->toString());
+           IF_DEBUG_ENABLED {
+             log_debug("Add compound WHERE expression: '{}' to post process",
+                       where->toString());
+           }
           post_where.emplace_back(where);
         }
         break;
@@ -1856,9 +1965,9 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
         // Precompute and set tags for source/target refs (alias-based,
         // deterministic)
         traverse->mutable_source().set_tag(
-            QueryState::compute_alias_tag(traverse->source()));
+            compute_tag(traverse->source()));
         traverse->mutable_target().set_tag(
-            QueryState::compute_alias_tag(traverse->target()));
+            compute_tag(traverse->target()));
 
         ARROW_ASSIGN_OR_RAISE(auto source_schema,
                               query_state.resolve_schema(traverse->source()));
@@ -1882,14 +1991,14 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
               where_clauses.size();
         }
         query_state.traversals.push_back(*traverse);
-        if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+        IF_DEBUG_ENABLED {
           log_debug("Processing TRAVERSE {}-({})->{}",
                     traverse->source().toString(), traverse->edge_type(),
                     traverse->target().toString());
         }
         auto source = traverse->source();
         if (!query_state.tables.contains(source.value())) {
-          if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+          IF_DEBUG_ENABLED {
             log_debug("Source table '{}' not found. Loading",
                       traverse->source().toString());
           }
@@ -1899,7 +2008,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
               query_state.update_table(source_table, traverse->source()));
         }
 
-        if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+        IF_DEBUG_ENABLED {
           log_debug("Traversing from {} source nodes",
                     query_state.ids[source.value()].size());
         }
@@ -1911,7 +2020,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
               edge_store_
                   ->get_outgoing_edges_view(source_id, traverse->edge_type())
                   .ValueOrDie();  // todo check result
-          // if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+          // IF_DEBUG_ENABLED {
           //   log_debug("Node {} has {} outgoing edges of type '{}'",
           //   source_id,
           //             outgoing_edges.size(), traverse->edge_type());
@@ -1942,7 +2051,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
                   }
                 }
                 if (passes_all_filters) {
-                  if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+                  IF_DEBUG_ENABLED {
                     log_debug("found edge {}:{} -[{}]-> {}:{}", source.value(),
                               source_id, traverse->edge_type(),
                               traverse->target().value(), target_node->id);
@@ -1969,7 +2078,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
             }
           }
           if (!source_had_match) {
-            if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+            IF_DEBUG_ENABLED {
               log_debug("no edge found from {}:{}", source.value(), source_id);
             }
             unmatched_source_ids.insert(source_id);
@@ -1978,11 +2087,15 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
         if (traverse->traverse_type() == TraverseType::Inner &&
             !unmatched_source_ids.empty()) {
           for (auto id : unmatched_source_ids) {
-            // log_debug("remove unmatched node={}:{}", source.value(), id);
+             IF_DEBUG_ENABLED {
+               log_debug("remove unmatched node={}:{}", source.value(), id);
+             }
             query_state.remove_node(id, source);
           }
-          // log_debug("rebuild table for schema {}:{}", source.value(),
-          //           query_state.aliases[source.value()]);
+           IF_DEBUG_ENABLED {
+             log_debug("rebuild table for schema {}:{}", source.value(),
+                       query_state.aliases[source.value()]);
+           }
           auto table_result =
               filter_table_by_id(query_state.tables[source.value()],
                                  query_state.ids[source.value()]);
@@ -1991,8 +2104,10 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           }
           query_state.tables[source.value()] = table_result.ValueOrDie();
         }
-        // log_debug("found {} neighbors for {}", matched_target_ids.size(),
-        //           traverse->target().toString());
+         IF_DEBUG_ENABLED {
+           log_debug("found {} neighbors for {}", matched_target_ids.size(),
+                     traverse->target().toString());
+         }
 
         if (traverse->traverse_type() == TraverseType::Inner) {
           // intersect
@@ -2010,7 +2125,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           }
 
           query_state.ids[traverse->target().value()] = intersect_ids;
-          if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+          IF_DEBUG_ENABLED {
             log_debug("intersect_ids count: {}", intersect_ids.size());
             log_debug("{} intersect_ids: {}", traverse->target().toString(),
                       join_container(intersect_ids));
@@ -2023,7 +2138,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           auto target_ids =
               get_ids_from_table(get_table(target_schema).ValueOrDie())
                   .ValueOrDie();
-          if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+          IF_DEBUG_ENABLED {
             log_debug(
                 "traverse type: '{}', matched_source_ids=[{}], "
                 "target_ids=[{}]",
@@ -2037,7 +2152,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
 
         std::vector<std::shared_ptr<Node>> neighbors;
         for (auto id : query_state.ids[traverse->target().value()]) {
-          auto node_res = node_manager_->get_node(id);
+          auto const node_res = node_manager_->get_node(id);
           if (node_res.ok()) {
             neighbors.push_back(node_res.ValueOrDie());
           }
@@ -2063,9 +2178,13 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
     }
   }
 
-  if (Logger::get_instance().get_level() == LogLevel::DEBUG) {
+  IF_DEBUG_ENABLED {
     log_debug("Query processing complete, building result");
     log_debug("Query state: {}", query_state.ToString());
+    for (auto traversal : query_state.traversals) {
+      log_debug("schema tag {}->{}", traversal.source().value(), traversal.source().tag());
+      log_debug("schema tag {}->{}", traversal.target().value(), traversal.target().tag());
+    }
   }
 
   auto output_schema_res = build_denormalized_schema(query_state);
@@ -2073,7 +2192,9 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
     return output_schema_res.status();
   }
   const auto output_schema = output_schema_res.ValueOrDie();
-  // log_debug("output_schema={}", output_schema->ToString());
+   IF_DEBUG_ENABLED {
+     log_debug("output_schema={}", output_schema->ToString());
+   }
 
   auto row_res = populate_rows(query.execution_config(), query_state,
                                query_state.traversals, output_schema);
@@ -2090,7 +2211,9 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
   auto output_table = output_table_res.ValueOrDie();
   for (const auto& expr : post_where) {
     result->mutable_execution_stats().num_where_clauses_post_processed++;
-    // log_debug("post process where: {}", expr->toString());
+     IF_DEBUG_ENABLED {
+       log_debug("post process where: {}", expr->toString());
+     }
     output_table = filter(output_table, *expr, false).ValueOrDie();
   }
   result->set_table(apply_select(query.select(), output_table));

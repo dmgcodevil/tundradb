@@ -4,6 +4,17 @@ project(tundradb)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Configure compile-time logging levels
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    add_compile_definitions(TUNDRA_LOG_LEVEL_DEBUG)
+elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
+    add_compile_definitions(TUNDRA_LOG_LEVEL_INFO)
+elseif(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+    add_compile_definitions(TUNDRA_LOG_LEVEL_INFO)
+else()
+    add_compile_definitions(TUNDRA_LOG_LEVEL_DEBUG)
+endif()
+
 # Enable Address Sanitizer
 #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address -fno-omit-frame-pointer")
 #set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address -fno-omit-frame-pointer")
@@ -260,6 +271,20 @@ target_link_libraries(tundra_shell
     PRIVATE
         core
         tundraql_parser
+        Arrow::arrow_shared
+        ${ARROW_DATASET_LIB}
+        Parquet::parquet_shared
+        ${UUID_LIBRARY}
+        ${ANTLR4_RUNTIME}
+        LLVMSupport
+        LLVMCore
+)
+
+# Benchmark runner executable for loading CSVs and running queries
+add_executable(tundra_bench_runner bench/tundra_runner.cpp)
+target_link_libraries(tundra_bench_runner
+    PRIVATE
+        core
         Arrow::arrow_shared
         ${ARROW_DATASET_LIB}
         Parquet::parquet_shared
