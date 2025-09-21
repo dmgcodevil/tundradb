@@ -143,7 +143,8 @@ class SchemaLayout {
   }
 
   const char* get_field_value_ptr(const char* node_data,
-                                  const std::string& field_name, ValueType* out_type) const {
+                                  const std::string& field_name,
+                                  ValueType* out_type) const {
     const size_t field_index = get_field_index(field_name);
     const FieldLayout& field = fields_[field_index];
     if (out_type) {
@@ -246,7 +247,7 @@ class SchemaLayout {
     // if (name[0] == 'n' || name[0] == 'i') return 1;
     // if (name[0] == 'a') return 2;
     // if (name[0] == 'c') return 3;
-    return  -1;
+    return -1;
   }
 
   const FieldLayout* get_field_layout(const std::string& name) const {

@@ -7,27 +7,28 @@ namespace tundradb {
 void EdgeView::iterator::advance_to_valid() {
   // Pre-check if type filter is empty to avoid string comparisons
   const bool has_type_filter = !type_filter_.empty();
-  
+
   while (edge_ids_it_ != edge_ids_end_) {
-    tbb::concurrent_hash_map<int64_t, std::shared_ptr<Edge>>::const_accessor edge_acc;
-    
+    tbb::concurrent_hash_map<int64_t, std::shared_ptr<Edge>>::const_accessor
+        edge_acc;
+
     // Fast path: try to find edge (this is the main bottleneck)
     if (store_->edges.find(edge_acc, edge_ids_it_->first)) {
       auto edge = edge_acc->second;
-      
+
       // Fast path: no type filter
       if (!has_type_filter) {
         current_edge_ = edge;
         return;
       }
-      
+
       // Slow path: check type filter
       if (edge->get_type() == type_filter_) {
         current_edge_ = edge;
         return;
       }
     }
-    
+
     ++edge_ids_it_;
   }
   current_edge_.reset();

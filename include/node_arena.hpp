@@ -133,7 +133,8 @@ class NodeArena {
    */
   const char* get_field_value_ptr(const NodeHandle& handle,
                                   const std::shared_ptr<SchemaLayout>& layout,
-                                  const std::string& field_name, ValueType* out_type) const {
+                                  const std::string& field_name,
+                                  ValueType* out_type) const {
     // Logger::get_instance().debug("get_field_value: {}.{}", schema_name,
     //                              field_name);
     if (handle.is_null()) {

@@ -3,10 +3,11 @@
 
 #include <arrow/api.h>
 
+#include <iostream>
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include <iostream>
+
 #include "llvm/ADT/DenseMap.h"
 #include "node_arena.hpp"
 #include "schema.hpp"
@@ -57,13 +58,16 @@ class Node {
     data_[field_name] = std::move(value);
   }
 
-  const char * get_value_ptr(const std::string &field_name, ValueType* out_type) const {
+  ValueRef get_value_ref(const std::string &field_name) const {
     if (arena_ != nullptr) {
       // if (schema_->get_field(field_name) == nullptr) {
       //   // Logger::get_instance().debug("Field not found");
       //   return arrow::Status::KeyError("Field not found: ", field_name);
       // }
-      return arena_->get_field_value_ptr(*handle_, layout_, field_name, out_type);
+      ValueType out_type;
+      const char *ptr =
+          arena_->get_field_value_ptr(*handle_, layout_, field_name, &out_type);
+      return {ptr, out_type};
     }
 
     // const char * get_value_ptr(const std::string &field_name) const {
@@ -78,7 +82,7 @@ class Node {
     // auto v = Value::read_value_from_memory(p, it->second.type());
     // Logger::get_instance().debug("get value ptr {}={}", field_name,
     // v.to_string() );
-    return it->second.data_ptr();
+    return it->second.as_ref();
     // return arrow::Status::NotImplemented("");
   }
 
