@@ -1206,11 +1206,10 @@ void log_grouped_connections(
   }
 }
 
-template <StringSet VisitedSet>
 arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows_bfs(
     int64_t node_id, const SchemaRef& start_schema,
     const std::shared_ptr<arrow::Schema>& output_schema,
-    const QueryState& query_state, VisitedSet& global_visited) {
+    const QueryState& query_state, llvm::DenseSet<uint64_t>& global_visited) {
   IF_DEBUG_ENABLED {
     log_debug("populate_rows_bfs::node={}:{}", start_schema.value(), node_id);
   }
@@ -1240,8 +1239,7 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows_bfs(
       }
       item.row->set_cell_from_node(it_fq->second, node);
       const uint64_t packed = hash_code_(item.schema_ref, item.node_id);
-      global_visited.insert(item.schema_ref.value() + ":" +
-                            std::to_string(item.node_id));
+      global_visited.insert(packed);
       item.path_visited_nodes.insert(packed);
 
       // group connections by target schema (small, stack-friendly)
@@ -1334,15 +1332,14 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_batch_rows(
     const llvm::DenseSet<int64_t>& node_ids, const SchemaRef& schema_ref,
     const std::shared_ptr<arrow::Schema>& output_schema,
     const QueryState& query_state, const TraverseType join_type,
-    tbb::concurrent_unordered_set<std::string>& global_visited) {
+    tbb::concurrent_unordered_set<uint64_t>& global_visited) {
   auto rows = std::make_shared<std::vector<Row>>();
   rows->reserve(node_ids.size());
-  std::set<std::string> local_visited;
+  llvm::DenseSet<uint64_t> local_visited;
   // For INNER join: only process nodes that have connections
   // For LEFT join: process all nodes from the "left" side
   for (const auto node_id : node_ids) {
-    auto key = schema_ref.value() + ":" + std::to_string(node_id);
-    if (!global_visited.insert(key).second) {
+    if (!global_visited.insert(hash_code_(schema_ref, node_id)).second) {
       // Skip if already processed in an earlier traversal
       continue;
     }
@@ -1402,7 +1399,7 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows(
     const std::shared_ptr<arrow::Schema>& output_schema) {
   auto rows = std::make_shared<std::vector<Row>>();
   std::mutex rows_mtx;
-  tbb::concurrent_unordered_set<std::string> global_visited;
+  tbb::concurrent_unordered_set<uint64_t> global_visited;
 
   // Map schemas to their join types
   std::unordered_map<std::string, TraverseType> schema_join_types;
