@@ -151,6 +151,7 @@ TEST_F(WhereExpressionTest, SimpleWhereCondition) {
 // Test compound WHERE with AND - fluent API
 TEST_F(WhereExpressionTest, CompoundWhereAndFluent) {
   // Test: age > 30 AND city = "NYC"
+  Logger::get_instance().set_level(LogLevel::DEBUG);
   Query query = Query::from("u:User")
                     .where("u.age", CompareOp::Gt, 30)
                     .and_where("u.city", CompareOp::Eq, "NYC")
@@ -559,6 +560,7 @@ TEST_F(WhereExpressionTest, TraversalWhereCombinations) {
 }
 
 TEST_F(WhereExpressionTest, TraversalWhereCombinations2) {
+  Logger::get_instance().set_level(LogLevel::DEBUG);
   Query query = Query::from("u:User")
                     .traverse("u", "WORKS_AT", "c:Company")
                     .where("u.age", CompareOp::Gte, 35)

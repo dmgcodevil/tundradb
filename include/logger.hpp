@@ -278,6 +278,68 @@ class ContextLogger {
   std::string prefix_;
 };
 
+// ============================================================================
+// COMPILE-TIME LOGGING OPTIMIZATIONS
+// ============================================================================
+
+// Compile-time log level configuration
+#ifdef TUNDRA_LOG_LEVEL_DEBUG
+constexpr LogLevel COMPILE_TIME_LOG_LEVEL = LogLevel::DEBUG;
+#elif defined(TUNDRA_LOG_LEVEL_INFO)
+constexpr LogLevel COMPILE_TIME_LOG_LEVEL = LogLevel::INFO;
+#elif defined(TUNDRA_LOG_LEVEL_WARN)
+constexpr LogLevel COMPILE_TIME_LOG_LEVEL = LogLevel::WARN;
+#elif defined(TUNDRA_LOG_LEVEL_ERROR)
+constexpr LogLevel COMPILE_TIME_LOG_LEVEL = LogLevel::ERROR;
+#else
+// Default to INFO in release builds, DEBUG in debug builds
+#ifdef NDEBUG
+constexpr LogLevel COMPILE_TIME_LOG_LEVEL = LogLevel::INFO;
+#else
+constexpr LogLevel COMPILE_TIME_LOG_LEVEL = LogLevel::DEBUG;
+#endif
+#endif
+
+// Compile-time log level checks - completely eliminated in release builds
+constexpr bool is_debug_enabled() {
+  return COMPILE_TIME_LOG_LEVEL <= LogLevel::DEBUG;
+}
+
+constexpr bool is_info_enabled() {
+  return COMPILE_TIME_LOG_LEVEL <= LogLevel::INFO;
+}
+
+constexpr bool is_warn_enabled() {
+  return COMPILE_TIME_LOG_LEVEL <= LogLevel::WARN;
+}
+
+// Fast logging macros that compile to nothing when disabled
+#define LOG_DEBUG_FAST(msg, ...)        \
+  do {                                  \
+    if constexpr (is_debug_enabled()) { \
+      log_debug(msg, ##__VA_ARGS__);    \
+    }                                   \
+  } while (0)
+
+#define LOG_INFO_FAST(msg, ...)        \
+  do {                                 \
+    if constexpr (is_info_enabled()) { \
+      log_info(msg, ##__VA_ARGS__);    \
+    }                                  \
+  } while (0)
+
+#define LOG_WARN_FAST(msg, ...)        \
+  do {                                 \
+    if constexpr (is_warn_enabled()) { \
+      log_warn(msg, ##__VA_ARGS__);    \
+    }                                  \
+  } while (0)
+
+// Conditional code blocks - completely eliminated when disabled
+#define IF_DEBUG_ENABLED if constexpr (is_debug_enabled())
+
+#define IF_INFO_ENABLED if constexpr (is_info_enabled())
+
 }  // namespace tundradb
 
 #endif  // LOGGER_HPP

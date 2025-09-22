@@ -184,9 +184,13 @@ class ComparisonExpr : public Clause, public WhereExpr {
   CompareOp op_;
   Value value_;
   bool inlined_ = false;
+  std::string field_name;
 
-  static arrow::Result<bool> compare_values(const Value& value, CompareOp op,
-                                            const Value& where_value) {
+  static arrow::Result<bool> compare_values(const std::string& field_name,
+                                            const char* value_ptr, CompareOp op,
+                                            const Value& where_value,
+                                            ValueType value_type) {
+    /*
     if (value.type() == ValueType::NA || where_value.type() == ValueType::NA) {
       switch (op) {
         case CompareOp::Eq:
@@ -228,35 +232,38 @@ class ComparisonExpr : public Clause, public WhereExpr {
       return arrow::Status::Invalid("Type mismatch: field is ", value.type(),
                                     " but WHERE value is ", where_value.type());
     }
+*/
 
-    switch (value.type()) {
+    switch (value_type) {
       case ValueType::INT32: {
-        int32_t field_val = value.get<int32_t>();
+        int32_t field_val = *reinterpret_cast<const int32_t*>(value_ptr);
         int32_t where_val = where_value.get<int32_t>();
         return apply_comparison(field_val, op, where_val);
       }
       case ValueType::INT64: {
-        int64_t field_val = value.get<int64_t>();
+        int64_t field_val = *reinterpret_cast<const int64_t*>(value_ptr);
         int64_t where_val = where_value.get<int64_t>();
         return apply_comparison(field_val, op, where_val);
       }
       case ValueType::FLOAT: {
-        float field_val = value.get<float>();
+        float field_val = *reinterpret_cast<const float*>(value_ptr);
         float where_val = where_value.get<float>();
         return apply_comparison(field_val, op, where_val);
       }
       case ValueType::DOUBLE: {
-        double field_val = value.get<double>();
+        double field_val = *reinterpret_cast<const double*>(value_ptr);
         double where_val = where_value.get<double>();
         return apply_comparison(field_val, op, where_val);
       }
       case ValueType::STRING: {
-        const std::string& field_val = value.as_string();
+        auto str_ref = *reinterpret_cast<const StringRef*>(value_ptr);
+        const std::string& field_val =
+            std::string(str_ref.data, str_ref.length);
         const std::string& where_val = where_value.as_string();
         return apply_comparison(field_val, op, where_val);
       }
       case ValueType::BOOL: {
-        bool field_val = value.get<bool>();
+        bool field_val = *reinterpret_cast<const bool*>(value_ptr);
         bool where_val = where_value.get<bool>();
         return apply_comparison(field_val, op, where_val);
       }
@@ -264,7 +271,7 @@ class ComparisonExpr : public Clause, public WhereExpr {
         return arrow::Status::Invalid("Unexpected null value in comparison");
       default:
         return arrow::Status::NotImplemented(
-            "Unsupported value type for comparison: ", value.type());
+            "Unsupported value type for comparison: ", value_type);
     }
   }
 
@@ -308,7 +315,13 @@ class ComparisonExpr : public Clause, public WhereExpr {
 
  public:
   ComparisonExpr(std::string field, CompareOp op, Value value)
-      : field_(std::move(field)), op_(op), value_(std::move(value)) {}
+      : field_(std::move(field)), op_(op), value_(std::move(value)) {
+    if (const size_t dot_pos = field_.find('.'); dot_pos != std::string::npos) {
+      field_name = field_.substr(dot_pos + 1);
+    } else {
+      field_name = field_;
+    }
+  }
 
   [[nodiscard]] const std::string& field() const { return field_; }
   [[nodiscard]] CompareOp op() const { return op_; }
@@ -397,34 +410,14 @@ class ComparisonExpr : public Clause, public WhereExpr {
     if (!node) {
       return arrow::Status::Invalid("Node is null");
     }
-
-    // parse field name to extract variable and field parts
-    // expected format: "variable.field" (e.g., "user.age", "company.name")
-    const size_t dot_pos = field_.find('.');
-    std::string field_name;
-
-    if (dot_pos != std::string::npos) {
-      field_name = field_.substr(dot_pos + 1);
-    } else {
-      field_name = field_;
-    }
-
-    ARROW_ASSIGN_OR_RAISE(auto field_value, node->get_value(field_name));
-    return compare_values(field_value, op_, value_);
+    auto value_ref = node->get_value_ref(field_name);
+    return compare_values(field_,value_ref.data, op_, value_, value_ref.type);
   }
 
   [[nodiscard]] arrow::compute::Expression to_arrow_expression(
       bool strip_var) const override {
-    std::string field_name = field_;
-    if (strip_var) {
-      if (const size_t dot_pos = field_.find('.');
-          dot_pos != std::string::npos) {
-        field_name = field_.substr(dot_pos + 1);
-      } else {
-        field_name = field_;
-      }
-    }
-    const auto field_expr = arrow::compute::field_ref(field_name);
+    const auto field_expr =
+        arrow::compute::field_ref(strip_var ? field_name : field_);
     const auto value_expr = value_to_expression(value_);
 
     return apply_comparison_op(field_expr, value_expr, op_);

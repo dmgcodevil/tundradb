@@ -14,6 +14,98 @@
 
 namespace tundradb {
 
+// Forward declaration for EdgeView
+class EdgeStore;
+
+/**
+ * @brief A view over edges that avoids copying shared_ptr<Edge> objects
+ *
+ * This class provides iteration over edges without materializing them into
+ * a vector, reducing memory allocations and improving performance.
+ */
+class EdgeView {
+ public:
+  class iterator {
+   public:
+    using iterator_category = std::forward_iterator_tag;
+    using value_type = std::shared_ptr<Edge>;
+    using difference_type = std::ptrdiff_t;
+    using pointer = const value_type *;
+    using reference = const value_type &;
+
+    iterator(const EdgeStore *store,
+             ConcurrentSet<int64_t>::LockedView::iterator edge_ids_it,
+             ConcurrentSet<int64_t>::LockedView::iterator edge_ids_end,
+             const std::string &type_filter)
+        : store_(store),
+          edge_ids_it_(edge_ids_it),
+          edge_ids_end_(edge_ids_end),
+          type_filter_(type_filter) {
+      advance_to_valid();
+    }
+
+    iterator &operator++() {
+      ++edge_ids_it_;
+      advance_to_valid();
+      return *this;
+    }
+
+    iterator operator++(int) {
+      iterator tmp = *this;
+      ++(*this);
+      return tmp;
+    }
+
+    reference operator*() const { return current_edge_; }
+    pointer operator->() const { return &current_edge_; }
+
+    bool operator==(const iterator &other) const {
+      return edge_ids_it_ == other.edge_ids_it_;
+    }
+
+    bool operator!=(const iterator &other) const { return !(*this == other); }
+
+   private:
+    void advance_to_valid();
+
+    const EdgeStore *store_;
+    ConcurrentSet<int64_t>::LockedView::iterator edge_ids_it_;
+    ConcurrentSet<int64_t>::LockedView::iterator edge_ids_end_;
+    std::string type_filter_;
+    std::shared_ptr<Edge> current_edge_;
+  };
+
+  EdgeView(const EdgeStore *store, const ConcurrentSet<int64_t> &edge_ids,
+           const std::string &type_filter = "")
+      : store_(store),
+        edge_ids_view_(edge_ids.get_all_unsafe()),
+        type_filter_(type_filter) {}
+
+  iterator begin() const {
+    return iterator(store_, edge_ids_view_.begin(), edge_ids_view_.end(),
+                    type_filter_);
+  }
+
+  iterator end() const {
+    return iterator(store_, edge_ids_view_.end(), edge_ids_view_.end(),
+                    type_filter_);
+  }
+
+  // Convenience method to count matching edges without materializing them
+  size_t count() const {
+    size_t result = 0;
+    for (auto it = begin(); it != end(); ++it) {
+      ++result;
+    }
+    return result;
+  }
+
+ private:
+  const EdgeStore *store_;
+  ConcurrentSet<int64_t>::LockedView edge_ids_view_;
+  std::string type_filter_;
+};
+
 // todo rename to EdgeManager
 class EdgeStore {
   struct TableCache;
@@ -94,6 +186,13 @@ class EdgeStore {
   arrow::Result<std::vector<std::shared_ptr<Edge>>> get_incoming_edges(
       int64_t id, const std::string &type = "") const;
 
+  // New view-based methods that avoid copying
+  arrow::Result<EdgeView> get_outgoing_edges_view(
+      int64_t id, const std::string &type = "") const;
+
+  arrow::Result<EdgeView> get_incoming_edges_view(
+      int64_t id, const std::string &type = "") const;
+
   arrow::Result<std::vector<std::shared_ptr<Edge>>> get_by_type(
       const std::string &type) const;
 
@@ -114,6 +213,9 @@ class EdgeStore {
   void set_id_seq(const int64_t v) {
     edge_id_counter_.store(v, std::memory_order_relaxed);
   }
+
+  // Friend class for EdgeView iterator access
+  friend class EdgeView::iterator;
 };
 }  // namespace tundradb
 
