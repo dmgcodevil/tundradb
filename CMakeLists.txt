@@ -4,6 +4,17 @@ project(tundradb)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Configure compile-time logging levels
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    add_compile_definitions(TUNDRA_LOG_LEVEL_DEBUG)
+elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
+    add_compile_definitions(TUNDRA_LOG_LEVEL_INFO)
+elseif(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+    add_compile_definitions(TUNDRA_LOG_LEVEL_INFO)
+else()
+    add_compile_definitions(TUNDRA_LOG_LEVEL_DEBUG)
+endif()
+
 # Enable Address Sanitizer
 #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address -fno-omit-frame-pointer")
 #set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address -fno-omit-frame-pointer")
