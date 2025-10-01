@@ -686,17 +686,16 @@ std::string join_schema_path(const std::vector<PathSegment>& schema_path) {
 
 struct Row {
   int64_t id;
-  std::unordered_map<std::string, std::shared_ptr<arrow::Scalar>> cells;
+  // std::unordered_map<std::string, std::shared_ptr<arrow::Scalar>> cells;
+  llvm::StringMap<ValueRef> cells;
   std::vector<PathSegment> path;
 
-  void set_cell(const std::string& name,
-                std::shared_ptr<arrow::Scalar> scalar) {
-    cells[name] = std::move(scalar);
+  void set_cell(const std::string& name, ValueRef value_ref) {
+    cells[name] = value_ref;
   }
 
-  bool has_value(const std::string& name) const {
-    return cells.contains(name) && cells.at(name) != nullptr &&
-           cells.at(name)->is_valid;
+  [[nodiscard]] bool has_value(const std::string& name) const {
+    return cells.contains(name) && cells.at(name).data != nullptr;
   }
 
   void set_cell_from_node(const std::vector<std::string>& fq_field_names,
@@ -706,57 +705,28 @@ struct Row {
     for (size_t i = 0; i < n; ++i) {
       const auto& field = fields[i];
       const auto& full_name = fq_field_names[i];
-      this->set_cell(full_name, node->get_value_ptr(field).ValueOrDie(),
-                     field->type());
+      this->set_cell(full_name, node->get_value_ref(field));
     }
-  }
-
-  // New set_cell method for Value objects
-  void set_cell(const std::string& name, const char* ptr,
-                const ValueType type) {
-    if (ptr) {
-      auto scalar_result = value_ptr_to_arrow_scalar(ptr, type);
-      if (scalar_result.ok()) {
-        cells[name] = scalar_result.ValueOrDie();
-        return;
-      }
-    }
-
-    // Default to null if value is null or conversion fails
-    cells[name] = nullptr;
-  }
-
-  void set_cell(const std::string& name, std::shared_ptr<arrow::Array> array) {
-    if (array && array->length() > 0) {
-      auto scalar_result = array->GetScalar(0);
-      if (scalar_result.ok()) {
-        cells[name] = scalar_result.ValueOrDie();
-        return;
-      }
-    }
-
-    // Default to null if array is empty or conversion fails
-    cells[name] = nullptr;
   }
 
   bool start_with(const std::vector<PathSegment>& prefix) const {
     return is_prefix(prefix, this->path);
   }
 
+  // todo optimize
   std::unordered_map<std::string, int64_t> extract_schema_ids() const {
     std::unordered_map<std::string, int64_t> result;
     for (const auto& [field_name, value] : cells) {
-      if (!value || !value->is_valid) continue;
+      if (!value.data) continue;
 
       // Extract schema prefix (everything before the first dot)
       size_t dot_pos = field_name.find('.');
       if (dot_pos != std::string::npos) {
-        std::string schema = field_name.substr(0, dot_pos);
+        std::string schema = field_name.substr(0, dot_pos).str();
 
         // Store ID for this schema if it's an ID field
         if (field_name.substr(dot_pos + 1) == "id") {
-          auto id_scalar = std::static_pointer_cast<arrow::Int64Scalar>(value);
-          result[schema] = id_scalar->value;
+          result[schema] = value.as_int64();
         }
       }
     }
@@ -767,7 +737,7 @@ struct Row {
   [[nodiscard]] Row merge(const Row& other) const {
     Row merged = *this;
     for (const auto& [name, value] : other.cells) {
-      if (!merged.has_value(name)) {
+      if (!merged.has_value(name.str())) {
         merged.cells[name] = value;
       }
     }
@@ -780,42 +750,38 @@ struct Row {
     ss << "path='" << join_schema_path(path) << "', ";
 
     bool first = true;
-    for (const auto& [field_name, scalar] : cells) {
+    for (const auto& [field_name, value_ref] : cells) {
       if (!first) {
         ss << ", ";
       }
       first = false;
 
-      ss << field_name << ": ";
+      ss << field_name.str() << ": ";
 
-      if (!scalar) {
+      if (!value_ref.data) {
         ss << "NULL";
-      } else if (scalar->is_valid) {
+      } else {
         // Handle different scalar types appropriately
-        switch (scalar->type->id()) {
-          case arrow::Type::INT64:
-            ss << std::static_pointer_cast<arrow::Int64Scalar>(scalar)->value;
+        switch (value_ref.type) {
+          case ValueType::INT64:
+            ss << value_ref.as_int64();
             break;
-          case arrow::Type::DOUBLE:
-            ss << std::static_pointer_cast<arrow::DoubleScalar>(scalar)->value;
+          case ValueType::INT32:
+            ss << value_ref.as_int32();
             break;
-          case arrow::Type::STRING:
-          case arrow::Type::LARGE_STRING:
-            ss << "\""
-               << std::static_pointer_cast<arrow::StringScalar>(scalar)->view()
-               << "\"";
+          case ValueType::DOUBLE:
+            ss << value_ref.as_double();
             break;
-          case arrow::Type::BOOL:
-            ss << (std::static_pointer_cast<arrow::BooleanScalar>(scalar)->value
-                       ? "true"
-                       : "false");
+          case ValueType::STRING:
+            ss << "\"" << value_ref.as_string_ref().to_string() << "\"";
+            break;
+          case ValueType::BOOL:
+            ss << (value_ref.as_bool() ? "true" : "false");
             break;
           default:
-            ss << scalar->ToString();
+            ss << "unknown";
             break;
         }
-      } else {
-        ss << "NULL";
       }
     }
 
@@ -827,17 +793,10 @@ struct Row {
 static Row create_empty_row_from_schema(
     const std::shared_ptr<arrow::Schema>& final_output_schema) {
   Row new_row;
+  new_row.id = -1;
   for (const auto& field : final_output_schema->fields()) {
-    // Create a null scalar of the correct type
-    auto null_scalar = arrow::MakeNullScalar(field->type());
-    if (null_scalar != nullptr) {
-      new_row.cells[field->name()] = null_scalar;
-    } else {
-      // If creating a null scalar fails, use nullptr as a fallback
-      new_row.cells[field->name()] = nullptr;
-      log_warn("Failed to create null scalar for field '{}' with type '{}'",
-               field->name(), field->type()->ToString());
-    }
+    new_row.cells[field->name()] =
+        ValueRef(arrow_type_to_value_type(field->type()));
   }
   return new_row;
 }
@@ -979,14 +938,14 @@ struct RowNode {
           if (can_merge) {
             for (const auto& [field_name, value1] :
                  r1_from_current_group.cells) {
-              if (!value1 || !value1->is_valid) continue;
+              if (!value1.data) continue;
 
               auto it = r2_from_previous_product.cells.find(field_name);
-              if (it != r2_from_previous_product.cells.end() && it->second &&
-                  it->second->is_valid) {
+              if (it != r2_from_previous_product.cells.end() &&
+                  it->second.data) {
                 // Both rows have this field with non-null values - check if
                 // they match
-                if (!value1->Equals(*(it->second))) {
+                if (!value1.equals(it->second)) {
                   IF_DEBUG_ENABLED {
                     log_debug(
                         "Conflict detected: Field '{}' has different values",
@@ -1059,11 +1018,11 @@ struct RowNode {
             break;
           }
 
-          ss << key << ": ";
-          if (!value) {
+          ss << key.str() << ": ";
+          if (!value.data) {
             ss << "NULL";
           } else {
-            ss << value->ToString();  // Assuming arrow::Scalar has ToString()
+            ss << value.ToString();
           }
         }
         ss << " }";
@@ -1532,8 +1491,8 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_rows(
     // Get all field names from all rows to create a complete schema
     std::set<std::string> all_field_names;
     for (const auto& row : *rows) {
-      for (const auto& field_name : row.cells | std::views::keys) {
-        all_field_names.insert(field_name);
+      for (const auto& e : row.cells) {
+        all_field_names.insert(e.first().str());
       }
     }
 
@@ -1545,10 +1504,9 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_rows(
       std::shared_ptr<arrow::DataType> field_type = nullptr;
       for (const auto& row : *rows) {
         auto it = row.cells.find(field_name);
-        if (it != row.cells.end() && it->second) {
-          if (auto array_result = arrow::MakeArrayFromScalar(*(it->second), 1);
-              array_result.ok()) {
-            field_type = array_result.ValueOrDie()->type();
+        if (it != row.cells.end() && it->second.data) {
+          if (auto array_result = it->second.as_scalar(); array_result.ok()) {
+            field_type = array_result.ValueOrDie()->type;
             break;
           }
         }
@@ -1578,17 +1536,13 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_rows(
       const auto& field_name = output_schema->field(i)->name();
       auto it = row.cells.find(field_name);
 
-      if (it != row.cells.end() && it->second) {
+      if (it != row.cells.end() && it->second.data) {
         // We have a value for this field
-        auto array_result = arrow::MakeArrayFromScalar(*(it->second), 1);
-        if (array_result.ok()) {
-          auto array = array_result.ValueOrDie();
-          auto scalar_result = array->GetScalar(0);
-          if (scalar_result.ok()) {
-            ARROW_RETURN_NOT_OK(
-                builders[i]->AppendScalar(*scalar_result.ValueOrDie()));
-            continue;
-          }
+        auto scalar_result = it->second.as_scalar();
+        if (scalar_result.ok()) {
+          ARROW_RETURN_NOT_OK(
+              builders[i]->AppendScalar(*scalar_result.ValueOrDie()));
+          continue;
         }
       }
 

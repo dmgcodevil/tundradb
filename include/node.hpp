@@ -58,6 +58,12 @@ class Node {
     return arrow::Status::NotImplemented("");
   }
 
+  [[nodiscard]] ValueRef get_value_ref(
+      const std::shared_ptr<Field> &field) const {
+    const char *ptr = arena_->get_field_value_ptr(*handle_, layout_, field);
+    return {ptr, field->type()};
+  }
+
   [[deprecated]]
   arrow::Result<Value> get_value(const std::string &field) const {
     log_warn("get_value by string is deprecated");
