@@ -1,5 +1,7 @@
 #include "schema.hpp"
 
+#include <iostream>
+
 #include "arrow_utils.hpp"
 
 namespace tundradb {
@@ -26,6 +28,7 @@ arrow::Result<Field> Field::from_arrow(
       break;
     case arrow::Type::FLOAT:
       type = ValueType::FLOAT;
+      break;
     case arrow::Type::DOUBLE:
       type = ValueType::DOUBLE;
       break;
@@ -62,40 +65,56 @@ arrow::Result<Field> Field::from_arrow(
   }
 }
 
-arrow::Result<Schema> Schema::from_arrow(
+std::shared_ptr<arrow::Schema> Schema::crete_arrow_schema(
+    const llvm::SmallVector<std::shared_ptr<Field>, 4> &fields) {
+  std::vector<std::shared_ptr<arrow::Field>> arrow_fields;
+  for (auto const &field : fields) {
+    arrow_fields.push_back(field->to_arrow().ValueOrDie());
+  }
+  return arrow::schema(std::move(arrow_fields));
+}
+
+std::shared_ptr<arrow::Schema> Schema::to_arrow(
+    const std::shared_ptr<Schema> &schema) {
+  return crete_arrow_schema(schema->fields());
+}
+
+arrow::Result<std::shared_ptr<Schema>> Schema::from_arrow(
     const std::string &schema_name,
-    const std::shared_ptr<arrow::Schema> &schema) {
-  // Schema result;
-  // result.name = schema_name;
-  // result.version = 0;
+    const std::shared_ptr<arrow::Schema> &arrow_schema) {
+  llvm::SmallVector<std::shared_ptr<Field>, 4> fields;
 
-  std::vector<std::shared_ptr<Field>> fields;
-
-  for (const auto &arrow_field : schema->fields()) {
+  for (const auto &arrow_field : arrow_schema->fields()) {
     ARROW_ASSIGN_OR_RAISE(auto field, Field::from_arrow(arrow_field));
     fields.push_back(std::make_shared<Field>(field));
   }
-
-  return Schema(schema_name, 0, fields);
+  return std::make_shared<Schema>(schema_name, 0, fields, arrow_schema);
 }
 
-[[nodiscard]] const std::vector<std::shared_ptr<Field>> &Schema::fields()
-    const {
+[[nodiscard]] const llvm::SmallVector<std::shared_ptr<Field>, 4> &
+Schema::fields() const {
   return fields_;
 }
 [[nodiscard]] const std::string &Schema::name() const { return name_; }
 [[nodiscard]] uint32_t Schema::version() const { return version_; }
-std::shared_ptr<Field> Schema::get_field(const std::string &name) const {
-  // that is bad, use map
-  for (const auto &field : fields_) {
-    if (field->name() == name) {
-      return field;
-    }
+[[nodiscard]] size_t Schema::num_fields() const { return num_fields_; }
+[[nodiscard]] std::shared_ptr<Field> Schema::field(const int i) const {
+  return fields_[i];
+}
+[[nodiscard]] std::shared_ptr<Field> Schema::get_field(
+    const std::string &name) const {
+  auto it = field_map_.find(name);
+  if (it != field_map_.end()) {
+    return it->second;
   }
   return nullptr;
 }
 
 bool Schema::empty() const { return fields_.empty(); }
+
+[[nodiscard]] std::shared_ptr<arrow::Schema> Schema::arrow() const {
+  return arrow_schema_;
+}
 
 arrow::Result<bool> SchemaRegistry::create(
     const std::string &name, const std::shared_ptr<arrow::Schema> &schema) {
@@ -112,8 +131,7 @@ arrow::Result<bool> SchemaRegistry::add_arrow(
     return result.status();
   }
   log_debug("add native schema");
-  schemas_.emplace(name,
-                   std::make_shared<Schema>(std::move(result.ValueOrDie())));
+  schemas_.emplace(name, result.ValueOrDie());
 
   return {true};
 }
@@ -127,6 +145,7 @@ arrow::Result<std::shared_ptr<Schema>> SchemaRegistry::get(
   return it->second;
 }
 
+[[deprecated]]
 arrow::Result<std::shared_ptr<arrow::Schema>> SchemaRegistry::get_arrow(
     const std::string &name) const {
   const auto it = arrow_schemas_.find(name);

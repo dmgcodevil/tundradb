@@ -133,7 +133,7 @@ class NodeArena {
    */
   const char* get_field_value_ptr(const NodeHandle& handle,
                                   const std::shared_ptr<SchemaLayout>& layout,
-                                  const std::string& field_name) const {
+                                  const std::shared_ptr<Field>& field) const {
     // Logger::get_instance().debug("get_field_value: {}.{}", schema_name,
     //                              field_name);
     if (handle.is_null()) {
@@ -142,12 +142,12 @@ class NodeArena {
     }
 
     return layout->get_field_value_ptr(static_cast<const char*>(handle.ptr),
-                                       field_name);
+                                       field);
   }
 
   Value get_field_value(const NodeHandle& handle,
                         const std::shared_ptr<SchemaLayout>& layout,
-                        const std::string& field_name) const {
+                        const std::shared_ptr<Field>& field) const {
     // Logger::get_instance().debug("get_field_value: {}.{}", schema_name,
     //                              field_name);
     if (handle.is_null()) {
@@ -155,8 +155,7 @@ class NodeArena {
       return nullptr;  // null value for invalid handle
     }
 
-    return layout->get_field_value(static_cast<const char*>(handle.ptr),
-                                   field_name);
+    return layout->get_field_value(static_cast<const char*>(handle.ptr), field);
   }
 
   /**
@@ -165,17 +164,20 @@ class NodeArena {
    */
   bool set_field_value(const NodeHandle& handle,
                        const std::shared_ptr<SchemaLayout>& layout,
-                       const std::string& field_name, const Value& value) {
+                       const std::shared_ptr<Field>& field,
+                       const Value& value) {
     // Logger::get_instance().debug("set_field_value: {}.{} = {}", schema_name,
     //                              field_name, value.to_string());
-    if (handle.is_null()) {
-      return false;  // invalid handle
-    }
+    assert(!handle.is_null());
 
     // Handle string deallocation for any field that might contain strings
     // Value storage_value = value;
-    const FieldLayout* field_layout = layout->get_field_layout(field_name);
-    assert(field_layout != nullptr);
+    const FieldLayout* field_layout = layout->get_field_layout(field);
+    if (!field_layout) {
+      // log_error("set_field_value: field_layout is null for field '{}'",
+      //           field ? field->name() : "null");
+      return false;
+    }
 
     // If the field currently contains a string, deallocate it first
     if (is_string_type(field_layout->type) &&

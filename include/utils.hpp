@@ -18,7 +18,7 @@
 #include "logger.hpp"
 #include "node.hpp"
 #include "query.hpp"
-// #include "types.hpp"
+#include "types.hpp"
 
 namespace tundradb {
 static std::string generate_uuid() {
@@ -113,20 +113,21 @@ static arrow::Result<llvm::DenseSet<int64_t>> get_ids_from_table(
 }
 
 static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
-    const std::shared_ptr<arrow::Schema>& schema,
+    const std::shared_ptr<Schema>& schema,
     const std::vector<std::shared_ptr<Node>>& nodes, size_t chunk_size) {
+  auto arrow_schema = schema->arrow();
   if (nodes.empty()) {
     std::vector<std::shared_ptr<arrow::ChunkedArray>> empty_columns;
-    empty_columns.reserve(schema->num_fields());
-    for (int i = 0; i < schema->num_fields(); i++) {
+    empty_columns.reserve(arrow_schema->num_fields());
+    for (int i = 0; i < arrow_schema->num_fields(); i++) {
       empty_columns.push_back(std::make_shared<arrow::ChunkedArray>(
           std::vector<std::shared_ptr<arrow::Array>>{}));
     }
-    return arrow::Table::Make(schema, empty_columns);
+    return arrow::Table::Make(arrow_schema, empty_columns);
   }
 
   std::vector<std::unique_ptr<arrow::ArrayBuilder>> builders;
-  for (const auto& field : schema->fields()) {
+  for (const auto& field : arrow_schema->fields()) {
     switch (field->type()->id()) {
       case arrow::Type::INT32:
         builders.push_back(std::make_unique<arrow::Int32Builder>());
@@ -153,13 +154,13 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
   }
 
   std::vector<std::vector<std::shared_ptr<arrow::Array>>> chunks_per_field(
-      schema->num_fields());
+      arrow_schema->num_fields());
   size_t nodes_in_current_chunk = 0;
 
   for (const auto& node : nodes) {
     for (int i = 0; i < schema->num_fields(); i++) {
       const auto& field = schema->field(i);
-      auto field_result = node->get_value_ptr(field->name());
+      auto field_result = node->get_value_ptr(field);
       if (!field_result.ok()) {
         ARROW_RETURN_NOT_OK(builders[i]->AppendNull());
       } else {
@@ -167,39 +168,39 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
         if (value_ptr == nullptr) {
           ARROW_RETURN_NOT_OK(builders[i]->AppendNull());
         } else {
-          switch (field->type()->id()) {
-            case arrow::Type::INT32: {
+          switch (field->type()) {
+            case ValueType::INT32: {
               ARROW_RETURN_NOT_OK(
                   dynamic_cast<arrow::Int32Builder*>(builders[i].get())
                       ->Append(*reinterpret_cast<const int32_t*>(value_ptr)));
               break;
             }
-            case arrow::Type::INT64: {
+            case ValueType::INT64: {
               ARROW_RETURN_NOT_OK(
                   dynamic_cast<arrow::Int64Builder*>(builders[i].get())
                       ->Append(*reinterpret_cast<const int64_t*>(value_ptr)));
               break;
             }
-            case arrow::Type::FLOAT: {
+            case ValueType::FLOAT: {
               //         return Value{*reinterpret_cast<const double*>(ptr)};
               ARROW_RETURN_NOT_OK(
                   dynamic_cast<arrow::FloatBuilder*>(builders[i].get())
                       ->Append(*reinterpret_cast<const float*>(value_ptr)));
               break;
             }
-            case arrow::Type::DOUBLE: {
+            case ValueType::DOUBLE: {
               ARROW_RETURN_NOT_OK(
                   dynamic_cast<arrow::DoubleBuilder*>(builders[i].get())
                       ->Append(*reinterpret_cast<const double*>(value_ptr)));
               break;
             }
-            case arrow::Type::BOOL: {
+            case ValueType::BOOL: {
               ARROW_RETURN_NOT_OK(
                   dynamic_cast<arrow::BooleanBuilder*>(builders[i].get())
                       ->Append(*reinterpret_cast<const bool*>(value_ptr)));
               break;
             }
-            case arrow::Type::STRING: {
+            case ValueType::STRING: {
               auto str_ref = *reinterpret_cast<const StringRef*>(value_ptr);
 
               ARROW_RETURN_NOT_OK(
@@ -209,7 +210,7 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
             }
             default:
               return arrow::Status::NotImplemented("Unsupported type: ",
-                                                   field->type()->ToString());
+                                                   to_string(field->type()));
           }
         }
       }
@@ -218,7 +219,7 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
     nodes_in_current_chunk++;
 
     if (nodes_in_current_chunk >= chunk_size) {
-      for (int i = 0; i < schema->num_fields(); i++) {
+      for (int i = 0; i < arrow_schema->num_fields(); i++) {
         std::shared_ptr<arrow::Array> array;
         ARROW_RETURN_NOT_OK(builders[i]->Finish(&array));
         chunks_per_field[i].push_back(array);
@@ -229,7 +230,7 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
   }
 
   if (nodes_in_current_chunk > 0) {
-    for (int i = 0; i < schema->num_fields(); i++) {
+    for (int i = 0; i < arrow_schema->num_fields(); i++) {
       std::shared_ptr<arrow::Array> array;
       ARROW_RETURN_NOT_OK(builders[i]->Finish(&array));
       chunks_per_field[i].push_back(array);
@@ -237,13 +238,13 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
   }
 
   std::vector<std::shared_ptr<arrow::ChunkedArray>> chunked_arrays;
-  chunked_arrays.reserve(schema->num_fields());
-  for (int i = 0; i < schema->num_fields(); i++) {
+  chunked_arrays.reserve(arrow_schema->num_fields());
+  for (int i = 0; i < arrow_schema->num_fields(); i++) {
     chunked_arrays.push_back(
         std::make_shared<arrow::ChunkedArray>(chunks_per_field[i]));
   }
 
-  return arrow::Table::Make(schema, chunked_arrays);
+  return arrow::Table::Make(arrow_schema, chunked_arrays);
 }
 
 static void print_row(const std::shared_ptr<arrow::Table>& table,

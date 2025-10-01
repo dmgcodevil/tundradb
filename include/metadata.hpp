@@ -10,6 +10,7 @@
 
 #include "../libs/json/json.hpp"
 #include "file_utils.hpp"
+#include "llvm/ADT/SmallVector.h"
 #include "logger.hpp"
 #include "schema.hpp"
 #include "types.hpp"
@@ -48,14 +49,7 @@ static std::shared_ptr<Field> from_metadata(const FieldMetadata &metadata) {
 }
 
 static std::shared_ptr<Schema> from_metadata(const SchemaMetadata &metadata) {
-  // Schema result;
-  // result.name = metadata.name;
-  // result.version =
-  //     metadata.version;  // static_cast<uint32_t>(metadata.version);
-
-  // // Convert int → uint32_t
-
-  std::vector<std::shared_ptr<Field>> fields;
+  llvm::SmallVector<std::shared_ptr<Field>, 4> fields;
 
   fields.reserve(metadata.fields.size());
   for (const auto &field_meta : metadata.fields) {

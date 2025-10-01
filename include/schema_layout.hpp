@@ -72,8 +72,14 @@ struct FieldLayout {
  */
 class SchemaLayout {
  public:
-  explicit SchemaLayout(std::string schema_name)
-      : schema_name_(std::move(schema_name)), total_size_(0), alignment_(8) {}
+  explicit SchemaLayout(const std::shared_ptr<Schema>& schema)
+      : schema_name_(std::move(schema->name())), total_size_(0), alignment_(8) {
+    fields_.reserve(schema->num_fields());
+    for (auto field : schema->fields()) {
+      add_field(field);
+    }
+    finalize();
+  }
 
   /**
    * Get the size of the bit set in bytes
@@ -86,30 +92,6 @@ class SchemaLayout {
    * Get the offset where actual field data starts (after bit set + alignment)
    */
   size_t get_data_offset() const { return data_offset_; }
-
-  /**
-   * Add a field to the schema layout
-   * Fields are automatically aligned and packed efficiently
-   */
-  void add_field(const std::string& name, ValueType type,
-                 bool nullable = true) {
-    size_t field_size = get_type_size(type);
-    size_t field_alignment = get_type_alignment(type);
-
-    alignment_ = std::max(alignment_, field_alignment);
-
-    // Calculate field offset (relative to start of data, after bit set)
-    size_t aligned_offset = align_up(total_size_, field_alignment);
-
-    // Create field layout (offset is relative to data start, not absolute)
-    auto index = fields_.size();
-    field_index_[name] = index;
-    fields_.emplace_back(index, name, type, aligned_offset, field_size,
-                         field_alignment, nullable);
-
-    // Update total size (size of data portion only)
-    total_size_ = aligned_offset + field_size;
-  }
 
   /**
    * Finalize the layout - adds padding to ensure proper alignment
@@ -130,81 +112,64 @@ class SchemaLayout {
   }
 
   const char* get_field_value_ptr(const char* node_data,
-                                  const FieldLayout& field) const {
+                                  const size_t field_index) const {
+    const FieldLayout& field_layout = fields_[field_index];
     // Check if this field has been set using the bit set
-    if (!is_field_set(node_data, field.index)) {
+    if (!is_field_set(node_data, field_layout.index)) {
       return nullptr;  // null value for unset field
     }
 
     // Field has been set, read it from memory
-    const char* data_start = node_data + data_offset_;  // get_data_offset();
-    const char* field_ptr = data_start + field.offset;
+    const char* data_start = node_data + data_offset_;
+    const char* field_ptr = data_start + field_layout.offset;
     return field_ptr;
   }
 
+  // gets a pointer to field value
   const char* get_field_value_ptr(const char* node_data,
-                                  const std::string& field_name) const {
-    const size_t field_index = get_field_index(field_name);
-    const FieldLayout& field = fields_[field_index];
-    return get_field_value_ptr(node_data, field);
+                                  const std::shared_ptr<Field>& field) const {
+    return get_field_value_ptr(node_data, field->index_);
+  }
+
+  Value get_field_value(const char* node_data, const size_t field_index) const {
+    const FieldLayout& field_layout = fields_[field_index];
+    return Value::read_value_from_memory(
+        get_field_value_ptr(node_data, field_index), field_layout.type);
   }
 
   Value get_field_value(const char* node_data,
-                        const std::string& field_name) const {
-    const size_t field_index = get_field_index(field_name);
-    const FieldLayout& field = fields_[field_index];
-    return Value::read_value_from_memory(get_field_value_ptr(node_data, field),
-                                         field.type);
+                        const FieldLayout& field_layout) const {
+    return Value::read_value_from_memory(
+        get_field_value_ptr(node_data, field_layout.index), field_layout.type);
   }
 
-  Value get_field_value(const char* node_data, const FieldLayout& field) const {
-    return Value::read_value_from_memory(get_field_value_ptr(node_data, field),
-                                         field.type);
+  Value get_field_value(const char* node_data,
+                        const std::shared_ptr<Field>& field) const {
+    return get_field_value(node_data, field->index_);
   }
 
   /**
    * Set field value in node data
    */
-  bool set_field_value(char* node_data, const std::string& field_name,
+  bool set_field_value(char* node_data, const std::shared_ptr<Field>& field,
                        const Value& value) {
-    const auto it = field_index_.find(field_name);
-    if (it == field_index_.end()) {
-      return false;  // field not found
-    }
-
-    const size_t field_index = it->second;
-    const FieldLayout& field = fields_[field_index];
-
-    // Update the bit set to indicate this field has been set
-    set_field_bit(node_data, field_index, !value.is_null());
-
-    // If the value is null, we don't need to write it to memory
-    if (value.is_null()) {
-      return true;  // Successfully "set" to null
-    }
-
-    // Write the actual value to memory
-    char* data_start = node_data + data_offset_;  // get_data_offset();
-    char* field_ptr = data_start + field.offset;
-
-    return write_value_to_memory(field_ptr, field.type, value);
+    return set_field_value(node_data, fields_[field->index_], value);
   }
 
-  bool set_field_value(char* node_data, const FieldLayout& field,
+  bool set_field_value(char* node_data, const FieldLayout& field_layout,
                        const Value& value) {
     // Update the bit set to indicate this field has been set
-    set_field_bit(node_data, field.index, !value.is_null());
+    set_field_bit(node_data, field_layout.index, !value.is_null());
 
-    // If the value is null, we don't need to write it to memory
+    // If the value is null, we don't need to write it to memory just set bit
     if (value.is_null()) {
-      return true;  // Successfully "set" to null
+      return true;
     }
 
     // Write the actual value to memory
-    char* data_start = node_data + data_offset_;  // get_data_offset();
-    char* field_ptr = data_start + field.offset;
-
-    return write_value_to_memory(field_ptr, field.type, value);
+    char* data_start = node_data + data_offset_;
+    char* field_ptr = data_start + field_layout.offset;
+    return write_value_to_memory(field_ptr, field_layout.type, value);
   }
 
   /**
@@ -231,24 +196,45 @@ class SchemaLayout {
   size_t get_total_size() const { return total_size_; }
   size_t get_alignment() const { return alignment_; }
   bool is_finalized() const { return finalized_; }
-
-  bool has_field(const std::string& name) const {
-    return field_index_.contains(name);
-  }
-
-  size_t get_field_index(const std::string& name) const {
-    const auto it = field_index_.find(name);
-    return it != field_index_.end() ? it->second : -1;
-  }
-
-  const FieldLayout* get_field_layout(const std::string& name) const {
-    auto idx = get_field_index(name);
-    return idx == -1 ? nullptr : &fields_[idx];
-  }
-
   const std::vector<FieldLayout>& get_fields() const { return fields_; }
 
+  const FieldLayout* get_field_layout(
+      const std::shared_ptr<Field>& field) const {
+    if (!field) {
+      // log_error("get_field_layout: field is null");
+      return nullptr;
+    }
+    if (field->index_ >= fields_.size()) {
+      // log_error("get_field_layout: field index {} >= fields size {}",
+      //           field->index_, fields_.size());
+      return nullptr;
+    }
+    return &fields_[field->index_];
+  }
+
  private:
+  /**
+   * Add a field to the schema layout
+   * Fields are automatically aligned and packed efficiently
+   */
+  void add_field(const std::shared_ptr<Field>& field) {
+    assert(field != nullptr);
+    size_t field_size = get_type_size(field->type());
+    size_t field_alignment = get_type_alignment(field->type());
+
+    alignment_ = std::max(alignment_, field_alignment);
+
+    // Calculate field offset (relative to start of data, after bit set)
+    size_t aligned_offset = align_up(total_size_, field_alignment);
+    field->index_ = fields_.size();
+    fields_.emplace_back(field->index_, field->name(), field->type(),
+                         aligned_offset, field_size, field_alignment,
+                         field->nullable());
+
+    // Update total size (size of data portion only)
+    total_size_ = aligned_offset + field_size;
+  }
+
   static bool write_value_to_memory(char* ptr, const ValueType type,
                                     const Value& value) {
     switch (type) {
@@ -300,7 +286,6 @@ class SchemaLayout {
 
   std::string schema_name_;
   std::vector<FieldLayout> fields_;
-  llvm::StringMap<size_t> field_index_;
   size_t total_size_;
   size_t alignment_;
   bool finalized_ = false;
@@ -334,37 +319,9 @@ class LayoutRegistry {
     return layouts_.contains(schema_name);
   }
 
-  /**
-   * Create and register a layout from an Arrow schema
-   */
-  std::shared_ptr<SchemaLayout> create_layout_from_arrow_schema(
-      const std::string& schema_name,
-      const std::shared_ptr<arrow::Schema>& arrow_schema) {
-    auto layout = std::make_shared<SchemaLayout>(schema_name);
-
-    // Add fields (all strings stored as StringRef)
-    for (const auto& field : arrow_schema->fields()) {
-      const ValueType value_type = arrow_type_to_value_type(field->type());
-      // String types are stored as StringRef in node layout
-      layout->add_field(field->name(), value_type, field->nullable());
-    }
-    layout->finalize();
-    layouts_[schema_name] = layout;
-    return layout;
-  }
-
   std::shared_ptr<SchemaLayout> create_layout(
       const std::shared_ptr<Schema>& schema) {
-    auto layout = std::make_shared<SchemaLayout>(schema->name());
-
-    // Add fields (all strings stored as StringRef)
-    for (const auto& field : schema->fields()) {
-      // String types are stored as StringRef in node layout
-      layout->add_field(field->name(), field->type(), field->nullable());
-    }
-
-    layout->finalize();
-
+    auto layout = std::make_shared<SchemaLayout>(schema);
     layouts_[schema->name()] = layout;
     // Logger::get_instance().debug("created schema layout");
     return layout;
@@ -377,8 +334,8 @@ class LayoutRegistry {
   std::vector<std::string> get_schema_names() const {
     std::vector<std::string> names;
     names.reserve(layouts_.size());
-    for (const auto& name : layouts_ | std::views::keys) {
-      names.push_back(name);
+    for (auto const& entry : layouts_) {
+      names.push_back(entry.first().str());
     }
     return names;
   }
@@ -388,7 +345,7 @@ class LayoutRegistry {
   void clear() { layouts_.clear(); }
 
  private:
-  std::unordered_map<std::string, std::shared_ptr<SchemaLayout>> layouts_;
+  llvm::StringMap<std::shared_ptr<SchemaLayout>> layouts_;
 };
 
 }  // namespace tundradb

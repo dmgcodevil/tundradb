@@ -1,5 +1,7 @@
 #include "../include/core.hpp"
 
+using namespace tundradb;
+
 #include <arrow/dataset/dataset.h>
 #include <arrow/dataset/scanner.h>
 #include <arrow/datum.h>
@@ -239,16 +241,17 @@ arrow::compute::Expression where_condition_to_expression(
 }
 
 arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
-    const std::shared_ptr<arrow::Schema>& schema,
+    const std::shared_ptr<Schema>& schema,
     const std::vector<std::shared_ptr<Node>>& nodes) {
+  auto arrow_schema = schema->arrow();
   IF_DEBUG_ENABLED {
     log_debug("Creating table from {} nodes with schema '{}'", nodes.size(),
-              schema->ToString());
+              arrow_schema->ToString());
   }
 
   // Create builders for each field
   std::vector<std::unique_ptr<arrow::ArrayBuilder>> builders;
-  for (const auto& field : schema->fields()) {
+  for (const auto& field : arrow_schema->fields()) {
     IF_DEBUG_ENABLED {
       log_debug("Creating builder for field '{}' with type {}", field->name(),
                 field->type()->ToString());
@@ -273,13 +276,12 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
       const auto& field_name = field->name();
 
       // Find the value in the node's data
-      auto res = node->get_value_ptr(field_name);
+      auto res = node->get_value_ptr(field);
       if (res.ok()) {
         // Convert Value to Arrow scalar and append to builder
         auto value = res.ValueOrDie();
         if (value) {
-          auto scalar_result = value_ptr_to_arrow_scalar(
-              value, arrow_type_to_value_type(field->type()));
+          auto scalar_result = value_ptr_to_arrow_scalar(value, field->type());
           if (!scalar_result.ok()) {
             log_error("Failed to convert value to scalar for field '{}': {}",
                       field_name, scalar_result.status().ToString());
@@ -337,7 +339,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
     log_debug("Creating table with {} rows and {} columns",
               arrays.empty() ? 0 : arrays[0]->length(), arrays.size());
   }
-  return arrow::Table::Make(schema, arrays);
+  return arrow::Table::Make(arrow_schema, arrays);
 }
 
 arrow::Result<std::shared_ptr<arrow::Table>> filter(
@@ -524,7 +526,7 @@ struct QueryState {
     if (fq_field_names.contains(alias)) {
       return false;
     }
-    auto schema_res = schema_registry->get_arrow(resolved_schema);
+    auto schema_res = schema_registry->get(resolved_schema);
     if (!schema_res.ok()) {
       return schema_res.status();
     }
@@ -658,13 +660,14 @@ arrow::Result<std::shared_ptr<arrow::Schema>> build_denormalized_schema(
     log_debug("Adding fields from FROM schema '{}'", from_schema);
   }
 
-  auto schema_result = query_state.schema_registry->get_arrow(
-      query_state.aliases.at(from_schema));
+  auto schema_result =
+      query_state.schema_registry->get(query_state.aliases.at(from_schema));
   if (!schema_result.ok()) {
     return schema_result.status();
   }
 
-  auto arrow_schema = schema_result.ValueOrDie();
+  auto schema = schema_result.ValueOrDie();
+  auto arrow_schema = schema->arrow();
   for (const auto& field : arrow_schema->fields()) {
     std::string prefixed_field_name = from_schema + "." + field->name();
     processed_fields.insert(prefixed_field_name);
@@ -687,13 +690,13 @@ arrow::Result<std::shared_ptr<arrow::Schema>> build_denormalized_schema(
       log_debug("Adding fields from schema '{}'", schema_ref.value());
     }
 
-    schema_result = query_state.schema_registry->get_arrow(
+    schema_result = query_state.schema_registry->get(
         query_state.aliases.at(schema_ref.value()));
     if (!schema_result.ok()) {
       return schema_result.status();
     }
 
-    arrow_schema = schema_result.ValueOrDie();
+    arrow_schema = schema_result.ValueOrDie()->arrow();
     for (const auto& field : arrow_schema->fields()) {
       std::string prefixed_field_name =
           schema_ref.value() + "." + field->name();
@@ -767,7 +770,7 @@ struct Row {
     for (size_t i = 0; i < n; ++i) {
       const auto& field = fields[i];
       const auto& full_name = fq_field_names[i];
-      this->set_cell(full_name, node->get_value_ptr(field->name()).ValueOrDie(),
+      this->set_cell(full_name, node->get_value_ptr(field).ValueOrDie(),
                      field->type());
     }
   }
@@ -1776,6 +1779,69 @@ arrow::Result<std::shared_ptr<arrow::Table>> inline_where(
   return curr_table;
 }
 
+/**
+ * @brief Prepare query by populating aliases, traversals, tags, and resolving
+ * field references
+ *
+ * This function processes the query structure and:
+ * 1. Populates QueryState.aliases from FROM and TRAVERSE clauses
+ * 2. Populates QueryState.traversals
+ * 3. Sets schema tags in traversals
+ * 4. Resolves FieldRef objects in WHERE clauses with actual Field objects from
+ * schemas
+ */
+arrow::Status prepare_query(Query& query, QueryState& query_state) {
+  // Phase 1: Process FROM clause to populate aliases
+  {
+    ARROW_ASSIGN_OR_RAISE(auto from_schema,
+                          query_state.resolve_schema(query.from()));
+    // FROM clause already processed in main query() function
+  }
+
+  // Phase 2: Process TRAVERSE clauses to populate aliases and traversals
+  for (const auto& clause : query.clauses()) {
+    if (clause->type() == Clause::Type::TRAVERSE) {
+      auto traverse = std::dynamic_pointer_cast<Traverse>(clause);
+
+      // Resolve schemas and populate aliases
+      ARROW_ASSIGN_OR_RAISE(auto source_schema,
+                            query_state.resolve_schema(traverse->source()));
+      ARROW_ASSIGN_OR_RAISE(auto target_schema,
+                            query_state.resolve_schema(traverse->target()));
+
+      if (!traverse->source().is_declaration()) {
+        traverse->mutable_source().set_schema(source_schema);
+      }
+
+      if (!traverse->target().is_declaration()) {
+        traverse->mutable_target().set_schema(target_schema);
+      }
+
+      // Set tags for both source and target
+      traverse->mutable_source().set_tag(compute_tag(traverse->source()));
+      traverse->mutable_target().set_tag(compute_tag(traverse->target()));
+
+      // Add to traversals
+      query_state.traversals.push_back(*traverse);
+    }
+  }
+
+  // Phase 3: Resolve all ComparisonExpr field references using populated
+  // aliases
+  for (const auto& clause : query.clauses()) {
+    if (clause->type() == Clause::Type::WHERE) {
+      auto where_expr = std::dynamic_pointer_cast<WhereExpr>(clause);
+      auto res = where_expr->resolve_field_ref(
+          query_state.aliases, query_state.schema_registry.get());
+      if (!res.ok()) {
+        return res.status();
+      }
+    }
+  }
+
+  return arrow::Status::OK();
+}
+
 template <class SetA, class SetB, class OutSet>
 void dense_intersection(const SetA& a, const SetB& b, OutSet& out) {
   const auto& small = a.size() < b.size() ? a : b;
@@ -1837,6 +1903,23 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
         !res.ok()) {
       return res.status();
     }
+  }
+
+  // PHASE: Query Preparation - Populate aliases, traversals, tags, and resolve
+  // field references
+  {
+    IF_DEBUG_ENABLED {
+      log_debug(
+          "Preparing query: populating aliases, traversals, and resolving "
+          "field references");
+    }
+    auto preparation_result =
+        prepare_query(const_cast<Query&>(query), query_state);
+    if (!preparation_result.ok()) {
+      log_error("Failed to prepare query: {}", preparation_result.ToString());
+      return preparation_result;
+    }
+    IF_DEBUG_ENABLED { log_debug("Query preparation completed successfully"); }
   }
 
   {
@@ -1908,15 +1991,20 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
       }
       case Clause::Type::TRAVERSE: {
         auto traverse = std::static_pointer_cast<Traverse>(clause);
-        // Precompute and set tags for source/target refs (alias-based,
-        // deterministic)
-        traverse->mutable_source().set_tag(compute_tag(traverse->source()));
-        traverse->mutable_target().set_tag(compute_tag(traverse->target()));
+        // Tags and schemas are already set during preparation phase
 
-        ARROW_ASSIGN_OR_RAISE(auto source_schema,
-                              query_state.resolve_schema(traverse->source()));
-        ARROW_ASSIGN_OR_RAISE(auto target_schema,
-                              query_state.resolve_schema(traverse->target()));
+        // Get resolved schemas using const resolve_schema (read-only)
+        auto source_schema =
+            traverse->source().is_declaration()
+                ? traverse->source().schema()
+                : query_state.aliases.at(traverse->source().value());
+        auto target_schema =
+            traverse->target().is_declaration()
+                ? traverse->target().schema()
+                : query_state.aliases.at(traverse->target().value());
+
+        // Fully-qualified field names should also be precomputed during
+        // preparation
         if (auto res = query_state.compute_fully_qualified_names(
                 traverse->source(), source_schema);
             !res.ok()) {
@@ -1927,6 +2015,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
             !res.ok()) {
           return res.status();
         }
+
         std::vector<std::shared_ptr<WhereExpr>> where_clauses;
         if (query.inline_where()) {
           where_clauses = get_where_to_inline(traverse->target().value(), i + 1,
@@ -1934,7 +2023,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           result->mutable_execution_stats().num_where_clauses_inlined +=
               where_clauses.size();
         }
-        query_state.traversals.push_back(*traverse);
+        // Traversal already added to query_state.traversals during preparation
         IF_DEBUG_ENABLED {
           log_debug("Processing TRAVERSE {}-({})->{}",
                     traverse->source().toString(), traverse->edge_type(),
@@ -2100,7 +2189,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           }
         }
         auto target_table_schema =
-            schema_registry_->get_arrow(target_schema).ValueOrDie();
+            schema_registry_->get(target_schema).ValueOrDie();
         auto table_result =
             create_table_from_nodes(target_table_schema, neighbors);
         if (!table_result.ok()) {

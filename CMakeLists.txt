@@ -37,6 +37,18 @@ find_package(Parquet REQUIRED)
 find_package(ArrowCompute QUIET)
 find_package(ArrowAcero QUIET)
 
+#add_executable(tundra_bench_runner bench/tundra_runner.cpp)
+#target_link_libraries(tundra_bench_runner
+#        PRIVATE
+#        core
+#        Arrow::arrow_shared
+#        ${ARROW_DATASET_LIB}
+#        Parquet::parquet_shared
+#        ${UUID_LIBRARY}
+#        ${ANTLR4_RUNTIME}
+#        LLVMSupport
+#        LLVMCore
+#)
 
 
 # Find CDS library
@@ -198,6 +210,7 @@ include_directories(
 # Core library
 add_library(core
         src/core.cpp
+        src/query.cpp
         src/storage.cpp
         src/metadata.cpp
         src/file_utils.cpp

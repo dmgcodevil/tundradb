@@ -35,8 +35,8 @@ bool initialize_arrow_compute() {
       }
 
       auto function_names = registry->GetFunctionNames();
-      log_info("Arrow Compute initialized with {} functions",
-               function_names.size());
+      log_debug("Arrow Compute initialized with {} functions",
+                function_names.size());
 
       // Check for essential functions
       const bool has_equal =

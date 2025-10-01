@@ -5,8 +5,8 @@
 
 #include <string>
 #include <unordered_map>
-#include <vector>
 
+#include "logger.hpp"
 #include "node_arena.hpp"
 #include "schema.hpp"
 #include "types.hpp"
@@ -44,82 +44,74 @@ class Node {
         id(id),
         schema_name(std::move(schema_name)) {}
 
-  ~Node() {
-    data_.clear();
-    // TODO slow
-    // if (USE_NODE_ARENA && arena_ && handle_) {
-    //   arena_->deallocate_node(*handle_);
-    // }
-  }
+  ~Node() { data_.clear(); }
 
   void add_field(const std::string &field_name, Value value) {
     data_[field_name] = std::move(value);
   }
 
   arrow::Result<const char *> get_value_ptr(
-      const std::string &field_name) const {
+      const std::shared_ptr<Field> &field) const {
     if (arena_ != nullptr) {
-      // if (schema_->get_field(field_name) == nullptr) {
-      //   // Logger::get_instance().debug("Field not found");
-      //   return arrow::Status::KeyError("Field not found: ", field_name);
-      // }
-      return arena_->get_field_value_ptr(*handle_, layout_, field_name);
-    }
-
-    const auto it = data_.find(field_name);
-    if (it == data_.end()) {
-      return arrow::Status::KeyError("Field not found: ", field_name);
+      return arena_->get_field_value_ptr(*handle_, layout_, field);
     }
     return arrow::Status::NotImplemented("");
   }
 
-  arrow::Result<Value> get_value(const std::string &field_name) const {
+  [[deprecated]]
+  arrow::Result<Value> get_value(const std::string &field) const {
+    log_warn("get_value by string is deprecated");
+    return get_value(schema_->get_field(field));
+  }
+
+  arrow::Result<Value> get_value(const std::shared_ptr<Field> &field) const {
     if (arena_ != nullptr) {
-      // if (schema_->get_field(field_name) == nullptr) {
-      //   // Logger::get_instance().debug("Field not found");
-      //   return arrow::Status::KeyError("Field not found: ", field_name);
-      // }
-      return arena_->get_field_value(*handle_, layout_, field_name);
+      return arena_->get_field_value(*handle_, layout_, field);
     }
 
-    const auto it = data_.find(field_name);
+    const auto it = data_.find(field->name());
     if (it == data_.end()) {
-      return arrow::Status::KeyError("Field not found: ", field_name);
+      return arrow::Status::KeyError("Field not found: ", field->name());
     }
     return it->second;
   }
 
   [[nodiscard]] std::shared_ptr<Schema> get_schema() const { return schema_; }
 
-  arrow::Result<bool> update(const std::string &field_name, Value value,
+  [[deprecated]]
+  arrow::Result<bool> update(const std::string &field, Value value,
+                             UpdateType update_type) {
+    return update(schema_->get_field(field), value, update_type);
+  }
+
+  arrow::Result<bool> update(const std::shared_ptr<Field> &field, Value value,
                              UpdateType update_type) {
     if (arena_ != nullptr) {
-      // if (schema_->get_field(field_name) == nullptr) {
-      //   // Logger::get_instance().debug("Field not found");
-      //   return arrow::Status::KeyError("Field not found: ", field_name);
-      // }
-
-      arena_->set_field_value(*handle_, layout_, field_name, value);
-      // Logger::get_instance().debug("set value is done");
-      return true;
+      return arena_->set_field_value(*handle_, layout_, field, value);
     }
 
-    if (const auto it = data_.find(field_name); it == data_.end()) {
-      return arrow::Status::KeyError("Field not found: ", field_name);
+    if (const auto it = data_.find(field->name()); it == data_.end()) {
+      return arrow::Status::KeyError("Field not found: ", field->name());
     }
 
     switch (update_type) {
       case SET:
-        data_[field_name] = std::move(value);
+        data_[field->name()] = std::move(value);
         break;
     }
 
     return true;
   }
 
-  arrow::Result<bool> set_value(const std::string &field_name,
+  [[deprecated]]
+  arrow::Result<bool> set_value(const std::string &field, const Value &value) {
+    log_warn("set_value by string is deprecated");
+    return update(schema_->get_field(field), value, SET);
+  }
+
+  arrow::Result<bool> set_value(const std::shared_ptr<Field> &field,
                                 const Value &value) {
-    return update(field_name, value, SET);
+    return update(field, value, SET);
   }
 };
 
@@ -195,17 +187,16 @@ class NodeManager {
       NodeHandle node_handle = node_arena_->allocate_node(layout_);
       // Logger::get_instance().debug("node has been allocated at {}",
       //                              node_handle.ptr);
-      node_arena_->set_field_value(node_handle, layout_, "id", Value{id});
+      node_arena_->set_field_value(node_handle, layout_,
+                                   schema_->get_field("id"), Value{id});
       for (const auto &field : schema_->fields()) {
         if (field->name() == "id") continue;
         if (!data.contains(field->name())) {
           // Logger::get_instance().debug("{} set NA value", field->name());
-          node_arena_->set_field_value(node_handle, layout_, field->name(),
-                                       Value());
+          node_arena_->set_field_value(node_handle, layout_, field, Value());
         } else {
           const auto value = data.find(field->name())->second;
-          node_arena_->set_field_value(node_handle, layout_, field->name(),
-                                       value);
+          node_arena_->set_field_value(node_handle, layout_, field, value);
         }
       }
 

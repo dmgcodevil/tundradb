@@ -225,8 +225,8 @@ class Shard {
   }
 
   arrow::Result<bool> update(const int64_t node_id,
-                             const std::string &field_name, const Value &value,
-                             const UpdateType update_type) {
+                             const std::shared_ptr<Field> field,
+                             const Value &value, const UpdateType update_type) {
     updated_ = true;
     if (!nodes_.contains(node_id)) {
       return arrow::Status::KeyError("Node not found: ", node_id);
@@ -234,13 +234,15 @@ class Shard {
     dirty_ = true;
     updated_ = true;
     updated_ts_ = now_millis();
-    return nodes_[node_id]->update(field_name, value, update_type);
+    return nodes_[node_id]->update(field, value, update_type);
   }
 
   arrow::Result<std::shared_ptr<arrow::Table>> get_table() {
     if (dirty_ || !table_) {
       ARROW_ASSIGN_OR_RAISE(const auto schema,
-                            schema_registry_->get_arrow(schema_name));
+                            schema_registry_->get(schema_name));
+      auto arrow_schema = schema->arrow();
+
       std::vector<std::shared_ptr<Node>> result;
       std::ranges::transform(nodes_, std::back_inserter(result),
                              [](const auto &pair) { return pair.second; });
@@ -249,7 +251,8 @@ class Shard {
           result, [](const std::shared_ptr<Node> &a,
                      const std::shared_ptr<Node> &b) { return a->id < b->id; });
 
-      ARROW_ASSIGN_OR_RAISE(table_, create_table(schema, result, chunk_size));
+      ARROW_ASSIGN_OR_RAISE(
+          table_, create_table(schema, result, chunk_size));
       dirty_ = false;
     }
     return table_;
@@ -515,13 +518,32 @@ class ShardManager {
   }
 
   arrow::Result<bool> update_node(const int64_t id,
-                                  const std::string &field_name,
+                                  const std::shared_ptr<Field> &field,
                                   const Value &value,
                                   const UpdateType update_type) {
     for (auto &schema_shards : shards_ | std::views::values) {
       for (const auto &shard : schema_shards) {
         if (id >= shard->min_id && id <= shard->max_id) {
-          return shard->update(id, field_name, value, update_type);
+          return shard->update(id, field, value, update_type);
+        }
+      }
+    }
+
+    return arrow::Status::KeyError("Node with id ", id,
+                                   " not found in any schema");
+  }
+
+  arrow::Result<bool> update_node(const int64_t id,
+                                  const std::string &field_name,
+                                  const Value &value,
+                                  const UpdateType update_type) {
+    for (auto &schema_shards : shards_ | std::views::values) {
+      for (const auto &shard : schema_shards) {
+        auto field = schema_registry_->get(shard->schema_name)
+                         .ValueOrDie()
+                         ->get_field(field_name);
+        if (id >= shard->min_id && id <= shard->max_id) {
+          return shard->update(id, field, value, update_type);
         }
       }
     }
@@ -624,7 +646,7 @@ class ShardManager {
   }
 
   arrow::Result<bool> reset_all_updated() {
-    log_info("Resetting 'updated' flag for all shards");
+    log_debug("Resetting 'updated' flag for all shards");
     for (auto &schema_shards : shards_ | std::views::values) {
       for (auto &shard : schema_shards) {
         shard->set_updated(false);
@@ -723,6 +745,13 @@ class Database {
   }
 
   arrow::Result<bool> update_node(const int64_t id,
+                                  const std::shared_ptr<Field> &field,
+                                  const Value &value,
+                                  const UpdateType update_type) {
+    return shard_manager_->update_node(id, field, value, update_type);
+  }
+
+  arrow::Result<bool> update_node(const int64_t id,
                                   const std::string &field_name,
                                   const Value &value,
                                   const UpdateType update_type) {
@@ -765,20 +794,19 @@ class Database {
 
   arrow::Result<std::shared_ptr<arrow::Table>> get_table(
       const std::string &schema_name, size_t chunk_size = 10000) const {
-    ARROW_ASSIGN_OR_RAISE(auto schema,
-                          schema_registry_->get_arrow(schema_name));
-
+    ARROW_ASSIGN_OR_RAISE(auto schema, schema_registry_->get(schema_name));
+    auto arrow_schema = schema->arrow();
     ARROW_ASSIGN_OR_RAISE(auto all_nodes,
                           shard_manager_->get_nodes(schema_name));
 
     if (all_nodes.empty()) {
       std::vector<std::shared_ptr<arrow::ChunkedArray>> empty_columns;
-      empty_columns.reserve(schema->num_fields());
-      for (int i = 0; i < schema->num_fields(); i++) {
+      empty_columns.reserve(arrow_schema->num_fields());
+      for (int i = 0; i < arrow_schema->num_fields(); i++) {
         empty_columns.push_back(std::make_shared<arrow::ChunkedArray>(
             std::vector<std::shared_ptr<arrow::Array>>{}));
       }
-      return arrow::Table::Make(schema, empty_columns);
+      return arrow::Table::Make(arrow_schema, empty_columns);
     }
 
     std::ranges::sort(all_nodes, [](const std::shared_ptr<Node> &a,

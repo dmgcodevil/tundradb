@@ -13,9 +13,13 @@
 #include <vector>
 
 #include "node.hpp"
+#include "schema.hpp"
 #include "types.hpp"
 
 namespace tundradb {
+
+class WhereExpr;
+class ComparisonExpr;
 
 struct SchemaRef {
  private:
@@ -30,8 +34,12 @@ struct SchemaRef {
   [[nodiscard]] std::string value() const { return value_; }
   [[nodiscard]] bool is_declaration() const { return declaration_; }
   [[nodiscard]] uint16_t tag() const { return schema_tag_; }
+  void set_schema(const std::string& schema) { schema_ = schema; }
   void set_tag(uint16_t t) { schema_tag_ = t; }
 
+  // Parse a schema reference from a string format "alias:schema"
+  // If the string does not contain a colon, the value is assigned to the alias
+  // and schema
   static SchemaRef parse(const std::string& s) {
     SchemaRef r;
     size_t pos = s.find(':');
@@ -96,6 +104,54 @@ enum class CompareOp {
   EndsWith
 };
 
+/**
+ * @brief Structured field reference that supports both unresolved and resolved
+ * states
+ *
+ * Unresolved: "u.age" -> variable="u", field_name="age", field=nullptr
+ * Resolved: variable="u", field_name="age", field=Field{name="age", type=INT32,
+ * index=2}
+ */
+struct FieldRef {
+  FieldRef(const std::string& var, const std::string& fname,
+           std::shared_ptr<Field> fld)
+      : variable_(var), field_name_(fname), field_(std::move(fld)) {
+    value_ = var.empty() ? fname : var + "." + fname;
+  }
+
+  FieldRef(const std::string& var, const std::string& fname)
+      : FieldRef(var, fname, nullptr) {}
+
+  // Parse from string format "variable.field_name"
+  static FieldRef from_string(const std::string& field_str);
+
+  const std::string& value() const { return value_; }
+
+  const std::string& to_string() const { return value_; }
+
+  const std::string& field_name() const { return field_name_; }
+
+  const std::string& variable() const { return variable_; }
+
+  std::shared_ptr<Field> field() const { return field_; }
+
+  bool is_resolved() const { return field_ != nullptr; }
+
+ private:
+  std::string variable_;    // e.g., "u", "c", "f"
+  std::string field_name_;  // e.g., "age", "name"
+  std::string value_;       // e.g.: "u.age", "c.name", "f.id"
+  std::shared_ptr<Field> field_ =
+      nullptr;  // Resolved Field object (null until schema resolution)
+
+  // Resolve this FieldRef with actual Field from schema
+  void resolve(std::shared_ptr<Field> resolved_field) {
+    field_ = std::move(resolved_field);
+  }
+  friend class WhereExpr;
+  friend class ComparisonExpr;
+};
+
 class Clause {
  public:
   virtual ~Clause() = default;
@@ -103,9 +159,6 @@ class Clause {
   enum class Type { WHERE, TRAVERSE, PROJECT, ORDER_BY, LIMIT, SELECT };
   [[nodiscard]] virtual Type type() const = 0;
 };
-
-class WhereExpr;
-class ComparisonExpr;
 
 arrow::compute::Expression value_to_expression(const Value& value);
 arrow::compute::Expression apply_comparison_op(
@@ -117,6 +170,9 @@ enum class LogicalOp { AND, OR };
 class WhereExpr {
  public:
   virtual ~WhereExpr() = default;
+  virtual arrow::Result<bool> resolve_field_ref(
+      const std::unordered_map<std::string, std::string>& aliases,
+      const SchemaRegistry* schema_registry) = 0;
   virtual arrow::Result<bool> matches(
       const std::shared_ptr<Node>& node) const = 0;
   virtual std::string toString() const = 0;
@@ -180,7 +236,7 @@ struct Select final : Clause {
 
 class ComparisonExpr : public Clause, public WhereExpr {
  private:
-  std::string field_;
+  FieldRef field_ref_;
   CompareOp op_;
   Value value_;
   bool inlined_ = false;
@@ -307,10 +363,17 @@ class ComparisonExpr : public Clause, public WhereExpr {
   }
 
  public:
-  ComparisonExpr(std::string field, CompareOp op, Value value)
-      : field_(std::move(field)), op_(op), value_(std::move(value)) {}
+  ComparisonExpr(FieldRef field_ref, CompareOp op, Value value)
+      : field_ref_(std::move(field_ref)), op_(op), value_(std::move(value)) {}
 
-  [[nodiscard]] const std::string& field() const { return field_; }
+  // Backward compatibility constructor
+  ComparisonExpr(const std::string& field, CompareOp op, Value value)
+      : field_ref_(FieldRef::from_string(field)),
+        op_(op),
+        value_(std::move(value)) {}
+
+  [[nodiscard]] const FieldRef& field_ref() const { return field_ref_; }
+  [[nodiscard]] const std::string& field() const { return field_ref_.value(); }
   [[nodiscard]] CompareOp op() const { return op_; }
   [[nodiscard]] const Value& value() const { return value_; }
 
@@ -320,7 +383,7 @@ class ComparisonExpr : public Clause, public WhereExpr {
 
   [[nodiscard]] std::string toString() const override {
     std::stringstream ss;
-    ss << "WHERE " << field_;
+    ss << "WHERE " << field_ref_.to_string();
 
     switch (op_) {
       case CompareOp::Eq:
@@ -397,33 +460,16 @@ class ComparisonExpr : public Clause, public WhereExpr {
     if (!node) {
       return arrow::Status::Invalid("Node is null");
     }
-
-    // parse field name to extract variable and field parts
-    // expected format: "variable.field" (e.g., "user.age", "company.name")
-    const size_t dot_pos = field_.find('.');
-    std::string field_name;
-
-    if (dot_pos != std::string::npos) {
-      field_name = field_.substr(dot_pos + 1);
-    } else {
-      field_name = field_;
-    }
-
-    ARROW_ASSIGN_OR_RAISE(auto field_value, node->get_value(field_name));
+    assert(field_ref_.field() != nullptr);
+    ARROW_ASSIGN_OR_RAISE(auto field_value,
+                          node->get_value(field_ref_.field()));
     return compare_values(field_value, op_, value_);
   }
 
   [[nodiscard]] arrow::compute::Expression to_arrow_expression(
       bool strip_var) const override {
-    std::string field_name = field_;
-    if (strip_var) {
-      if (const size_t dot_pos = field_.find('.');
-          dot_pos != std::string::npos) {
-        field_name = field_.substr(dot_pos + 1);
-      } else {
-        field_name = field_;
-      }
-    }
+    std::string field_name =
+        strip_var ? field_ref_.field_name() : field_ref_.value();
     const auto field_expr = arrow::compute::field_ref(field_name);
     const auto value_expr = value_to_expression(value_);
 
@@ -432,35 +478,61 @@ class ComparisonExpr : public Clause, public WhereExpr {
 
   std::vector<std::shared_ptr<ComparisonExpr>> get_conditions_for_variable(
       const std::string& variable) const override {
-    if (const size_t dot_pos = field_.find('.'); dot_pos != std::string::npos) {
-      if (const std::string var = field_.substr(0, dot_pos); var == variable) {
-        return {std::make_shared<ComparisonExpr>(*this)};
-      }
+    if (field_ref_.variable() == variable) {
+      return {std::make_shared<ComparisonExpr>(*this)};
     }
     return {};
   }
 
   bool can_inline(const std::string& variable) const override {
-    if (const size_t dot_pos = field_.find('.'); dot_pos != std::string::npos) {
-      return field_.substr(0, dot_pos) == variable;
-    }
-    return false;
+    return field_ref_.variable() == variable;
   }
 
   std::string extract_first_variable() const override {
-    if (const size_t dot_pos = field_.find('.'); dot_pos != std::string::npos) {
-      return field_.substr(0, dot_pos);
-    }
-    return "";
+    return field_ref_.variable();
   }
 
   std::set<std::string> get_all_variables() const override {
     std::set<std::string> variables;
-    if (const size_t dot_pos = field_.find('.'); dot_pos != std::string::npos) {
-      const std::string var = field_.substr(0, dot_pos);
-      variables.insert(var);
-    }
+    variables.insert(field_ref_.variable());
     return variables;
+  }
+
+  arrow::Result<bool> resolve_field_ref(
+      const std::unordered_map<std::string, std::string>& aliases,
+      const SchemaRegistry* schema_registry) override {
+    if (field_ref_.is_resolved()) {
+      return true;
+    }
+
+    const std::string& variable = field_ref_.variable();
+    const std::string& field_name = field_ref_.field_name();
+
+    // Find the actual schema for this variable
+    auto it = aliases.find(variable);
+    if (it == aliases.end()) {
+      return arrow::Status::KeyError("Unknown variable '", variable,
+                                     "' in field '", field_ref_.to_string(),
+                                     "'");
+    }
+
+    const std::string& schema_name = it->second;
+
+    auto schema_result = schema_registry->get(schema_name);
+    if (!schema_result.ok()) {
+      return arrow::Status::KeyError(
+          "Schema '", schema_name, "' not found for variable '", variable, "'");
+    }
+
+    auto schema = schema_result.ValueOrDie();
+    auto field = schema->get_field(field_name);
+    if (!field) {
+      return arrow::Status::KeyError(
+          "Field '", field_name, "' not found in schema '", schema_name, "'");
+    }
+    field_ref_.resolve(field);
+
+    return true;
   }
 
  private:
@@ -523,6 +595,24 @@ class LogicalExpr : public Clause, public WhereExpr {
     inlined_ = inlined;
     if (left_) left_->set_inlined(inlined);
     if (right_) right_->set_inlined(inlined);
+  }
+
+  arrow::Result<bool> resolve_field_ref(
+      const std::unordered_map<std::string, std::string>& aliases,
+      const SchemaRegistry* schema_registry) override {
+    if (left_) {
+      if (const auto res = left_->resolve_field_ref(aliases, schema_registry);
+          !res.ok()) {
+        return res.status();
+      }
+    }
+    if (right_) {
+      if (const auto res = right_->resolve_field_ref(aliases, schema_registry);
+          !res.ok()) {
+        return res.status();
+      }
+    }
+    return true;
   }
 
   static std::shared_ptr<LogicalExpr> and_expr(
