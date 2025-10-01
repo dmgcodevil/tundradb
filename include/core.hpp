@@ -251,8 +251,7 @@ class Shard {
           result, [](const std::shared_ptr<Node> &a,
                      const std::shared_ptr<Node> &b) { return a->id < b->id; });
 
-      ARROW_ASSIGN_OR_RAISE(
-          table_, create_table(schema, result, chunk_size));
+      ARROW_ASSIGN_OR_RAISE(table_, create_table(schema, result, chunk_size));
       dirty_ = false;
     }
     return table_;
