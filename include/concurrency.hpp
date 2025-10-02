@@ -21,6 +21,61 @@ namespace tundradb {
  */
 template <typename T>
 class ConcurrentSet {
+ public:
+  /**
+   * @brief Unsafe view for direct iteration over the underlying
+   * concurrent_hash_map
+   *
+   * WARNING: This view is NOT thread-safe. Use only when you can guarantee
+   * no concurrent modifications are happening.
+   */
+  class LockedView {
+   private:
+    const tbb::concurrent_hash_map<T, std::monostate>& data_;
+
+   public:
+    explicit LockedView(const tbb::concurrent_hash_map<T, std::monostate>& data)
+        : data_(data) {}
+
+    // Iterator that extracts keys from the concurrent_hash_map
+    class iterator {
+     private:
+      typename tbb::concurrent_hash_map<T, std::monostate>::const_iterator it_;
+
+     public:
+      using iterator_category = std::forward_iterator_tag;
+      using value_type = T;
+      using difference_type = std::ptrdiff_t;
+      using pointer = const T*;
+      using reference = const T&;
+
+      explicit iterator(
+          typename tbb::concurrent_hash_map<T, std::monostate>::const_iterator
+              it)
+          : it_(it) {}
+
+      reference operator*() const { return it_->first; }
+      pointer operator->() const { return &(it_->first); }
+
+      iterator& operator++() {
+        ++it_;
+        return *this;
+      }
+      iterator operator++(int) {
+        iterator tmp = *this;
+        ++(*this);
+        return tmp;
+      }
+
+      bool operator==(const iterator& other) const { return it_ == other.it_; }
+      bool operator!=(const iterator& other) const { return it_ != other.it_; }
+    };
+
+    iterator begin() const { return iterator(data_.begin()); }
+    iterator end() const { return iterator(data_.end()); }
+    size_t size() const { return data_.size(); }
+  };
+
  private:
   tbb::concurrent_hash_map<T, std::monostate> data_;
   mutable std::shared_mutex mutex_;  // Read-write mutex for synchronization
@@ -93,6 +148,18 @@ class ConcurrentSet {
 
     return snapshot;
   }
+
+  /**
+   * @brief Get an unsafe view for direct iteration
+   *
+   * WARNING: This is NOT thread-safe! Use only when you can guarantee
+   * no concurrent modifications are happening. This avoids the expensive
+   * copy operation of get_all() for performance-critical code paths.
+   *
+   * Returns a view that provides begin()/end() iterators directly over
+   * the underlying concurrent_hash_map keys.
+   */
+  LockedView get_all_unsafe() const { return LockedView(data_); }
 
   /**
    * @brief Clear all elements from the set
