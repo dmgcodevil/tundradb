@@ -81,6 +81,11 @@ class EdgeStore {
 
   std::vector<std::shared_ptr<Edge>> get(const std::set<int64_t> &ids) const;
 
+  // Template overload for any iterable container (including
+  // ConcurrentSet::LockedView)
+  template <typename Container>
+  std::vector<std::shared_ptr<Edge>> get(const Container &ids) const;
+
   int64_t get_count_by_type(const std::string &type) const {
     if (auto res = get_by_type(type); res.ok()) {
       return res.ValueOrDie().size();

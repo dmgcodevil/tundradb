@@ -421,6 +421,15 @@ struct QueryState {
   std::unordered_map<std::string, std::string> aliases;
   // Precomputed fully-qualified field names per alias (SchemaRef::value())
   llvm::StringMap<std::vector<std::string>> fq_field_names;
+
+  // Field index optimization: replace string-based field lookups with integer
+  // indices
+  llvm::StringMap<std::vector<int>>
+      schema_field_indices;  // "User" -> [0, 1, 2], "Company -> [3,4,5]"
+  llvm::SmallDenseMap<int, std::string, 64>
+      field_id_to_name;               // 0 -> "user.name"
+  std::atomic<int> next_field_id{0};  // Global field ID counter
+
   llvm::StringMap<
       llvm::DenseMap<int64_t, llvm::SmallVector<GraphConnection, 4>>>
       connections;  // outgoing
@@ -433,8 +442,11 @@ struct QueryState {
   arrow::Result<std::string> resolve_schema(const SchemaRef& schema_ref) {
     // todo we need to separate functions: assign alias , resolve
     if (aliases.contains(schema_ref.value()) && schema_ref.is_declaration()) {
-      log_warn("duplicated schema alias '" + schema_ref.value() +
-               "' already assigned to '" + aliases[schema_ref.value()] + "'");
+      IF_DEBUG_ENABLED {
+        log_debug("duplicated schema alias '" + schema_ref.value() +
+                  "' already assigned to '" + aliases[schema_ref.value()] +
+                  "'");
+      }
       return aliases[schema_ref.value()];
     }
     if (schema_ref.is_declaration()) {
@@ -468,11 +480,21 @@ struct QueryState {
     }
     const auto schema = schema_res.ValueOrDie();
     std::vector<std::string> names;
+    std::vector<int> indices;
     names.reserve(schema->num_fields());
+    indices.reserve(schema->num_fields());
+
     for (const auto& f : schema->fields()) {
-      names.emplace_back(alias + "." + f->name());
+      std::string fq_name = alias + "." + f->name();
+      int field_id = next_field_id.fetch_add(1);
+
+      names.emplace_back(fq_name);
+      indices.emplace_back(field_id);
+      field_id_to_name[field_id] = fq_name;
     }
+
     fq_field_names[alias] = std::move(names);
+    schema_field_indices[alias] = std::move(indices);
     return true;
   }
 
@@ -650,14 +672,27 @@ arrow::Result<std::shared_ptr<arrow::Schema>> build_denormalized_schema(
 }
 
 struct PathSegment {
-  std::string schema;
+  uint16_t schema_tag;  // Optimized: use 16-bit tag instead of string
+  std::string schema;   // Keep for compatibility/debugging
   int64_t node_id;
+
+  // Constructor with both tag and schema for performance
+  PathSegment(uint16_t tag, const std::string& schema_name, int64_t id)
+      : schema_tag(tag), schema(schema_name), node_id(id) {}
+
+  // Legacy constructor for compatibility
+  PathSegment(const std::string& schema_name, int64_t id)
+      : schema_tag(0), schema(schema_name), node_id(id) {}
 
   std::string toString() const {
     return schema + ":" + std::to_string(node_id);
   }
 
   bool operator==(const PathSegment& other) const {
+    // Fast path: compare tags first, then fallback to string comparison
+    if (schema_tag != 0 && other.schema_tag != 0) {
+      return schema_tag == other.schema_tag && node_id == other.node_id;
+    }
     return schema == other.schema && node_id == other.node_id;
   }
 };
@@ -686,90 +721,91 @@ std::string join_schema_path(const std::vector<PathSegment>& schema_path) {
 
 struct Row {
   int64_t id;
-  std::unordered_map<std::string, std::shared_ptr<arrow::Scalar>> cells;
+  std::vector<ValueRef> cells;  // Optimized: index-based field access
   std::vector<PathSegment> path;
+  std::unordered_map<std::string, int64_t> ids;
+  bool ids_populated = false;
 
-  void set_cell(const std::string& name,
-                std::shared_ptr<arrow::Scalar> scalar) {
-    cells[name] = std::move(scalar);
+  // Optimized constructor that pre-allocates cells
+  explicit Row(size_t max_field_count = 64) : cells(max_field_count) {}
+
+  // Optimized: set cell by field index
+  void set_cell(int field_id, ValueRef value_ref) {
+    if (field_id >= 0 && field_id < static_cast<int>(cells.size())) {
+      cells[field_id] = value_ref;
+    }
   }
 
-  bool has_value(const std::string& name) const {
-    return cells.contains(name) && cells.at(name) != nullptr &&
-           cells.at(name)->is_valid;
+  // Optimized: check value by field index
+  [[nodiscard]] bool has_value(int field_id) const {
+    return field_id >= 0 && field_id < static_cast<int>(cells.size()) &&
+           cells[field_id].data != nullptr;
   }
 
-  void set_cell_from_node(const std::vector<std::string>& fq_field_names,
+  // Optimized: set cells from node using field indices
+  void set_cell_from_node(const std::vector<int>& field_indices,
                           const std::shared_ptr<Node>& node) {
     const auto& fields = node->get_schema()->fields();
-    const size_t n = fields.size();
+    const size_t n = std::min(fields.size(), field_indices.size());
     for (size_t i = 0; i < n; ++i) {
       const auto& field = fields[i];
-      const auto& full_name = fq_field_names[i];
-      this->set_cell(full_name, node->get_value_ptr(field).ValueOrDie(),
-                     field->type());
+      int field_id = field_indices[i];
+      this->set_cell(field_id, node->get_value_ref(field));
     }
-  }
-
-  // New set_cell method for Value objects
-  void set_cell(const std::string& name, const char* ptr,
-                const ValueType type) {
-    if (ptr) {
-      auto scalar_result = value_ptr_to_arrow_scalar(ptr, type);
-      if (scalar_result.ok()) {
-        cells[name] = scalar_result.ValueOrDie();
-        return;
-      }
-    }
-
-    // Default to null if value is null or conversion fails
-    cells[name] = nullptr;
-  }
-
-  void set_cell(const std::string& name, std::shared_ptr<arrow::Array> array) {
-    if (array && array->length() > 0) {
-      auto scalar_result = array->GetScalar(0);
-      if (scalar_result.ok()) {
-        cells[name] = scalar_result.ValueOrDie();
-        return;
-      }
-    }
-
-    // Default to null if array is empty or conversion fails
-    cells[name] = nullptr;
   }
 
   bool start_with(const std::vector<PathSegment>& prefix) const {
     return is_prefix(prefix, this->path);
   }
 
-  std::unordered_map<std::string, int64_t> extract_schema_ids() const {
-    std::unordered_map<std::string, int64_t> result;
-    for (const auto& [field_name, value] : cells) {
-      if (!value || !value->is_valid) continue;
-
+  const std::unordered_map<std::string, int64_t>& extract_schema_ids(
+      const llvm::SmallDenseMap<int, std::string, 64>& field_id_to_name) {
+    if (ids_populated) {
+      return ids;
+    }
+    for (int i = 0; i < cells.size(); ++i) {
+      const auto& value = cells[i];
+      if (!value.data) continue;
+      const auto& field_name = field_id_to_name.at(i);
       // Extract schema prefix (everything before the first dot)
       size_t dot_pos = field_name.find('.');
       if (dot_pos != std::string::npos) {
         std::string schema = field_name.substr(0, dot_pos);
-
         // Store ID for this schema if it's an ID field
         if (field_name.substr(dot_pos + 1) == "id") {
-          auto id_scalar = std::static_pointer_cast<arrow::Int64Scalar>(value);
-          result[schema] = id_scalar->value;
+          ids[schema] = value.as_int64();
         }
       }
     }
-    return result;
+    return ids;
   }
 
   // returns new Row which is result of merging this row and other
-  [[nodiscard]] Row merge(const Row& other) const {
-    Row merged = *this;
-    for (const auto& [name, value] : other.cells) {
-      if (!merged.has_value(name)) {
-        merged.cells[name] = value;
+  [[nodiscard]] std::shared_ptr<Row> merge(
+      const std::shared_ptr<Row>& other) const {
+    std::shared_ptr<Row> merged =
+        std::make_shared<Row>(*this);  // Copy needed for merge result
+    IF_DEBUG_ENABLED {
+      log_debug("Row::merge() - this: {}", this->ToString());
+      log_debug("Row::merge() - other: {}", other->ToString());
+    }
+
+    for (int i = 0; i < other->cells.size(); ++i) {
+      if (!merged->has_value(i)) {
+        IF_DEBUG_ENABLED {
+          log_debug("Row::merge() - adding field '{}' with value: {}", i,
+                    cells[i].ToString());
+        }
+        merged->cells[i] = other->cells[i];
+      } else {
+        IF_DEBUG_ENABLED {
+          log_debug("Row::merge() - skipping field '{}' (already has value)",
+                    i);
+        }
       }
+    }
+    IF_DEBUG_ENABLED {
+      log_debug("Row::merge() - result: {}", merged->ToString());
     }
     return merged;
   }
@@ -780,45 +816,40 @@ struct Row {
     ss << "path='" << join_schema_path(path) << "', ";
 
     bool first = true;
-    for (const auto& [field_name, scalar] : cells) {
+    for (int i = 0; i < cells.size(); i++) {
       if (!first) {
         ss << ", ";
       }
       first = false;
 
-      ss << field_name << ": ";
-
-      if (!scalar) {
+      ss << i << ": ";
+      const auto value_ref = cells[i];
+      if (!value_ref.data) {
         ss << "NULL";
-      } else if (scalar->is_valid) {
+      } else {
         // Handle different scalar types appropriately
-        switch (scalar->type->id()) {
-          case arrow::Type::INT64:
-            ss << std::static_pointer_cast<arrow::Int64Scalar>(scalar)->value;
+        switch (value_ref.type) {
+          case ValueType::INT64:
+            ss << value_ref.as_int64();
             break;
-          case arrow::Type::DOUBLE:
-            ss << std::static_pointer_cast<arrow::DoubleScalar>(scalar)->value;
+          case ValueType::INT32:
+            ss << value_ref.as_int32();
             break;
-          case arrow::Type::STRING:
-          case arrow::Type::LARGE_STRING:
-            ss << "\""
-               << std::static_pointer_cast<arrow::StringScalar>(scalar)->view()
-               << "\"";
+          case ValueType::DOUBLE:
+            ss << value_ref.as_double();
             break;
-          case arrow::Type::BOOL:
-            ss << (std::static_pointer_cast<arrow::BooleanScalar>(scalar)->value
-                       ? "true"
-                       : "false");
+          case ValueType::STRING:
+            ss << "\"" << value_ref.as_string_ref().to_string() << "\"";
+            break;
+          case ValueType::BOOL:
+            ss << (value_ref.as_bool() ? "true" : "false");
             break;
           default:
-            ss << scalar->ToString();
+            ss << "unknown";
             break;
         }
-      } else {
-        ss << "NULL";
       }
     }
-
     ss << "}";
     return ss.str();
   }
@@ -826,19 +857,9 @@ struct Row {
 
 static Row create_empty_row_from_schema(
     const std::shared_ptr<arrow::Schema>& final_output_schema) {
-  Row new_row;
-  for (const auto& field : final_output_schema->fields()) {
-    // Create a null scalar of the correct type
-    auto null_scalar = arrow::MakeNullScalar(field->type());
-    if (null_scalar != nullptr) {
-      new_row.cells[field->name()] = null_scalar;
-    } else {
-      // If creating a null scalar fails, use nullptr as a fallback
-      new_row.cells[field->name()] = nullptr;
-      log_warn("Failed to create null scalar for field '{}' with type '{}'",
-               field->name(), field->type()->ToString());
-    }
-  }
+  Row new_row(final_output_schema->num_fields() +
+              32);  // Pre-allocate with some extra space
+  new_row.id = -1;
   return new_row;
 }
 
@@ -856,14 +877,14 @@ std::vector<Row> get_child_rows(const Row& parent,
 }
 
 struct RowNode {
-  std::optional<Row> row;
+  std::optional<std::shared_ptr<Row>> row;
   int depth;
   PathSegment path_segment;
   std::vector<std::unique_ptr<RowNode>> children;
 
   RowNode() : depth(0), path_segment{"", -1} {}
 
-  RowNode(std::optional<Row> r, int d,
+  RowNode(std::optional<std::shared_ptr<Row>> r, int d,
           std::vector<std::unique_ptr<RowNode>> c = {})
       : row(std::move(r)),
         depth(d),
@@ -872,14 +893,15 @@ struct RowNode {
 
   bool leaf() const { return row.has_value(); }
 
-  void insert_row_dfs(size_t path_idx, const Row& new_row) {
-    if (path_idx == new_row.path.size()) {
-      this->row = new_row;
+  void insert_row_dfs(size_t path_idx, const std::shared_ptr<Row>& new_row) {
+    if (path_idx == new_row->path.size()) {
+      this->row =
+          new_row;  // Share the same Row - no copy needed in tree insertion
       return;
     }
 
     for (const auto& n : children) {
-      if (n->path_segment == new_row.path[path_idx]) {
+      if (n->path_segment == new_row->path[path_idx]) {
         n->insert_row_dfs(path_idx + 1, new_row);
         return;
       }
@@ -887,46 +909,79 @@ struct RowNode {
 
     auto new_node = std::make_unique<RowNode>();
     new_node->depth = depth + 1;
-    new_node->path_segment = new_row.path[path_idx];
+    new_node->path_segment = new_row->path[path_idx];
     new_node->insert_row_dfs(path_idx + 1, new_row);
     children.emplace_back(std::move(new_node));
   }
 
-  void insert_row(const Row& new_row) { insert_row_dfs(0, new_row); }
+  void insert_row(const std::shared_ptr<Row>& new_row) {
+    insert_row_dfs(0, new_row);
+  }
 
-  std::vector<Row> merge_rows() {
+  std::vector<std::shared_ptr<Row>> merge_rows(
+      const llvm::SmallDenseMap<int, std::string, 64>& field_id_to_name) {
     if (this->leaf()) {
       return {this->row.value()};
     }
 
     // collect all records from child node and group them by schema
-    std::unordered_map<std::string, std::vector<Row>> grouped;
+    // Optimized: use schema tags instead of strings for faster grouping
+    llvm::SmallDenseMap<uint16_t, std::vector<std::shared_ptr<Row>>, 8> grouped;
     for (const auto& c : children) {
-      auto child_rows = c->merge_rows();
-      grouped[c->path_segment.schema].insert(
-          grouped[c->path_segment.schema].end(), child_rows.begin(),
-          child_rows.end());
+      auto child_rows = c->merge_rows(field_id_to_name);
+      IF_DEBUG_ENABLED {
+        log_debug("Child node {} returned {} rows", c->path_segment.toString(),
+                  child_rows.size());
+        for (size_t i = 0; i < child_rows.size(); ++i) {
+          log_debug("  Child row [{}]: {}", i, child_rows[i]->ToString());
+        }
+      }
+      // Use schema_tag for fast integer-based grouping instead of string lookup
+      uint16_t tag = c->path_segment.schema_tag;
+      if (tag == 0) {
+        // Fallback: compute a simple hash of the schema string
+        tag = static_cast<uint16_t>(
+            std::hash<std::string>{}(c->path_segment.schema) & 0xFFFFu);
+      }
+      grouped[tag].insert(grouped[tag].end(), child_rows.begin(),
+                          child_rows.end());
     }
 
-    std::vector<std::vector<Row>> groups_for_product;
+    std::vector<std::vector<std::shared_ptr<Row>>> groups_for_product;
     // Add this->row as its own group (that is important for cartesian product)
     // if it exists and has data,
     // to represent the node itself if it should be part of the product
     // independently.
     if (this->row.has_value()) {
-      Row node_self_row = this->row.value();
+      std::shared_ptr<Row> node_self_row = std::make_shared<Row>(
+          *this->row.value());  // Create a copy like original
       // Normalize path for the node's own row to ensure it combines correctly
       // and doesn't carry a longer BFS path if it was a leaf of BFS.
       // i.e. current node path can be a:0->b:1->c:2
       // this code sets it to 'c:2'
-      node_self_row.path = {this->path_segment};
+      node_self_row->path = {this->path_segment};
+      IF_DEBUG_ENABLED {
+        log_debug("Adding node self row: {}", node_self_row->ToString());
+      }
       groups_for_product.push_back({node_self_row});
     }
 
     for (const auto& pair : grouped) {
       if (!pair.second.empty()) {
+        IF_DEBUG_ENABLED {
+          log_debug("Adding group for schema '{}' with {} rows", pair.first,
+                    pair.second.size());
+          for (size_t i = 0; i < pair.second.size(); ++i) {
+            log_debug("  Group row [{}]: {}", i, pair.second[i]->ToString());
+          }
+        }
         groups_for_product.push_back(pair.second);
       }
+    }
+
+    IF_DEBUG_ENABLED {
+      log_debug("Total groups for Cartesian product: {}",
+                groups_for_product.size());
     }
 
     if (groups_for_product.empty()) {
@@ -936,7 +991,8 @@ struct RowNode {
     // with data), no Cartesian product is needed. Just return its rows, but
     // ensure paths are correct.
     if (groups_for_product.size() == 1) {
-      std::vector<Row> single_group_rows = groups_for_product[0];
+      std::vector<std::shared_ptr<Row>> single_group_rows =
+          groups_for_product[0];
       // Ensure path is normalized for these rows if they came from children
       // For rows that are just this->row.value(), path is already set.
       // This might be too aggressive if child rows are already fully merged
@@ -945,9 +1001,28 @@ struct RowNode {
       return single_group_rows;
     }
 
-    std::vector<Row> final_merged_rows = groups_for_product.back();
+    std::vector<std::shared_ptr<Row>> final_merged_rows =
+        groups_for_product.back();
+    IF_DEBUG_ENABLED {
+      log_debug("Starting Cartesian product with final group ({} rows)",
+                final_merged_rows.size());
+      for (size_t i = 0; i < final_merged_rows.size(); ++i) {
+        log_debug("  Final group row [{}]: {}", i,
+                  final_merged_rows[i]->ToString());
+      }
+    }
+
     for (int i = static_cast<int>(groups_for_product.size()) - 2; i >= 0; --i) {
-      std::vector<Row> temp_product_accumulator;
+      IF_DEBUG_ENABLED {
+        log_debug("Processing group {} with {} rows", i,
+                  groups_for_product[i].size());
+        for (size_t j = 0; j < groups_for_product[i].size(); ++j) {
+          log_debug("  Current group row [{}]: {}", j,
+                    groups_for_product[i][j]->ToString());
+        }
+      }
+
+      std::vector<std::shared_ptr<Row>> temp_product_accumulator;
       for (const auto& r1_from_current_group : groups_for_product[i]) {
         for (const auto& r2_from_previous_product : final_merged_rows) {
           // Check for conflicts in shared variables between rows
@@ -955,9 +1030,9 @@ struct RowNode {
 
           // Get variable prefixes (schema names) from cells
           std::unordered_map<std::string, int64_t> schema_ids_r1 =
-              r1_from_current_group.extract_schema_ids();
+              r1_from_current_group->extract_schema_ids(field_id_to_name);
           std::unordered_map<std::string, int64_t> schema_ids_r2 =
-              r2_from_previous_product.extract_schema_ids();
+              r2_from_previous_product->extract_schema_ids(field_id_to_name);
 
           // Check for conflicts - same schema name but different IDs
           for (const auto& [schema, id1] : schema_ids_r1) {
@@ -977,20 +1052,19 @@ struct RowNode {
 
           // Additional cell-by-cell check for conflicts
           if (can_merge) {
-            for (const auto& [field_name, value1] :
-                 r1_from_current_group.cells) {
-              if (!value1 || !value1->is_valid) continue;
-
-              auto it = r2_from_previous_product.cells.find(field_name);
-              if (it != r2_from_previous_product.cells.end() && it->second &&
-                  it->second->is_valid) {
+            for (int field_index = 0;
+                 field_index < r1_from_current_group->cells.size();
+                 ++field_index) {
+              if (r1_from_current_group->has_value(i) &&
+                  r2_from_previous_product->has_value(i)) {
                 // Both rows have this field with non-null values - check if
                 // they match
-                if (!value1->Equals(*(it->second))) {
+                if (!r1_from_current_group->cells[i].equals(
+                        r2_from_previous_product->cells[i])) {
                   IF_DEBUG_ENABLED {
                     log_debug(
                         "Conflict detected: Field '{}' has different values",
-                        field_name);
+                        field_id_to_name.at(i));
                   }
                   can_merge = false;
                   break;
@@ -1000,12 +1074,19 @@ struct RowNode {
           }
 
           if (can_merge) {
-            Row merged_r =
-                r1_from_current_group.merge(r2_from_previous_product);
+            std::shared_ptr<Row> merged_r =
+                r1_from_current_group->merge(r2_from_previous_product);
             // Set the path of the newly merged row to the path of the current
             // RowNode
-            merged_r.path = {this->path_segment};
+            merged_r->path = {this->path_segment};
+            IF_DEBUG_ENABLED {
+              log_debug("Merged row: {}", merged_r->ToString());
+            }
             temp_product_accumulator.push_back(merged_r);
+          } else {
+            IF_DEBUG_ENABLED {
+              log_debug("Cannot merge rows due to conflicts");
+            }
           }
         }
       }
@@ -1034,36 +1115,36 @@ struct RowNode {
     // Print Row
     if (row.has_value()) {
       ss << indent << "  Path: ";
-      if (row.value().path.empty()) {
+      if (row.value()->path.empty()) {
         ss << "(empty)";
       } else {
-        for (size_t i = 0; i < row.value().path.size(); ++i) {
+        for (size_t i = 0; i < row.value()->path.size(); ++i) {
           if (i > 0) ss << " → ";
-          ss << row.value().path[i].schema << ":"
-             << row.value().path[i].node_id;
+          ss << row.value()->path[i].schema << ":"
+             << row.value()->path[i].node_id;
         }
       }
       ss << "\n";
 
       // Print key cell values (limited to avoid overwhelming output)
       ss << indent << "  Cells: ";
-      if (row.value().cells.empty()) {
+      if (row.value()->cells.empty()) {
         ss << "(empty)";
       } else {
         size_t count = 0;
         ss << "{ ";
-        for (const auto& [key, value] : row.value().cells) {
+        for (int i = 0; i < row.value()->cells.size(); i++) {
           if (count++ > 0) ss << ", ";
           if (count > 5) {  // Limit display
-            ss << "... +" << (row.value().cells.size() - 5) << " more";
+            ss << "... +" << (row.value()->cells.size() - 5) << " more";
             break;
           }
 
-          ss << key << ": ";
-          if (!value) {
+          ss << i << ": ";
+          if (!row.value()->has_value(i)) {
             ss << "NULL";
           } else {
-            ss << value->ToString();  // Assuming arrow::Scalar has ToString()
+            ss << row.value()->cells[i].ToString();
           }
         }
         ss << " }";
@@ -1110,7 +1191,7 @@ struct QueueItem {
 
   QueueItem(int64_t id, const SchemaRef& schema, int l, std::shared_ptr<Row> r)
       : node_id(id), schema_ref(schema), level(l), row(std::move(r)) {
-    path.push_back(PathSegment{schema.value(), id});
+    path.push_back(PathSegment{schema.tag(), schema.value(), id});
   }
 };
 
@@ -1145,14 +1226,15 @@ void log_grouped_connections(
   }
 }
 
-arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows_bfs(
-    int64_t node_id, const SchemaRef& start_schema,
-    const std::shared_ptr<arrow::Schema>& output_schema,
-    const QueryState& query_state, llvm::DenseSet<uint64_t>& global_visited) {
+arrow::Result<std::shared_ptr<std::vector<std::shared_ptr<Row>>>>
+populate_rows_bfs(int64_t node_id, const SchemaRef& start_schema,
+                  const std::shared_ptr<arrow::Schema>& output_schema,
+                  const QueryState& query_state,
+                  llvm::DenseSet<uint64_t>& global_visited) {
   IF_DEBUG_ENABLED {
     log_debug("populate_rows_bfs::node={}:{}", start_schema.value(), node_id);
   }
-  auto result = std::make_shared<std::vector<Row>>();
+  auto result = std::make_shared<std::vector<std::shared_ptr<Row>>>();
   int64_t row_id_counter = 0;
   auto initial_row =
       std::make_shared<Row>(create_empty_row_from_schema(output_schema));
@@ -1168,8 +1250,8 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows_bfs(
       queue.pop();
       auto node = query_state.node_manager->get_node(item.node_id).ValueOrDie();
       const auto& it_fq =
-          query_state.fq_field_names.find(item.schema_ref.value());
-      if (it_fq == query_state.fq_field_names.end()) {
+          query_state.schema_field_indices.find(item.schema_ref.value());
+      if (it_fq == query_state.schema_field_indices.end()) {
         log_error("No fully-qualified field names for schema '{}'",
                   item.schema_ref.value());
         return arrow::Status::KeyError(
@@ -1207,10 +1289,11 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows_bfs(
       if (grouped_connections.empty()) {
         // we've done
         if (!skip) {
-          auto r = *item.row;
-          r.path = item.path;
-          r.id = row_id_counter++;
-          IF_DEBUG_ENABLED { log_debug("add row: {}", r.ToString()); }
+          auto r = std::make_shared<Row>(
+              *item.row);  // Copy needed: each result needs unique ID and path
+          r->path = item.path;
+          r->id = row_id_counter++;
+          IF_DEBUG_ENABLED { log_debug("add row: {}", r->ToString()); }
           result->push_back(r);
         }
 
@@ -1237,8 +1320,8 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows_bfs(
               auto next = QueueItem(conn.target_id, conn.target, item.level + 1,
                                     next_row);
               next.path = item.path;
-              next.path.push_back(
-                  PathSegment{conn.target.value(), conn.target_id});
+              next.path.push_back(PathSegment{
+                  conn.target.tag(), conn.target.value(), conn.target_id});
               IF_DEBUG_ENABLED {
                 log_debug("create a new path {}, node={}",
                           join_schema_path(next.path), conn.target_id);
@@ -1251,28 +1334,32 @@ arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows_bfs(
     }
   }
   RowNode tree;
-  tree.path_segment = PathSegment{"root", -1};
+  tree.path_segment = PathSegment{0, "root", -1};  // Use tag 0 for root
   for (const auto& r : *result) {
-    IF_DEBUG_ENABLED { log_debug("bfs result: {}", r.ToString()); }
-    tree.insert_row(r);
+    IF_DEBUG_ENABLED { log_debug("bfs result: {}", r->ToString()); }
+    // Copy needed: tree merge operations will modify rows, so each needs to be
+    // independent
+    auto r_copy = std::make_shared<Row>(*r);
+    tree.insert_row(r_copy);
   }
   IF_DEBUG_ENABLED { tree.print(); }
-  auto merged = tree.merge_rows();
+  auto merged = tree.merge_rows(query_state.field_id_to_name);
   IF_DEBUG_ENABLED {
     for (const auto& row : merged) {
-      log_debug("merge result: {}", row.ToString());
+      log_debug("merge result: {}", row->ToString());
     }
   }
-  return std::make_shared<std::vector<Row>>(merged);
+  return std::make_shared<std::vector<std::shared_ptr<Row>>>(merged);
 }
 
 // template <NodeIds NodeIdsT>
-arrow::Result<std::shared_ptr<std::vector<Row>>> populate_batch_rows(
-    const llvm::DenseSet<int64_t>& node_ids, const SchemaRef& schema_ref,
-    const std::shared_ptr<arrow::Schema>& output_schema,
-    const QueryState& query_state, const TraverseType join_type,
-    tbb::concurrent_unordered_set<uint64_t>& global_visited) {
-  auto rows = std::make_shared<std::vector<Row>>();
+arrow::Result<std::shared_ptr<std::vector<std::shared_ptr<Row>>>>
+populate_batch_rows(const llvm::DenseSet<int64_t>& node_ids,
+                    const SchemaRef& schema_ref,
+                    const std::shared_ptr<arrow::Schema>& output_schema,
+                    const QueryState& query_state, const TraverseType join_type,
+                    tbb::concurrent_unordered_set<uint64_t>& global_visited) {
+  auto rows = std::make_shared<std::vector<std::shared_ptr<Row>>>();
   rows->reserve(node_ids.size());
   llvm::DenseSet<uint64_t> local_visited;
   // For INNER join: only process nodes that have connections
@@ -1332,11 +1419,11 @@ std::vector<llvm::DenseSet<int64_t>> batch_node_ids(
 // process all schemas used in traverse
 // Phase 1: Process connected nodes
 // Phase 2: Handle outer joins for unmatched nodes
-arrow::Result<std::shared_ptr<std::vector<Row>>> populate_rows(
+arrow::Result<std::shared_ptr<std::vector<std::shared_ptr<Row>>>> populate_rows(
     const ExecutionConfig& execution_config, const QueryState& query_state,
     const std::vector<Traverse>& traverses,
     const std::shared_ptr<arrow::Schema>& output_schema) {
-  auto rows = std::make_shared<std::vector<Row>>();
+  auto rows = std::make_shared<std::vector<std::shared_ptr<Row>>>();
   std::mutex rows_mtx;
   tbb::concurrent_unordered_set<uint64_t> global_visited;
 
@@ -1514,85 +1601,92 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_empty_table(
 }
 
 arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_rows(
-    const std::shared_ptr<std::vector<Row>>& rows,
-    const std::shared_ptr<arrow::Schema>& schema = nullptr) {
-  if (!rows || rows->empty()) {
-    if (schema == nullptr) {
-      return arrow::Status::Invalid("No rows provided to create table");
-    }
-    return create_empty_table(schema);
+    const std::shared_ptr<std::vector<std::shared_ptr<Row>>>& rows,
+    const std::shared_ptr<arrow::Schema>& output_schema) {
+  if (output_schema == nullptr) {
+    return arrow::Status::Invalid("output schema is null");
   }
-
-  std::shared_ptr<arrow::Schema> output_schema;
-
-  if (schema) {
-    // Use the provided schema
-    output_schema = schema;
-  } else {
-    // Get all field names from all rows to create a complete schema
-    std::set<std::string> all_field_names;
-    for (const auto& row : *rows) {
-      for (const auto& field_name : row.cells | std::views::keys) {
-        all_field_names.insert(field_name);
-      }
-    }
-
-    // Create schema from field names
-    std::vector<std::shared_ptr<arrow::Field>> fields;
-
-    for (const auto& field_name : all_field_names) {
-      // Find first non-null value to determine field type
-      std::shared_ptr<arrow::DataType> field_type = nullptr;
-      for (const auto& row : *rows) {
-        auto it = row.cells.find(field_name);
-        if (it != row.cells.end() && it->second) {
-          if (auto array_result = arrow::MakeArrayFromScalar(*(it->second), 1);
-              array_result.ok()) {
-            field_type = array_result.ValueOrDie()->type();
-            break;
-          }
-        }
-      }
-
-      // If we couldn't determine type, default to string
-      if (!field_type) {
-        field_type = arrow::utf8();
-      }
-
-      fields.push_back(arrow::field(field_name, field_type));
-    }
-
-    output_schema = std::make_shared<arrow::Schema>(fields);
+  if (!rows || rows->empty()) {
+    return create_empty_table(output_schema);
   }
 
   // Create array builders for each field
   std::vector<std::unique_ptr<arrow::ArrayBuilder>> builders;
+  std::vector<std::string>
+      field_names;  // Cache field names to avoid repeated lookups
+
   for (const auto& field : output_schema->fields()) {
     ARROW_ASSIGN_OR_RAISE(auto builder, arrow::MakeBuilder(field->type()));
     builders.push_back(std::move(builder));
+    field_names.push_back(field->name());
+  }
+
+  // Pre-allocate builders for better performance
+  const size_t num_rows = rows->size();
+  for (auto& builder : builders) {
+    ARROW_RETURN_NOT_OK(builder->Reserve(num_rows));
   }
 
   // Populate the builders from each row
   for (const auto& row : *rows) {
-    for (size_t i = 0; i < output_schema->num_fields(); i++) {
-      const auto& field_name = output_schema->field(i)->name();
-      auto it = row.cells.find(field_name);
+    for (size_t i = 0; i < field_names.size(); i++) {
+      const auto& field_name = field_names[i];  // Use cached field name
 
-      if (it != row.cells.end() && it->second) {
-        // We have a value for this field
-        auto array_result = arrow::MakeArrayFromScalar(*(it->second), 1);
-        if (array_result.ok()) {
-          auto array = array_result.ValueOrDie();
-          auto scalar_result = array->GetScalar(0);
-          if (scalar_result.ok()) {
-            ARROW_RETURN_NOT_OK(
-                builders[i]->AppendScalar(*scalar_result.ValueOrDie()));
-            continue;
+      // Optimization: try indexed access first, fallback to string lookup
+      ValueRef value_ref;
+      bool has_value = false;
+
+      if (i < row->cells.size() && row->cells[i].data != nullptr) {
+        // Fast path: use indexed access
+        value_ref = row->cells[i];
+        has_value = true;
+      }
+
+      if (has_value) {
+        // We have a value for this field - append directly without creating
+        // scalars
+        arrow::Status append_status;
+
+        switch (value_ref.type) {
+          case ValueType::INT32:
+            append_status = static_cast<arrow::Int32Builder*>(builders[i].get())
+                                ->Append(value_ref.as_int32());
+            break;
+          case ValueType::INT64:
+            append_status = static_cast<arrow::Int64Builder*>(builders[i].get())
+                                ->Append(value_ref.as_int64());
+            break;
+          case ValueType::DOUBLE:
+            append_status =
+                static_cast<arrow::DoubleBuilder*>(builders[i].get())
+                    ->Append(value_ref.as_double());
+            break;
+          case ValueType::STRING: {
+            const auto& str_ref = value_ref.as_string_ref();
+            append_status =
+                static_cast<arrow::StringBuilder*>(builders[i].get())
+                    ->Append(str_ref.data, str_ref.length);
+            break;
           }
+          case ValueType::BOOL:
+            append_status =
+                static_cast<arrow::BooleanBuilder*>(builders[i].get())
+                    ->Append(value_ref.as_bool());
+            break;
+          case ValueType::NA:
+            append_status = builders[i]->AppendNull();
+            break;
+          default:
+            append_status = builders[i]->AppendNull();
+            break;
+        }
+
+        if (append_status.ok()) {
+          continue;
         }
       }
 
-      // Fall back to NULL if we couldn't get or append the scalar
+      // Fall back to NULL if we couldn't append the value
       ARROW_RETURN_NOT_OK(builders[i]->AppendNull());
     }
   }

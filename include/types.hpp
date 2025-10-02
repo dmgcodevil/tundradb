@@ -270,6 +270,180 @@ class Value {
       data_;
 };
 
+struct ValueRef {
+  const char* data;
+  ValueType type;
+
+  ValueRef() : data(nullptr), type(ValueType::NA) {}
+
+  explicit ValueRef(ValueType type) : data(nullptr), type(type) {}
+
+  ValueRef(const char* ptr, ValueType type) : data(ptr), type(type) {}
+
+  [[nodiscard]] int32_t as_int32() const {
+    return *reinterpret_cast<const int32_t*>(data);
+  }
+
+  [[nodiscard]] int64_t as_int64() const {
+    return *reinterpret_cast<const int64_t*>(data);
+  }
+
+  [[nodiscard]] double as_double() const {
+    return *reinterpret_cast<const double*>(data);
+  }
+
+  [[nodiscard]] float as_float() const {
+    return *reinterpret_cast<const float*>(data);
+  }
+
+  [[nodiscard]] bool as_bool() const {
+    return *reinterpret_cast<const bool*>(data);
+  }
+
+  [[nodiscard]] std::string as_string() const { return std::string(data); }
+
+  [[nodiscard]] const StringRef& as_string_ref() const {
+    return *reinterpret_cast<const StringRef*>(data);
+  }
+
+  arrow::Result<std::shared_ptr<arrow::Scalar>> as_scalar() const {
+    switch (type) {
+      case ValueType::INT32:
+        return arrow::MakeScalar(as_int32());
+      case ValueType::INT64:
+        return arrow::MakeScalar(as_int64());
+      case ValueType::DOUBLE:
+        return arrow::MakeScalar(as_double());
+      case ValueType::STRING:
+        return arrow::MakeScalar(as_string_ref().to_string());
+      case ValueType::BOOL:
+        return arrow::MakeScalar(as_bool());
+      case ValueType::NA:
+        return arrow::MakeNullScalar(arrow::null());
+      default:
+        return arrow::Status::NotImplemented(
+            "Unsupported Value type for Arrow scalar conversion: ",
+            to_string(type));
+    }
+  }
+
+  bool operator==(const ValueRef& other) const {
+    if (type != other.type) {
+      std::cout << "different types. this: " << to_string(type)
+                << ", other: " << to_string(other.type) << std::endl;
+      return false;
+    }
+
+    // Both null
+    if (data == nullptr && other.data == nullptr) {
+      return true;
+    }
+
+    // One null, one not null
+    if (data == nullptr || other.data == nullptr) {
+      return false;
+    }
+
+    // Compare values based on type
+    switch (type) {
+      case ValueType::NA:
+        return true;  // Both are NA
+
+      case ValueType::INT32:
+        return *reinterpret_cast<const int32_t*>(data) ==
+               *reinterpret_cast<const int32_t*>(other.data);
+
+      case ValueType::INT64:
+        return *reinterpret_cast<const int64_t*>(data) ==
+               *reinterpret_cast<const int64_t*>(other.data);
+
+      case ValueType::FLOAT:
+        return *reinterpret_cast<const float*>(data) ==
+               *reinterpret_cast<const float*>(other.data);
+
+      case ValueType::DOUBLE:
+        return *reinterpret_cast<const double*>(data) ==
+               *reinterpret_cast<const double*>(other.data);
+
+      case ValueType::BOOL:
+        return *reinterpret_cast<const bool*>(data) ==
+               *reinterpret_cast<const bool*>(other.data);
+
+      case ValueType::STRING: {
+        const StringRef& str1 = *reinterpret_cast<const StringRef*>(data);
+        const StringRef& str2 = *reinterpret_cast<const StringRef*>(other.data);
+
+        // Compare string lengths first
+        if (str1.length != str2.length) {
+          return false;
+        }
+
+        // Both null strings
+        if (str1.is_null() && str2.is_null()) {
+          return true;
+        }
+
+        // One null, one not
+        if (str1.is_null() || str2.is_null()) {
+          return false;
+        }
+
+        // Compare string content
+        return std::memcmp(str1.data, str2.data, str1.length) == 0;
+      }
+
+      default:
+        return false;  // Unknown type
+    }
+  }
+
+  bool operator!=(const ValueRef& other) const { return !(*this == other); }
+
+  [[nodiscard]] bool equals(const ValueRef& other) const {
+    return *this == other;
+  }
+
+  // todo rename
+  std::string ToString() const {
+    if (data == nullptr) {
+      return "NULL";
+    }
+
+    switch (type) {
+      case ValueType::NA:
+        return "NULL";
+
+      case ValueType::INT32:
+        return std::to_string(as_int32());
+
+      case ValueType::INT64:
+        return std::to_string(as_int64());
+
+      case ValueType::FLOAT:
+        return std::to_string(as_float());
+
+      case ValueType::DOUBLE:
+        return std::to_string(as_double());
+
+      case ValueType::BOOL:
+        return as_bool() ? "true" : "false";
+
+      case ValueType::FIXED_STRING16:
+      case ValueType::FIXED_STRING32:
+      case ValueType::FIXED_STRING64:
+      case ValueType::STRING: {
+        const StringRef& str_ref = as_string_ref();
+        if (str_ref.is_null()) {
+          return "NULL";
+        }
+        return "\"" + str_ref.to_string() + "\"";
+      }
+      default:
+        return "UNKNOWN_TYPE";
+    }
+  }
+};
+
 // Stream operator for ValueType
 inline std::ostream& operator<<(std::ostream& os, const ValueType type) {
   return os << to_string(type);

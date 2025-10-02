@@ -106,6 +106,20 @@ std::vector<std::shared_ptr<Edge>> EdgeStore::get(
   return res;
 }
 
+// Template overload for any iterable container (including LockedView)
+template <typename Container>
+std::vector<std::shared_ptr<Edge>> EdgeStore::get(const Container& ids) const {
+  std::vector<std::shared_ptr<Edge>> res;
+  tbb::concurrent_hash_map<int64_t, std::shared_ptr<Edge>>::const_accessor acc;
+
+  for (const auto& id : ids) {
+    if (edges.find(acc, id)) {
+      res.push_back(acc->second);
+    }
+  }
+  return res;
+}
+
 arrow::Result<std::shared_ptr<Edge>> EdgeStore::get(int64_t edge_id) const {
   tbb::concurrent_hash_map<int64_t, std::shared_ptr<Edge>>::const_accessor acc;
   if (edges.find(acc, edge_id)) {
@@ -123,17 +137,32 @@ arrow::Result<std::vector<std::shared_ptr<Edge>>> EdgeStore::get_edges_from_map(
     return std::vector<std::shared_ptr<Edge>>();
   }
 
+  const auto edge_ids_view = acc->second.get_all_unsafe();
   std::vector<std::shared_ptr<Edge>> result;
-  const auto edge_ids = acc->second.get_all();
-  result.reserve(edge_ids->size());
 
-  for (const auto& edge_id : *edge_ids) {
-    tbb::concurrent_hash_map<int64_t, std::shared_ptr<Edge>>::const_accessor
-        edge_acc;
-    if (edges.find(edge_acc, edge_id)) {
-      if (auto edge = edge_acc->second;
-          type.empty() || edge->get_type() == type) {
-        result.push_back(edge);
+  // Pre-allocate result vector to avoid reallocations
+  result.reserve(edge_ids_view.size());
+
+  // Reuse a single accessor to avoid repeated allocation/deallocation
+  tbb::concurrent_hash_map<int64_t, std::shared_ptr<Edge>>::const_accessor
+      edge_acc;
+
+  // Optimization: avoid string comparison if no type filter
+  if (type.empty()) {
+    // Fast path: no type filtering needed
+    for (const auto& edge_id : edge_ids_view) {
+      if (edges.find(edge_acc, edge_id)) {
+        result.push_back(edge_acc->second);
+      }
+    }
+  } else {
+    // Slow path: type filtering required - cache type for comparison
+    for (const auto& edge_id : edge_ids_view) {
+      if (edges.find(edge_acc, edge_id)) {
+        const auto& edge = edge_acc->second;
+        if (edge->get_type() == type) {
+          result.push_back(edge);
+        }
       }
     }
   }
@@ -160,9 +189,9 @@ arrow::Result<std::vector<std::shared_ptr<Edge>>> EdgeStore::get_by_type(
   }
 
   std::vector<std::shared_ptr<Edge>> result;
-  auto edge_ids = acc->second.get_all();
+  auto edge_ids_view = acc->second.get_all_unsafe();
 
-  for (const auto& edge_id : *edge_ids) {
+  for (const auto& edge_id : edge_ids_view) {
     tbb::concurrent_hash_map<int64_t, std::shared_ptr<Edge>>::const_accessor
         edge_acc;
     if (edges.find(edge_acc, edge_id)) {
@@ -197,12 +226,14 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::generate_table(
   log_info("Generating table for edge type: '" + edge_type + "'");
   std::vector<std::shared_ptr<Edge>> selected_edges;
   if (edge_type.empty()) {
-    selected_edges = get(*edge_ids_.get_all());
+    auto edge_ids_view = edge_ids_.get_all_unsafe();
+    selected_edges = get(edge_ids_view);
   } else {
     tbb::concurrent_hash_map<std::string,
                              ConcurrentSet<int64_t>>::const_accessor acc;
     if (edges_by_type_.find(acc, edge_type)) {
-      selected_edges = get(*acc->second.get_all());
+      auto edge_ids_view = acc->second.get_all_unsafe();
+      selected_edges = get(edge_ids_view);
     }
   }
 
