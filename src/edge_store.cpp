@@ -1,5 +1,7 @@
 #include "edge_store.hpp"
 
+#include <algorithm>
+
 #include "logger.hpp"
 namespace tundradb {
 
@@ -12,82 +14,74 @@ arrow::Result<std::shared_ptr<Edge>> EdgeStore::create_edge(
 }
 
 arrow::Result<bool> EdgeStore::add(const std::shared_ptr<Edge>& edge) {
-  {
-    tbb::concurrent_hash_map<int64_t, std::shared_ptr<Edge>>::accessor acc;
-    if (!this->edges.insert(acc, edge->get_id())) {
-      return arrow::Status::KeyError("Edge already exists with id=" +
-                                     std::to_string(edge->get_id()));
-    }
-    edge_ids_.insert(edge->get_id());
-    acc->second = edge;
+  std::unique_lock<std::shared_mutex> lock(edges_mutex_);
+
+  // Check if edge already exists
+  if (this->edges.find(edge->get_id()) != this->edges.end()) {
+    return arrow::Status::KeyError("Edge already exists with id=" +
+                                   std::to_string(edge->get_id()));
   }
 
-  {
-    tbb::concurrent_hash_map<std::string, ConcurrentSet<int64_t>>::accessor acc;
-    this->edges_by_type_.insert(acc, edge->get_type());
-    acc->second.insert(edge->get_id());
-  }
+  // Add edge to main edges map
+  this->edges[edge->get_id()] = edge;
+  edge_ids_.insert(edge->get_id());
 
-  {
-    tbb::concurrent_hash_map<int64_t, ConcurrentSet<int64_t>>::accessor acc;
-    this->outgoing_edges_.insert(acc, edge->get_source_id());
-    acc->second.insert(edge->get_id());
-  }
+  // Add to edges_by_type
+  this->edges_by_type_[edge->get_type()].insert(edge->get_id());
 
-  {
-    tbb::concurrent_hash_map<int64_t, ConcurrentSet<int64_t>>::accessor acc;
-    this->incoming_edges_.insert(acc, edge->get_target_id());
-    acc->second.insert(edge->get_id());
-  }
+  // Add to outgoing_edges
+  this->outgoing_edges_[edge->get_source_id()].insert(edge->get_id());
 
-  {
-    tbb::concurrent_hash_map<std::string, std::atomic<int64_t>>::accessor acc;
-    if (this->versions_.insert(acc, edge->get_type())) {
-      acc->second.store(1);
-    } else {
-      acc->second.fetch_add(1);
-    }
+  // Add to incoming_edges
+  this->incoming_edges_[edge->get_target_id()].insert(edge->get_id());
+
+  // Update version counter (atomic, no additional locking needed)
+  auto version_it = this->versions_.find(edge->get_type());
+  if (version_it == this->versions_.end()) {
+    this->versions_[edge->get_type()].store(1);
+  } else {
+    version_it->second.fetch_add(1);
   }
 
   return true;
 }
 
 arrow::Result<bool> EdgeStore::remove(int64_t edge_id) {
-  tbb::concurrent_hash_map<int64_t, std::shared_ptr<Edge>>::accessor acc;
+  std::unique_lock<std::shared_mutex> lock(edges_mutex_);
 
-  if (edges.find(acc, edge_id)) {
-    const auto edge = acc->second;
-    if (edges.erase(acc)) {
-      {
-        tbb::concurrent_hash_map<std::string, ConcurrentSet<int64_t>>::accessor
-            edges_by_type_acc;
-        if (edges_by_type_.find(edges_by_type_acc, edge->get_type())) {
-          edges_by_type_acc->second.remove(edge->get_id());
-        }
-      }
-      {
-        tbb::concurrent_hash_map<int64_t, ConcurrentSet<int64_t>>::accessor
-            outgoing_edges_acc;
-        if (outgoing_edges_.find(outgoing_edges_acc, edge->get_source_id())) {
-          outgoing_edges_acc->second.remove(edge->get_id());
-        }
-      }
-      {
-        tbb::concurrent_hash_map<int64_t, ConcurrentSet<int64_t>>::accessor
-            incoming_edges_acc;
-        if (incoming_edges_.find(incoming_edges_acc, edge->get_target_id())) {
-          incoming_edges_acc->second.remove(edge->get_id());
-        }
-      }
+  auto edge_it = edges.find(edge_id);
+  if (edge_it != edges.end()) {
+    const auto edge = edge_it->second;
+
+    // Remove from main edges map
+    edges.erase(edge_it);
+
+    // Remove from edges_by_type
+    auto type_it = edges_by_type_.find(edge->get_type());
+    if (type_it != edges_by_type_.end()) {
+      type_it->second.erase(edge->get_id());
     }
-    {
-      tbb::concurrent_hash_map<std::string, std::atomic<int64_t>>::accessor acc;
-      if (this->versions_.insert(acc, edge->get_type())) {
-        acc->second.store(1);
-      } else {
-        acc->second.fetch_add(1);
-      }
+
+    // Remove from outgoing_edges
+    auto outgoing_it = outgoing_edges_.find(edge->get_source_id());
+    if (outgoing_it != outgoing_edges_.end()) {
+      outgoing_it->second.erase(edge->get_id());
     }
+
+    // Remove from incoming_edges
+    auto incoming_it = incoming_edges_.find(edge->get_target_id());
+    if (incoming_it != incoming_edges_.end()) {
+      incoming_it->second.erase(edge->get_id());
+    }
+
+    // Update version counter (atomic, no additional locking needed)
+    auto version_it = this->versions_.find(edge->get_type());
+    if (version_it == this->versions_.end()) {
+      this->versions_[edge->get_type()].store(1);
+    } else {
+      version_it->second.fetch_add(1);
+    }
+
     return true;
   }
   return false;
@@ -95,12 +89,13 @@ arrow::Result<bool> EdgeStore::remove(int64_t edge_id) {
 
 std::vector<std::shared_ptr<Edge>> EdgeStore::get(
     const std::set<int64_t>& ids) const {
+  std::shared_lock<std::shared_mutex> lock(edges_mutex_);
   std::vector<std::shared_ptr<Edge>> res;
-  tbb::concurrent_hash_map<int64_t, std::shared_ptr<Edge>>::const_accessor acc;
 
   for (auto id : ids) {
-    if (edges.find(acc, id)) {
-      res.push_back(acc->second);
+    auto it = edges.find(id);
+    if (it != edges.end()) {
+      res.push_back(it->second);
     }
   }
   return res;
@@ -109,57 +104,63 @@ std::vector<std::shared_ptr<Edge>> EdgeStore::get(
 // Template overload for any iterable container (including LockedView)
 template <typename Container>
 std::vector<std::shared_ptr<Edge>> EdgeStore::get(const Container& ids) const {
+  std::shared_lock<std::shared_mutex> lock(edges_mutex_);
   std::vector<std::shared_ptr<Edge>> res;
-  tbb::concurrent_hash_map<int64_t, std::shared_ptr<Edge>>::const_accessor acc;
 
   for (const auto& id : ids) {
-    if (edges.find(acc, id)) {
-      res.push_back(acc->second);
+    auto it = edges.find(id);
+    if (it != edges.end()) {
+      res.push_back(it->second);
     }
   }
   return res;
 }
 
 arrow::Result<std::shared_ptr<Edge>> EdgeStore::get(int64_t edge_id) const {
-  tbb::concurrent_hash_map<int64_t, std::shared_ptr<Edge>>::const_accessor acc;
-  if (edges.find(acc, edge_id)) {
-    return acc->second;
+  std::shared_lock<std::shared_mutex> lock(edges_mutex_);
+  auto it = edges.find(edge_id);
+  if (it != edges.end()) {
+    return it->second;
   }
   return arrow::Status::KeyError("Edge not found with id=" +
                                  std::to_string(edge_id));
 }
 
 arrow::Result<std::vector<std::shared_ptr<Edge>>> EdgeStore::get_edges_from_map(
-    const tbb::concurrent_hash_map<int64_t, ConcurrentSet<int64_t>>& edge_map,
+    const llvm::DenseMap<int64_t, std::unordered_set<int64_t>>& edge_map,
     const int64_t id, const std::string& type) const {
-  tbb::concurrent_hash_map<int64_t, ConcurrentSet<int64_t>>::const_accessor acc;
-  if (!edge_map.find(acc, id)) {
+  std::shared_lock<std::shared_mutex> lock(edges_mutex_);
+
+  auto it = edge_map.find(id);
+  if (it == edge_map.end()) {
     return std::vector<std::shared_ptr<Edge>>();
   }
 
-  const auto edge_ids_view = acc->second.get_all_unsafe();
+  const auto& edge_ids = it->second;
   std::vector<std::shared_ptr<Edge>> result;
 
   // Pre-allocate result vector to avoid reallocations
-  result.reserve(edge_ids_view.size());
+  result.reserve(edge_ids.size());
 
-  // Reuse a single accessor to avoid repeated allocation/deallocation
-  tbb::concurrent_hash_map<int64_t, std::shared_ptr<Edge>>::const_accessor
-      edge_acc;
+  // Convert unordered_set to sorted vector for consistent ordering
+  std::vector<int64_t> sorted_edge_ids(edge_ids.begin(), edge_ids.end());
+  std::sort(sorted_edge_ids.begin(), sorted_edge_ids.end());
 
   // Optimization: avoid string comparison if no type filter
   if (type.empty()) {
     // Fast path: no type filtering needed
-    for (const auto& edge_id : edge_ids_view) {
-      if (edges.find(edge_acc, edge_id)) {
-        result.push_back(edge_acc->second);
+    for (const auto& edge_id : sorted_edge_ids) {
+      auto edge_it = edges.find(edge_id);
+      if (edge_it != edges.end()) {
+        result.push_back(edge_it->second);
       }
     }
   } else {
     // Slow path: type filtering required - cache type for comparison
-    for (const auto& edge_id : edge_ids_view) {
-      if (edges.find(edge_acc, edge_id)) {
-        const auto& edge = edge_acc->second;
+    for (const auto& edge_id : sorted_edge_ids) {
+      auto edge_it = edges.find(edge_id);
+      if (edge_it != edges.end()) {
+        const auto& edge = edge_it->second;
         if (edge->get_type() == type) {
           result.push_back(edge);
         }
@@ -182,20 +183,24 @@ arrow::Result<std::vector<std::shared_ptr<Edge>>> EdgeStore::get_incoming_edges(
 
 arrow::Result<std::vector<std::shared_ptr<Edge>>> EdgeStore::get_by_type(
     const std::string& type) const {
-  tbb::concurrent_hash_map<std::string, ConcurrentSet<int64_t>>::const_accessor
-      acc;
-  if (!edges_by_type_.find(acc, type)) {
+  std::shared_lock<std::shared_mutex> lock(edges_mutex_);
+
+  auto it = edges_by_type_.find(type);
+  if (it == edges_by_type_.end()) {
     return std::vector<std::shared_ptr<Edge>>();
   }
 
   std::vector<std::shared_ptr<Edge>> result;
-  auto edge_ids_view = acc->second.get_all_unsafe();
+  const auto& edge_ids = it->second;
 
-  for (const auto& edge_id : edge_ids_view) {
-    tbb::concurrent_hash_map<int64_t, std::shared_ptr<Edge>>::const_accessor
-        edge_acc;
-    if (edges.find(edge_acc, edge_id)) {
-      result.push_back(edge_acc->second);
+  // Convert unordered_set to sorted vector for consistent ordering
+  std::vector<int64_t> sorted_edge_ids(edge_ids.begin(), edge_ids.end());
+  std::sort(sorted_edge_ids.begin(), sorted_edge_ids.end());
+
+  for (const auto& edge_id : sorted_edge_ids) {
+    auto edge_it = edges.find(edge_id);
+    if (edge_it != edges.end()) {
+      result.push_back(edge_it->second);
     }
   }
 
@@ -204,19 +209,19 @@ arrow::Result<std::vector<std::shared_ptr<Edge>>> EdgeStore::get_by_type(
 
 arrow::Result<int64_t> EdgeStore::get_version(
     const std::string& edge_type) const {
-  tbb::concurrent_hash_map<std::string, std::atomic<int64_t>>::const_accessor
-      acc;
-  if (versions_.find(acc, edge_type)) {
-    return acc->second.load(std::memory_order_acquire);
+  auto it = versions_.find(edge_type);
+  if (it != versions_.end()) {
+    return it->second.load(std::memory_order_acquire);
   }
   return arrow::Status::KeyError("No version found for edge type: " +
                                  edge_type);
 }
 
 std::set<std::string> EdgeStore::get_edge_types() const {
+  std::shared_lock<std::shared_mutex> lock(edges_mutex_);
   std::set<std::string> result;
   for (auto it = edges_by_type_.begin(); it != edges_by_type_.end(); ++it) {
-    result.insert(it->first);
+    result.insert(std::string(it->first()));  // Convert StringRef to string
   }
   return result;
 }
@@ -225,17 +230,25 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::generate_table(
     const std::string& edge_type) const {
   log_info("Generating table for edge type: '" + edge_type + "'");
   std::vector<std::shared_ptr<Edge>> selected_edges;
-  if (edge_type.empty()) {
-    auto edge_ids_view = edge_ids_.get_all_unsafe();
-    selected_edges = get(edge_ids_view);
-  } else {
-    tbb::concurrent_hash_map<std::string,
-                             ConcurrentSet<int64_t>>::const_accessor acc;
-    if (edges_by_type_.find(acc, edge_type)) {
-      auto edge_ids_view = acc->second.get_all_unsafe();
+  {
+    std::shared_lock<std::shared_mutex> lock(edges_mutex_);
+    if (edge_type.empty()) {
+      auto edge_ids_view = edge_ids_.get_all_unsafe();
       selected_edges = get(edge_ids_view);
+    } else {
+      auto it = edges_by_type_.find(edge_type);
+      if (it != edges_by_type_.end()) {
+        const auto& edge_ids = it->second;
+        // Convert unordered_set to sorted vector for consistent ordering
+        std::vector<int64_t> sorted_edge_ids(edge_ids.begin(), edge_ids.end());
+        std::sort(sorted_edge_ids.begin(), sorted_edge_ids.end());
+        selected_edges = get(sorted_edge_ids);
+      }
     }
   }
+
+  // Edges are already sorted by ID since we sorted the edge_ids before calling
+  // get()
 
   if (selected_edges.empty()) {
     log_info("No edges found for type '" + edge_type +
@@ -381,116 +394,71 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::generate_table(
 
 arrow::Result<int64_t> EdgeStore::get_version_snapshot(
     const std::string& edge_type) const {
-  tbb::concurrent_hash_map<std::string, std::atomic<int64_t>>::const_accessor
-      acc;
-  if (versions_.find(acc, edge_type)) {
-    return acc->second.load(std::memory_order_acquire);
+  auto it = versions_.find(edge_type);
+  if (it != versions_.end()) {
+    return it->second.load(std::memory_order_acquire);
   }
   return arrow::Status::KeyError("versions does have edge=" + edge_type);
 }
 
 arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::get_table(
     const std::string& edge_type) {
-  constexpr int MAX_RETRIES = 5;
-  int retry_count = 0;
-
-  if (edges_by_type_.empty() || edges_by_type_.count(edge_type) == 0) {
-    return arrow::Status::KeyError("edge type doesn't exists");
+  {
+    std::shared_lock<std::shared_mutex> edges_lock(edges_mutex_);
+    if (edges_by_type_.empty() ||
+        edges_by_type_.find(edge_type) == edges_by_type_.end()) {
+      return arrow::Status::KeyError("edge type doesn't exists");
+    }
   }
 
-  while (retry_count < MAX_RETRIES) {
-    {
-      tbb::concurrent_hash_map<
-          std::string, std::shared_ptr<TableCache>>::const_accessor tables_acc;
-      if (tables_.find(tables_acc, edge_type)) {
-        auto latest_version_res = get_version_snapshot(edge_type);
-        if (!latest_version_res.ok()) {
-          return latest_version_res.status();
-        }
-        const int64_t latest_version = latest_version_res.ValueOrDie();
+  // Check cache first
+  {
+    std::shared_lock<std::shared_mutex> tables_lock(tables_mutex_);
+    auto cache_it = tables_.find(edge_type);
+    if (cache_it != tables_.end()) {
+      auto latest_version_res = get_version_snapshot(edge_type);
+      if (latest_version_res.ok()) {
+        const int64_t latest_version = *latest_version_res;
         const int64_t current_version =
-            tables_acc->second->version.load(std::memory_order_acquire);
+            cache_it->second->version.load(std::memory_order_acquire);
 
-        if (current_version > latest_version) {
-          return arrow::Status::Invalid(
-              "Invalid state: current_version > latest_version");
-        }
         if (current_version == latest_version &&
-            tables_acc->second->table != nullptr) {
-          return tables_acc->second->table;
+            cache_it->second->table != nullptr) {
+          return cache_it->second->table;
         }
       }
-    }
-
-    tbb::concurrent_hash_map<std::string, std::shared_ptr<TableCache>>::accessor
-        tables_acc;
-
-    if (tables_.find(tables_acc, edge_type)) {
-      auto latest_version_res = get_version_snapshot(edge_type);
-      if (!latest_version_res.ok()) {
-        return latest_version_res.status();
-      }
-      const int64_t latest_version = latest_version_res.ValueOrDie();
-      const int64_t current_version =
-          tables_acc->second->version.load(std::memory_order_acquire);
-
-      if (current_version < latest_version) {
-        std::lock_guard lock(tables_acc->second->lock);
-        // Double-check under lock
-        if (current_version ==
-            tables_acc->second->version.load(std::memory_order_acquire)) {
-          // Generate table safely
-          auto table_res = generate_table(edge_type);
-          if (!table_res.ok()) {
-            return table_res.status();
-          }
-
-          tables_acc->second->table = table_res.ValueOrDie();
-          tables_acc->second->version.store(latest_version,
-                                            std::memory_order_release);
-          return tables_acc->second->table;
-        }
-        // Another thread updated the table, we'll retry in the next loop
-        // iteration
-      } else {
-        // Current version is already up-to-date, return it
-        return tables_acc->second->table;
-      }
-    } else if (tables_.insert(tables_acc, edge_type)) {
-      const auto table_cache = std::make_shared<TableCache>();
-
-      tables_acc->second = table_cache;
-      std::lock_guard<std::mutex> lock(table_cache->lock);
-
-      auto latest_version_res = get_version_snapshot(edge_type);
-      if (!latest_version_res.ok()) {
-        return latest_version_res.status();
-      }
-      const int64_t latest_version = latest_version_res.ValueOrDie();
-
-      auto table_res = generate_table(edge_type);
-      if (!table_res.ok()) {
-        return table_res.status();
-      }
-
-      table_cache->table = table_res.ValueOrDie();
-      table_cache->version.store(latest_version, std::memory_order_release);
-
-      return table_cache->table;
-    }
-
-    // If we reached here, we need to retry
-    retry_count++;
-
-    // Small backoff to reduce contention
-    if (retry_count < MAX_RETRIES) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(10 * retry_count));
     }
   }
 
-  return arrow::Status::Invalid("Failed to get table for edge type '" +
-                                edge_type + "' after " +
-                                std::to_string(MAX_RETRIES) + " retries");
+  // Generate new table
+  auto table_res = generate_table(edge_type);
+  if (!table_res.ok()) {
+    return table_res.status();
+  }
+
+  // Update cache
+  auto latest_version_res = get_version_snapshot(edge_type);
+  if (latest_version_res.ok()) {
+    const int64_t latest_version = *latest_version_res;
+
+    std::unique_lock<std::shared_mutex> tables_lock(tables_mutex_);
+    auto cache_it = tables_.find(edge_type);
+    if (cache_it == tables_.end()) {
+      // Create new cache entry
+      auto table_cache = std::make_shared<TableCache>();
+      table_cache->table = *table_res;
+      table_cache->version.store(latest_version, std::memory_order_release);
+      tables_[edge_type] = table_cache;
+    } else {
+      // Update existing cache entry
+      std::lock_guard<std::mutex> lock(cache_it->second->lock);
+      cache_it->second->table = *table_res;
+      cache_it->second->version.store(latest_version,
+                                      std::memory_order_release);
+    }
+  }
+
+  return table_res;
 }
 
 }  // namespace tundradb

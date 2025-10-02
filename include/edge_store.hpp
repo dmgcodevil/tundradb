@@ -2,8 +2,11 @@
 #define EDGE_STORE_HPP
 
 #include <arrow/api.h>
+#include <llvm/ADT/DenseMap.h>
+#include <llvm/ADT/StringMap.h>
 
 #include <set>
+#include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -19,24 +22,24 @@ class EdgeStore {
   struct TableCache;
 
  private:
-  tbb::concurrent_hash_map<int64_t, std::shared_ptr<Edge>> edges;
-  tbb::concurrent_hash_map<std::string, ConcurrentSet<int64_t>> edges_by_type_;
-  tbb::concurrent_hash_map<int64_t, ConcurrentSet<int64_t>> outgoing_edges_;
-  tbb::concurrent_hash_map<int64_t, ConcurrentSet<int64_t>> incoming_edges_;
+  mutable std::shared_mutex edges_mutex_;
+  llvm::DenseMap<int64_t, std::shared_ptr<Edge>> edges;
+  llvm::StringMap<std::unordered_set<int64_t>> edges_by_type_;
+  llvm::DenseMap<int64_t, std::unordered_set<int64_t>> outgoing_edges_;
+  llvm::DenseMap<int64_t, std::unordered_set<int64_t>> incoming_edges_;
 
-  tbb::concurrent_hash_map<std::string, std::atomic<int64_t>>
-      versions_;  // version
+  llvm::StringMap<std::atomic<int64_t>> versions_;  // version
   std::atomic<int64_t> edge_id_counter_{0};
 
   ConcurrentSet<int64_t> edge_ids_;
 
-  tbb::concurrent_hash_map<std::string, std::shared_ptr<TableCache>>
-      tables_;  // cache
+  mutable std::shared_mutex tables_mutex_;
+  llvm::StringMap<std::shared_ptr<TableCache>> tables_;  // cache
   std::string data_file_;
   int64_t chunk_size_;
 
   arrow::Result<std::vector<std::shared_ptr<Edge>>> get_edges_from_map(
-      const tbb::concurrent_hash_map<int64_t, ConcurrentSet<int64_t>> &edge_map,
+      const llvm::DenseMap<int64_t, std::unordered_set<int64_t>> &edge_map,
       int64_t id, const std::string &type) const;
 
   arrow::Result<std::shared_ptr<arrow::Table>> generate_table(
