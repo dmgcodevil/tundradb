@@ -427,8 +427,9 @@ struct QueryState {
   llvm::StringMap<std::vector<int>>
       schema_field_indices;  // "User" -> [0, 1, 2], "Company -> [3,4,5]"
   llvm::SmallDenseMap<int, std::string, 64>
-      field_id_to_name;               // 0 -> "user.name"
-  std::atomic<int> next_field_id{0};  // Global field ID counter
+      field_id_to_name;                      // 0 -> "user.name"
+  llvm::StringMap<int> field_name_to_index;  // "user.name" -> 0
+  std::atomic<int> next_field_id{0};         // Global field ID counter
 
   llvm::StringMap<
       llvm::DenseMap<int64_t, llvm::SmallVector<GraphConnection, 4>>>
@@ -438,6 +439,50 @@ struct QueryState {
   std::shared_ptr<NodeManager> node_manager;
   std::shared_ptr<SchemaRegistry> schema_registry;
   std::vector<Traverse> traversals;
+
+  // Connection object pooling to avoid repeated allocations
+  class ConnectionPool {
+   private:
+    std::vector<GraphConnection> pool_;
+    size_t next_index_ = 0;
+
+   public:
+    explicit ConnectionPool(size_t initial_size = 1000) : pool_(initial_size) {}
+
+    GraphConnection& get() {
+      if (next_index_ >= pool_.size()) {
+        pool_.resize(pool_.size() * 2);  // Grow pool if needed
+      }
+      return pool_[next_index_++];
+    }
+
+    void reset() { next_index_ = 0; }  // Reset for reuse
+    size_t size() const { return next_index_; }
+  };
+
+  mutable ConnectionPool connection_pool_;  // Mutable for const methods
+
+  // Pre-size hash maps to avoid expensive resizing during query execution
+  void reserve_capacity(const Query& query) {
+    // Estimate schema count from FROM + TRAVERSE clauses
+    size_t estimated_schemas = 1;  // FROM clause
+    for (const auto& clause : query.clauses()) {
+      if (clause->type() == Clause::Type::TRAVERSE) {
+        estimated_schemas += 2;  // source + target schemas
+      }
+    }
+
+    // Pre-size standard containers (LLVM containers don't support reserve)
+    tables.reserve(estimated_schemas);
+    aliases.reserve(estimated_schemas);
+
+    // Estimate nodes per schema (conservative estimate)
+    size_t estimated_nodes_per_schema = 1000;
+    incoming.reserve(estimated_nodes_per_schema);
+
+    // Pre-size field mappings
+    field_id_to_name.reserve(estimated_schemas * 8);  // ~8 fields per schema
+  }
 
   arrow::Result<std::string> resolve_schema(const SchemaRef& schema_ref) {
     // todo we need to separate functions: assign alias , resolve
@@ -491,6 +536,7 @@ struct QueryState {
       names.emplace_back(fq_name);
       indices.emplace_back(field_id);
       field_id_to_name[field_id] = fq_name;
+      field_name_to_index[fq_name] = field_id;
     }
 
     fq_field_names[alias] = std::move(names);
@@ -1637,7 +1683,6 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_rows(
       bool has_value = false;
 
       if (i < row->cells.size() && row->cells[i].data != nullptr) {
-        // Fast path: use indexed access
         value_ref = row->cells[i];
         has_value = true;
       }
@@ -1900,6 +1945,10 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
     const Query& query) const {
   QueryState query_state;
   auto result = std::make_shared<QueryResult>();
+
+  // Pre-size hash maps to avoid expensive resizing during execution
+  query_state.reserve_capacity(query);
+
   IF_DEBUG_ENABLED {
     log_debug("Executing query starting from schema '{}'",
               query.from().toString());
@@ -2123,10 +2172,15 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
                     source_had_match = true;
                   }
                   matched_target_ids.insert(target_node->id);
-                  auto conn =
-                      GraphConnection{traverse->source(),    source_id,
-                                      traverse->edge_type(), "",
-                                      traverse->target(),    target_node->id};
+                  // Use connection pool to avoid allocation
+                  auto& conn = query_state.connection_pool_.get();
+                  conn.source = traverse->source();
+                  conn.source_id = source_id;
+                  conn.edge_type = traverse->edge_type();
+                  conn.label = "";
+                  conn.target = traverse->target();
+                  conn.target_id = target_node->id;
+
                   query_state.connections[traverse->source().value()][source_id]
                       .push_back(conn);
                   query_state.incoming[target_node->id].push_back(conn);
