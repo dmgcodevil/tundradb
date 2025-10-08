@@ -126,13 +126,13 @@ add_executable(free_list_arena_test
 add_executable(node_arena_test
         node_arena_test.cpp)
 
-# String reference counting test
-add_executable(string_refcount_test
-        string_refcount_test.cpp)
-
 # Node test
 add_executable(node_test
         node_test.cpp)
+
+# String reference concurrent test
+add_executable(string_ref_concurrent_test
+        string_ref_concurrent_test.cpp)
 
 # Link against Arrow and GTest
 target_link_libraries(sharding_test
@@ -302,7 +302,7 @@ target_link_libraries(node_arena_test
         LLVMSupport LLVMCore
 )
 
-target_link_libraries(string_refcount_test
+target_link_libraries(node_test
         PRIVATE
         core
         Arrow::arrow_shared
@@ -313,13 +313,15 @@ target_link_libraries(string_refcount_test
         LLVMSupport LLVMCore
 )
 
-target_link_libraries(node_test
+target_link_libraries(string_ref_concurrent_test
         PRIVATE
         core
         Arrow::arrow_shared
         Parquet::parquet_shared
         GTest::GTest
         GTest::Main
+        pthread
+        TBB::tbb
         spdlog::spdlog
         LLVMSupport LLVMCore
 )
@@ -371,8 +373,8 @@ add_test(NAME WhereExpressionTest COMMAND where_expression_test)
 add_test(NAME MemoryArenaTest COMMAND memory_arena_test)
 add_test(NAME FreeListArenaTest COMMAND free_list_arena_test)
 add_test(NAME NodeArenaTest COMMAND node_arena_test)
-add_test(NAME StringRefCountTest COMMAND string_refcount_test)
 add_test(NAME NodeTest COMMAND node_test)
+add_test(NAME StringRefConcurrentTest COMMAND string_ref_concurrent_test)
 
 # Set TSan options for tests after they've been registered
 if(ENABLE_SANITIZERS AND SANITIZER_TYPE STREQUAL "thread" AND EXISTS ${TSAN_SUPPRESSIONS_FILE})

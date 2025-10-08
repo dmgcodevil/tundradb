@@ -1710,7 +1710,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_rows(
             const auto& str_ref = value_ref.as_string_ref();
             append_status =
                 static_cast<arrow::StringBuilder*>(builders[i].get())
-                    ->Append(str_ref.data, str_ref.length);
+                    ->Append(str_ref.data(), str_ref.length());
             break;
           }
           case ValueType::BOOL:

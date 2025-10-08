@@ -4,6 +4,7 @@
 #include <array>
 #include <cassert>
 #include <cstring>
+#include <iostream>
 #include <string>
 #include <variant>
 
@@ -11,136 +12,9 @@
 #include <arrow/api.h>
 #include <arrow/type.h>
 
+#include "string_arena.hpp"
+
 namespace tundradb {
-
-/**
- * String reference that points into a string arena
- * Lightweight reference instead of inline storage
- */
-struct StringRef {
-  const char* data;   // Direct pointer to string data in arena
-  uint32_t length;    // Length of the string
-  uint32_t arena_id;  // Which string arena contains this string
-
-  StringRef() : data(nullptr), length(0), arena_id(0) {}
-  StringRef(const char* ptr, const uint32_t len, const uint32_t id = 0)
-      : data(ptr), length(len), arena_id(id) {}
-
-  bool is_null() const { return length == 0 || data == nullptr; }
-
-  std::string to_string() const {
-    return data ? std::string(data, length) : std::string();
-  }
-
-  bool operator==(const StringRef& other) const {
-    return data == other.data && length == other.length &&
-           arena_id == other.arena_id;
-  }
-
-  bool operator!=(const StringRef& other) const { return !(*this == other); }
-};
-
-enum class ValueType {
-  NA,
-  INT32,
-  INT64,
-  FLOAT,
-  DOUBLE,
-  STRING,          // Variable length (uses StringArena)
-  FIXED_STRING16,  // 16 char max (uses StringArena)
-  FIXED_STRING32,  // 32 char max (uses StringArena)
-  FIXED_STRING64,  // 64 char max (uses StringArena)
-  BOOL
-};
-
-/**
- * Get the maximum size for fixed-size string types
- */
-inline size_t get_string_max_size(const ValueType type) {
-  switch (type) {
-    case ValueType::FIXED_STRING16:
-      return 16;
-    case ValueType::FIXED_STRING32:
-      return 32;
-    case ValueType::FIXED_STRING64:
-      return 64;
-    case ValueType::STRING:
-      return SIZE_MAX;  // No limit for variable strings
-    default:
-      return 0;  // Not a string type
-  }
-}
-
-/**
- * Check if a ValueType is a string type
- */
-inline bool is_string_type(const ValueType type) {
-  return type == ValueType::STRING || type == ValueType::FIXED_STRING16 ||
-         type == ValueType::FIXED_STRING32 || type == ValueType::FIXED_STRING64;
-}
-
-static size_t get_type_size(const ValueType type) {
-  if (is_string_type(type)) {
-    // ALL string types stored as StringRef in node layout
-    return sizeof(StringRef);  // 12 bytes on 64-bit systems
-  }
-  switch (type) {
-    case ValueType::INT64:
-      return 8;
-    case ValueType::INT32:
-      return 4;
-    case ValueType::DOUBLE:
-      return 8;
-    case ValueType::BOOL:
-      return 1;
-    default:
-      return 0;
-  }
-}
-
-static size_t get_type_alignment(const ValueType type) {
-  if (is_string_type(type)) {
-    // ALL string types stored as StringRef in node layout
-    return alignof(StringRef);  // Usually 8 bytes (pointer alignment)
-  }
-  switch (type) {
-    case ValueType::INT64:
-      return 8;
-    case ValueType::INT32:
-      return 4;
-    case ValueType::DOUBLE:
-      return 8;
-    case ValueType::BOOL:
-      return 1;
-    default:
-      return 1;
-  }
-}
-
-inline std::string to_string(const ValueType type) {
-  switch (type) {
-    case ValueType::NA:
-      return "Null";
-    case ValueType::INT32:
-      return "Int32";
-    case ValueType::INT64:
-      return "Int64";
-    case ValueType::DOUBLE:
-      return "Double";
-    case ValueType::STRING:
-      return "String";
-    case ValueType::FIXED_STRING16:
-      return "FixedString16";
-    case ValueType::FIXED_STRING32:
-      return "FixedString32";
-    case ValueType::FIXED_STRING64:
-      return "FixedString64";
-    case ValueType::BOOL:
-      return "Bool";
-    default:
-      return "Unknown";
-  }
-}
 
 class Value {
  public:
@@ -177,16 +51,7 @@ class Value {
   [[nodiscard]] int64_t as_int64() const { return get<int64_t>(); }
   [[nodiscard]] double as_float() const { return get<float>(); }
   [[nodiscard]] double as_double() const { return get<double>(); }
-  [[nodiscard]] std::string as_string() const {
-    if (is_string_type(type_)) {
-      if (std::holds_alternative<StringRef>(data_)) {
-        return get<StringRef>().to_string();
-      } else if (std::holds_alternative<std::string>(data_)) {
-        return get<std::string>();
-      }
-    }
-    return "";  // fallback for non-string types
-  }
+  [[nodiscard]] std::string as_string() const;  // Implemented in source file
   [[nodiscard]] const StringRef& as_string_ref() const {
     return get<StringRef>();
   }
@@ -300,7 +165,7 @@ struct ValueRef {
     return *reinterpret_cast<const bool*>(data);
   }
 
-  [[nodiscard]] std::string as_string() const { return std::string(data); }
+  [[nodiscard]] std::string as_string() const;  // Implemented in source file
 
   [[nodiscard]] const StringRef& as_string_ref() const {
     return *reinterpret_cast<const StringRef*>(data);
@@ -373,23 +238,8 @@ struct ValueRef {
         const StringRef& str1 = *reinterpret_cast<const StringRef*>(data);
         const StringRef& str2 = *reinterpret_cast<const StringRef*>(other.data);
 
-        // Compare string lengths first
-        if (str1.length != str2.length) {
-          return false;
-        }
-
-        // Both null strings
-        if (str1.is_null() && str2.is_null()) {
-          return true;
-        }
-
-        // One null, one not
-        if (str1.is_null() || str2.is_null()) {
-          return false;
-        }
-
-        // Compare string content
-        return std::memcmp(str1.data, str2.data, str1.length) == 0;
+        // Use StringRef's operator== which handles all edge cases
+        return str1 == str2;
       }
 
       default:
@@ -436,6 +286,7 @@ struct ValueRef {
         if (str_ref.is_null()) {
           return "NULL";
         }
+        // Use StringRef's to_string() method
         return "\"" + str_ref.to_string() + "\"";
       }
       default:

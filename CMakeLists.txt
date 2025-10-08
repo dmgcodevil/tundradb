@@ -220,6 +220,7 @@ add_library(core
         src/utils.cpp
         src/schema.cpp
         src/arrow_utils.cpp
+        src/types.cpp
 )
 
 target_include_directories(core
