@@ -12,8 +12,8 @@
 
 #include "free_list_arena.hpp"
 #include "memory_arena.hpp"
-#include "value_type.hpp"   // ValueType enum and helpers
-#include "string_ref.hpp"   // StringRef class
+#include "string_ref.hpp"  // StringRef class
+#include "value_type.hpp"  // ValueType enum and helpers
 
 namespace tundradb {
 

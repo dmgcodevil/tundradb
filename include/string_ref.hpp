@@ -125,39 +125,39 @@ class StringRef {
     other.pool_id_ = 0;
   }
 
-    /**
-     * Copy assignment - properly handles reference counting.
-     * 
-     * Example: ref4 = ref1
-     * - Decrements ref4's OLD value's ref_count
-     * - Increments ref1's value's ref_count
-     * - ref4 now points to the same string as ref1
-     */
-    StringRef& operator=(const StringRef& other) {
-        if (this != &other) {
-            // Step 1: Release THIS object's OLD value (before overwriting)
-            // Example: if ref4 pointed to "Goodbye", decrement "Goodbye" ref_count
-            // Note: release() also sets this->data_ = nullptr after decrementing
-            release();
-            
-            // Step 2: Copy OTHER object's values into THIS object
-            // Example: ref4 now gets ref1's pointer to "Hello"
-            data_ = other.data_;
-            length_ = other.length_;
-            pool_id_ = other.pool_id_;
-            
-            // Step 3: Increment the NEW value's ref_count
-            // Important: get_header() now uses the NEW data_ pointer (from step 2)
-            // Example: Increment "Hello" ref_count (not "Goodbye"!)
-            if (data_) {
-                auto* header = get_header();  // Uses NEW data_ pointer
-                if (header) {
-                    header->ref_count.fetch_add(1, std::memory_order_relaxed);
-                }
-            }
+  /**
+   * Copy assignment - properly handles reference counting.
+   *
+   * Example: ref4 = ref1
+   * - Decrements ref4's OLD value's ref_count
+   * - Increments ref1's value's ref_count
+   * - ref4 now points to the same string as ref1
+   */
+  StringRef& operator=(const StringRef& other) {
+    if (this != &other) {
+      // Step 1: Release THIS object's OLD value (before overwriting)
+      // Example: if ref4 pointed to "Goodbye", decrement "Goodbye" ref_count
+      // Note: release() also sets this->data_ = nullptr after decrementing
+      release();
+
+      // Step 2: Copy OTHER object's values into THIS object
+      // Example: ref4 now gets ref1's pointer to "Hello"
+      data_ = other.data_;
+      length_ = other.length_;
+      pool_id_ = other.pool_id_;
+
+      // Step 3: Increment the NEW value's ref_count
+      // Important: get_header() now uses the NEW data_ pointer (from step 2)
+      // Example: Increment "Hello" ref_count (not "Goodbye"!)
+      if (data_) {
+        auto* header = get_header();  // Uses NEW data_ pointer
+        if (header) {
+          header->ref_count.fetch_add(1, std::memory_order_relaxed);
         }
-        return *this;
+      }
     }
+    return *this;
+  }
 
   /**
    * Move assignment - transfers ownership.

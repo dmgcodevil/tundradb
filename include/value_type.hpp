@@ -8,7 +8,7 @@ namespace tundradb {
 
 /**
  * Enumeration of all supported value types in TundraDB.
- * 
+ *
  * This enum is the foundation of TundraDB's type system and is used throughout
  * the codebase for type checking, schema validation, and memory layout.
  */
@@ -30,10 +30,8 @@ enum class ValueType {
  * All string types (fixed and variable length) are stored using StringRef.
  */
 inline bool is_string_type(const ValueType type) {
-  return type == ValueType::STRING || 
-         type == ValueType::FIXED_STRING16 ||
-         type == ValueType::FIXED_STRING32 || 
-         type == ValueType::FIXED_STRING64;
+  return type == ValueType::STRING || type == ValueType::FIXED_STRING16 ||
+         type == ValueType::FIXED_STRING32 || type == ValueType::FIXED_STRING64;
 }
 
 /**
@@ -87,14 +85,15 @@ inline std::string to_string(const ValueType type) {
 
 /**
  * Get the storage size in bytes for a given ValueType.
- * For string types, this returns sizeof(StringRef) as strings are stored by reference.
+ * For string types, this returns sizeof(StringRef) as strings are stored by
+ * reference.
  */
 inline size_t get_type_size(const ValueType type) {
   // String types are stored as StringRef (16 bytes)
   if (is_string_type(type)) {
     return 16;  // sizeof(StringRef) = 16 bytes
   }
-  
+
   switch (type) {
     case ValueType::INT64:
       return 8;
@@ -119,7 +118,7 @@ inline size_t get_type_alignment(const ValueType type) {
   if (is_string_type(type)) {
     return 8;  // alignof(StringRef) = 8 bytes (pointer alignment)
   }
-  
+
   switch (type) {
     case ValueType::INT64:
       return 8;
@@ -139,4 +138,3 @@ inline size_t get_type_alignment(const ValueType type) {
 }  // namespace tundradb
 
 #endif  // VALUE_TYPE_HPP
-
