@@ -482,224 +482,110 @@ TEST_F(NodeTest, PerformanceTest) {
       << "Node access should be reasonably fast";
 }
 
-// Test string deduplication with same StringRef data pointers
-TEST_F(NodeTest, DISABLED_StringDeduplication) {
-  Logger::get_instance().debug("=== Starting StringDeduplication Test ===");
+// Test NodeArena marks strings for deletion when node field is updated
+TEST_F(NodeTest, NodeArenaMarkForDeletion) {
+  Logger::get_instance().debug(
+      "=== Starting NodeArenaMarkForDeletion Test ===");
 
-  // Create two nodes with required fields
-  std::unordered_map<std::string, Value> node_data1 = {
-      {"name", Value{std::string("temp_name_1")}},
+  // Create a node
+  std::unordered_map<std::string, Value> node_data = {
+      {"name", Value{std::string("Original Name")}},
       {"score", Value{static_cast<double>(85.5)}}};
-  auto node1_result = node_manager_->create_node("User", node_data1);
-  ASSERT_TRUE(node1_result.ok());
-  auto node1 = std::move(node1_result).ValueOrDie();
+  auto node_result = node_manager_->create_node("User", node_data);
+  ASSERT_TRUE(node_result.ok());
+  auto node = std::move(node_result).ValueOrDie();
 
-  std::unordered_map<std::string, Value> node_data2 = {
-      {"name", Value{std::string("temp_name_2")}},
-      {"score", Value{static_cast<double>(92.0)}}};
-  auto node2_result = node_manager_->create_node("User", node_data2);
-  ASSERT_TRUE(node2_result.ok());
-  auto node2 = std::move(node2_result).ValueOrDie();
-
-  // Set the same string value in both nodes
-  const std::string test_string = "shared_string_value";
-  ASSERT_TRUE(
-      node1
-          ->set_value("name", Value{StringRef{
-                                  test_string.c_str(),
-                                  static_cast<uint32_t>(test_string.length())}})
-          .ok());
-  ASSERT_TRUE(
-      node2
-          ->set_value("name", Value{StringRef{
-                                  test_string.c_str(),
-                                  static_cast<uint32_t>(test_string.length())}})
-          .ok());
-
-  // Get the StringRef values from both nodes
-  auto value1_result = node1->get_value("name");
+  // Get original string ref count (should be > 0)
+  auto value1_result = node->get_value("name");
   ASSERT_TRUE(value1_result.ok());
   auto value1 = value1_result.ValueOrDie();
+  StringRef original_ref = value1.as_string_ref();
+  int32_t original_ref_count = original_ref.get_ref_count();
 
-  auto value2_result = node2->get_value("name");
+  Logger::get_instance().debug("Original ref count: {}", original_ref_count);
+  EXPECT_GT(original_ref_count, 0);
+  EXPECT_FALSE(original_ref.is_marked_for_deletion());
+
+  // Update the name field - this should mark the old string for deletion
+  auto set_result = node->set_value("name", Value{std::string("Updated Name")});
+  ASSERT_TRUE(set_result.ok());
+
+  // The original StringRef should now be marked for deletion
+  EXPECT_TRUE(original_ref.is_marked_for_deletion());
+
+  // But still valid (ref count > 0 because we hold a copy)
+  EXPECT_EQ(original_ref.view(), "Original Name");
+
+  // Get the new value
+  auto value2_result = node->get_value("name");
   ASSERT_TRUE(value2_result.ok());
-  auto value2 = value2_result.ValueOrDie();
-
-  // Verify both values contain the same string content
-  ASSERT_EQ(value1.to_string(), test_string);
-  ASSERT_EQ(value2.to_string(), test_string);
-
-  // Extract StringRef from Value objects
-  StringRef ref1, ref2;
-  if (value1.type() == ValueType::STRING) {
-    ref1 = value1.as_string_ref();
-  }
-  if (value2.type() == ValueType::STRING) {
-    ref2 = value2.as_string_ref();
-  }
-
-  // Verify that both StringRefs point to the same memory address
-  // (deduplication)
-  Logger::get_instance().debug("StringRef1 data pointer: {}",
-                               static_cast<const void*>(ref1.data));
-  Logger::get_instance().debug("StringRef2 data pointer: {}",
-                               static_cast<const void*>(ref2.data));
-
-  EXPECT_EQ(ref1.data, ref2.data) << "String deduplication should make both "
-                                     "StringRefs point to the same memory";
-  EXPECT_EQ(ref1.length, ref2.length);
-  EXPECT_EQ(ref1.arena_id, ref2.arena_id);
-
-  Logger::get_instance().debug("=== Destroying first node ===");
-  // Destroy the first node (this should decrement reference count but not
-  // deallocate)
-  node1.reset();
+  EXPECT_EQ(value2_result.ValueOrDie().to_string(), "Updated Name");
 
   Logger::get_instance().debug(
-      "=== Reading from second node after first node destruction ===");
-  // The second node should still be able to read the string value
-  auto value2_after_result = node2->get_value("name");
-  ASSERT_TRUE(value2_after_result.ok());
-  auto value2_after = value2_after_result.ValueOrDie();
-  ASSERT_EQ(value2_after.to_string(), test_string);
-
-  Logger::get_instance().debug("=== Destroying second node ===");
-  // Destroy the second node (this should deallocate the string)
-  node2.reset();
-
-  Logger::get_instance().debug("=== StringDeduplication Test Complete ===");
+      "=== NodeArenaMarkForDeletion Test Complete ===");
 }
 
-// Test StringRef pointer reuse after deallocation
-TEST_F(NodeTest, StringRefPointerReuse) {
-  Logger::get_instance().debug("=== Starting StringRefPointerReuse Test ===");
+// Test that NodeArena properly stores and retrieves strings
+TEST_F(NodeTest, NodeArenaStringStorage) {
+  Logger::get_instance().debug("=== Starting NodeArenaStringStorage Test ===");
 
-  const std::string test_string = "reusable_string";
-  const char* original_data_ptr = nullptr;
+  const std::string test_string = "Test String Value";
 
-  {
-    // Create a node with required fields
-    std::unordered_map<std::string, Value> node_data = {
-        {"name", Value{std::string("temp_name")}},
-        {"score", Value{static_cast<double>(88.0)}}};
-    auto node_result = node_manager_->create_node("User", node_data);
-    ASSERT_TRUE(node_result.ok());
-    auto node = std::move(node_result).ValueOrDie();
+  // Create a node
+  std::unordered_map<std::string, Value> node_data = {
+      {"name", Value{test_string}},
+      {"score", Value{static_cast<double>(88.0)}}};
+  auto node_result = node_manager_->create_node("User", node_data);
+  ASSERT_TRUE(node_result.ok());
+  auto node = std::move(node_result).ValueOrDie();
 
-    ASSERT_TRUE(
-        node->set_value(
-                "name",
-                Value{StringRef{test_string.c_str(),
-                                static_cast<uint32_t>(test_string.length())}})
-            .ok());
+  // Get the string value back
+  auto value_result = node->get_value("name");
+  ASSERT_TRUE(value_result.ok());
+  auto value = value_result.ValueOrDie();
 
-    // Get the StringRef and remember the data pointer
-    auto value_result = node->get_value("name");
-    ASSERT_TRUE(value_result.ok());
-    auto value = value_result.ValueOrDie();
+  // Verify the string content is correct
+  EXPECT_EQ(value.to_string(), test_string);
 
-    if (value.type() == ValueType::STRING) {
-      StringRef ref = value.as_string_ref();
-      original_data_ptr = ref.data;
-      Logger::get_instance().debug("Original string data pointer: {}",
-                                   static_cast<const void*>(original_data_ptr));
-    }
+  // Verify it's stored as StringRef
+  EXPECT_TRUE(value.holds_string_ref());
 
-    ASSERT_NE(original_data_ptr, nullptr);
-  }
-  // Node goes out of scope here, should deallocate the string
+  StringRef ref = value.as_string_ref();
+  EXPECT_FALSE(ref.is_null());
+  EXPECT_EQ(ref.view(), test_string);
+  EXPECT_GT(ref.get_ref_count(), 0);
 
-  Logger::get_instance().debug("=== Creating new node with same string ===");
-
-  {
-    // Create a new node with required fields and set the same string value
-    std::unordered_map<std::string, Value> node_data = {
-        {"name", Value{std::string("temp_name_2")}},
-        {"score", Value{static_cast<double>(77.5)}}};
-    auto node_result = node_manager_->create_node("User", node_data);
-    ASSERT_TRUE(node_result.ok());
-    auto node = std::move(node_result).ValueOrDie();
-
-    ASSERT_TRUE(
-        node->set_value(
-                "name",
-                Value{StringRef{test_string.c_str(),
-                                static_cast<uint32_t>(test_string.length())}})
-            .ok());
-
-    // Get the StringRef and check if it reuses the same memory address
-    auto value_result = node->get_value("name");
-    ASSERT_TRUE(value_result.ok());
-    auto value = value_result.ValueOrDie();
-
-    if (value.type() == ValueType::STRING) {
-      StringRef ref = value.as_string_ref();
-      Logger::get_instance().debug("New string data pointer: {}",
-                                   static_cast<const void*>(ref.data));
-
-      // In a FreeListArena, the same memory address might be reused
-      // This is not guaranteed but often happens with small allocations
-      Logger::get_instance().debug(
-          "Memory address reuse: {}",
-          (ref.data == original_data_ptr) ? "YES" : "NO");
-
-      // Verify the string content is correct regardless of memory reuse
-      ASSERT_EQ(value.to_string(), test_string);
-    }
-  }
-
-  Logger::get_instance().debug("=== StringRefPointerReuse Test Complete ===");
+  Logger::get_instance().debug("=== NodeArenaStringStorage Test Complete ===");
 }
 
-// Test multiple string deduplication with reference counting
-TEST_F(NodeTest, DISABLED_MultipleStringDeduplication) {
+// Test that multiple nodes can safely access the same string value
+TEST_F(NodeTest, MultipleNodesSharedString) {
   Logger::get_instance().debug(
-      "=== Starting MultipleStringDeduplication Test ===");
+      "=== Starting MultipleNodesSharedString Test ===");
 
-  const std::string shared_string = "multiply_shared";
+  const std::string shared_string = "Shared Value";
   std::vector<std::shared_ptr<Node>> nodes;
-  std::vector<const char*> data_pointers;
 
   // Create 5 nodes with the same string value
   for (int i = 0; i < 5; i++) {
     std::unordered_map<std::string, Value> node_data = {
-        {"name", Value{std::string("temp_name_") + std::to_string(i)}},
+        {"name", Value{shared_string}},
         {"score", Value{static_cast<double>(80.0 + i)}}};
     auto node_result = node_manager_->create_node("User", node_data);
     ASSERT_TRUE(node_result.ok());
-    auto node = std::move(node_result).ValueOrDie();
-
-    ASSERT_TRUE(
-        node->set_value(
-                "name",
-                Value{StringRef{shared_string.c_str(),
-                                static_cast<uint32_t>(shared_string.length())}})
-            .ok());
-
-    // Get the data pointer
-    auto value_result = node->get_value("name");
-    ASSERT_TRUE(value_result.ok());
-    auto value = value_result.ValueOrDie();
-
-    if (value.type() == ValueType::STRING) {
-      StringRef ref = value.as_string_ref();
-      data_pointers.push_back(ref.data);
-      Logger::get_instance().debug("Node {} string data pointer: {}", i,
-                                   static_cast<const void*>(ref.data));
-    }
-
-    nodes.push_back(std::move(node));
+    nodes.push_back(std::move(node_result).ValueOrDie());
   }
 
-  // All nodes should point to the same string data
-  for (size_t i = 1; i < data_pointers.size(); i++) {
-    EXPECT_EQ(data_pointers[0], data_pointers[i])
-        << "All nodes should share the same string data pointer";
+  // Verify all nodes can read the string
+  for (int i = 0; i < 5; i++) {
+    auto value_result = nodes[i]->get_value("name");
+    ASSERT_TRUE(value_result.ok());
+    EXPECT_EQ(value_result.ValueOrDie().to_string(), shared_string);
   }
 
   Logger::get_instance().debug("=== Destroying nodes one by one ===");
 
-  // Destroy nodes one by one, string should remain alive until the last one
+  // Destroy nodes one by one - remaining nodes should still work
   for (int i = 0; i < 4; i++) {
     Logger::get_instance().debug("Destroying node {}", i);
     nodes[i].reset();
@@ -708,15 +594,13 @@ TEST_F(NodeTest, DISABLED_MultipleStringDeduplication) {
     for (int j = i + 1; j < 5; j++) {
       auto value_result = nodes[j]->get_value("name");
       ASSERT_TRUE(value_result.ok());
-      auto value = value_result.ValueOrDie();
-      ASSERT_EQ(value.to_string(), shared_string);
+      EXPECT_EQ(value_result.ValueOrDie().to_string(), shared_string);
     }
   }
 
   Logger::get_instance().debug("=== Destroying final node ===");
-  // Destroy the last node (should finally deallocate the string)
   nodes[4].reset();
 
   Logger::get_instance().debug(
-      "=== MultipleStringDeduplication Test Complete ===");
+      "=== MultipleNodesSharedString Test Complete ===");
 }

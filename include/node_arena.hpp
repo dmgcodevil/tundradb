@@ -117,7 +117,7 @@ class NodeArena {
 
             // Deallocate the string if it's not null
             if (!str_ref->is_null()) {
-              string_arena_->deallocate_string(*str_ref);
+              string_arena_->mark_for_deletion(*str_ref);
             }
           }
         }
@@ -190,7 +190,7 @@ class NodeArena {
           // Logger::get_instance().debug("deallocate old string: {}",
           //                              old_str_ref.to_string());
           if (!old_str_ref.is_null()) {
-            string_arena_->deallocate_string(old_str_ref);
+            string_arena_->mark_for_deletion(old_str_ref);
           }
         } catch (...) {
           // Old value wasn't a StringRef, ignore
