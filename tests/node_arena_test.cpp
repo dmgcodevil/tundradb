@@ -13,27 +13,23 @@
 //
 // class NodeArenaTest : public ::testing::Test {
 //  protected:
-//   void SetUp() override {
-//     registry_ = std::make_unique<LayoutRegistry>();
+// void SetUp() override {
+//   registry_ = std::make_unique<LayoutRegistry>();
 //
-//     // Create a comprehensive test schema with all ValueTypes
-//     auto layout = std::make_unique<SchemaLayout>("TestNode");
-//     layout->add_field("id", ValueType::INT64);
-//     layout->add_field("count", ValueType::INT32);
-//     layout->add_field("score", ValueType::DOUBLE);
-//     layout->add_field("active", ValueType::BOOL);
-//     layout->add_field("description", ValueType::STRING);  // Variable length
-//     layout->add_field("short_name", ValueType::FIXED_STRING16);   // ≤16
-//     chars layout->add_field("medium_name", ValueType::FIXED_STRING32);  //
-//     ≤32 chars layout->add_field("long_name", ValueType::FIXED_STRING64); //
-//     ≤64 chars layout->finalize();
+//   // Create a comprehensive test schema with all ValueTypes
+//   auto layout = std::make_unique<SchemaLayout>("TestNode");
+//   layout->add_field("id", ValueType::INT64);
+//   layout->add_field("count", ValueType::INT32);
+//   layout->add_field("score", ValueType::DOUBLE);
+//   layout->add_field("active", ValueType::BOOL);
+//   layout->add_field("description", ValueType::STRING);  // Variable length
 //
-//     total_node_size_ = layout->get_total_size_with_bitset();
-//     registry_->register_layout(std::move(layout));
+//   total_node_size_ = layout->get_total_size_with_bitset();
+//   registry_->register_layout(std::move(layout));
 //
-//     // Create NodeArena with FreeListArena for individual deallocation
-//     node_arena_ = node_arena_factory::create_free_list_arena(registry_);
-//   }
+//   // Create NodeArena with FreeListArena for individual deallocation
+//   node_arena_ = node_arena_factory::create_free_list_arena(registry_);
+// }
 //
 //   void TearDown() override {
 //     node_arena_.reset();

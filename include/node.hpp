@@ -206,10 +206,10 @@ class NodeManager {
         }
       }
 
-      auto node =
-          std::make_shared<Node>(id, schema_name, EMPTY_DATA,
-                                 std::make_unique<NodeHandle>(node_handle),
-                                 node_arena_, schema_, layout_);
+      auto node = std::make_shared<Node>(
+          id, schema_name, EMPTY_DATA,
+          std::make_unique<NodeHandle>(std::move(node_handle)), node_arena_,
+          schema_, layout_);
       nodes[id] = node;
       return node;
     } else {
