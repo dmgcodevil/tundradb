@@ -1,9 +1,6 @@
 #ifndef MEMORY_ARENA_HPP
 #define MEMORY_ARENA_HPP
 
-#include <cassert>
-#include <cstddef>
-#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -34,34 +31,40 @@ class MemoryArena : public MemArena {
   MemoryArena& operator=(MemoryArena&&) = default;
 
   /**
-   * Allocate aligned memory from the arena
+   * Allocate aligned memory from the arena.
+   *
+   * Ensures returned pointer is aligned to specified boundary (power of 2).
+   * May skip bytes (padding) to achieve alignment.
+   *
+   * Example:
+   *   allocate(1, 1);  // char at 0x1000
+   *   allocate(8, 8);  // int64_t at 0x1008 (skips 0x1001-0x1007 for alignment)
+   *
    * @param size Number of bytes to allocate
-   * @param alignment Memory alignment requirement (default: 8 bytes)
-   * @return Pointer to allocated memory, or nullptr if allocation fails
+   * @param alignment Memory alignment (1, 2, 4, 8, 16...) - must be power of 2
+   * @return Pointer to aligned memory, or nullptr if allocation fails
    */
   void* allocate(size_t size, size_t alignment = 8) override {
-    // Calculate aligned offset within current chunk
+    // Calculate aligned offset: rounds current_offset_ up to next multiple of
+    // alignment Example: current_offset_=5, alignment=8 → aligned_offset=8
+    // (skips 3 bytes padding)
     size_t aligned_offset =
         (current_chunk_ != nullptr)
             ? calculate_aligned_offset(current_chunk_, current_offset_,
                                        alignment)
-            : current_offset_;  // Will trigger new chunk allocation below
+            : current_offset_;
 
-    // Check if we have enough space in the current chunk (or if we have no
-    // chunk at all)
+    // Check if enough space in current chunk
     if (current_chunk_ == nullptr || aligned_offset + size > chunk_size_) {
-      // Need a new chunk - make it at least as large as the requested size
       size_t new_chunk_size =
           std::max(chunk_size_, size) + get_alignment_overhead(alignment);
-
       allocate_new_chunk(new_chunk_size);
-
-      // Recalculate aligned offset for the new chunk
       aligned_offset = calculate_aligned_offset(current_chunk_, 0, alignment);
     }
 
+    // Return aligned pointer: base_address + aligned_offset
     void* result = current_chunk_ + aligned_offset;
-    current_offset_ = aligned_offset + size;
+    current_offset_ = aligned_offset + size;  // Update for next allocation
     total_allocated_ += size;
 
     return result;
