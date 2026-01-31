@@ -224,7 +224,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
             return scalar_result.status();
           }
 
-          auto scalar = scalar_result.ValueOrDie();
+          const auto& scalar = scalar_result.ValueOrDie();
           auto status = builders[i]->AppendScalar(*scalar);
           if (!status.ok()) {
             log_error("Failed to append scalar for field '{}': {}", field_name,
@@ -279,15 +279,16 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
 }
 
 arrow::Result<std::shared_ptr<arrow::Table>> filter(
-    std::shared_ptr<arrow::Table> table, const WhereExpr& condition,
-    bool strip_var) {
+    const std::shared_ptr<arrow::Table>& table, const WhereExpr& condition,
+    const bool strip_var) {
   IF_DEBUG_ENABLED {
     log_debug("Filtering table with WhereCondition: {}", condition.toString());
   }
 
   try {
     // Convert WhereCondition to Arrow compute expression
-    auto filter_expr = where_condition_to_expression(condition, strip_var);
+    const auto filter_expr =
+        where_condition_to_expression(condition, strip_var);
 
     IF_DEBUG_ENABLED {
       log_debug("Creating in-memory dataset from table with {} rows",
@@ -303,7 +304,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> filter(
                 scan_builder_result.status().ToString());
       return scan_builder_result.status();
     }
-    auto scan_builder = scan_builder_result.ValueOrDie();
+    const auto& scan_builder = scan_builder_result.ValueOrDie();
 
     IF_DEBUG_ENABLED {
       log_debug("Applying compound filter to scanner builder");
@@ -321,7 +322,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> filter(
                 scanner_result.status().ToString());
       return scanner_result.status();
     }
-    auto scanner = scanner_result.ValueOrDie();
+    const auto& scanner = scanner_result.ValueOrDie();
 
     IF_DEBUG_ENABLED { log_debug("Executing scan to table"); }
     auto table_result = scanner->ToTable();
@@ -400,7 +401,7 @@ std::set<int64_t> get_roots(
     stack.pop_back();
 
     if (connections.contains(curr)) {
-      for (auto const next : connections.at(curr)) {
+      for (auto const& next : connections.at(curr)) {
         count[next.target_id]++;
         stack.push_back(next.target_id);
       }
@@ -523,7 +524,7 @@ struct QueryState {
     if (!schema_res.ok()) {
       return schema_res.status();
     }
-    const auto schema = schema_res.ValueOrDie();
+    const auto& schema = schema_res.ValueOrDie();
     std::vector<std::string> names;
     std::vector<int> indices;
     names.reserve(schema->num_fields());
@@ -553,7 +554,7 @@ struct QueryState {
     ids[schema_ref.value()].erase(node_id);
   }
 
-  arrow::Result<bool> update_table(std::shared_ptr<arrow::Table> table,
+  arrow::Result<bool> update_table(const std::shared_ptr<arrow::Table>& table,
                                    const SchemaRef& schema_ref) {
     this->tables[schema_ref.value()] = table;
     auto ids_result = get_ids_from_table(table);
@@ -795,12 +796,12 @@ struct Row {
     const size_t n = std::min(fields.size(), field_indices.size());
     for (size_t i = 0; i < n; ++i) {
       const auto& field = fields[i];
-      int field_id = field_indices[i];
+      const int field_id = field_indices[i];
       this->set_cell(field_id, node->get_value_ref(field));
     }
   }
 
-  bool start_with(const std::vector<PathSegment>& prefix) const {
+  [[nodiscard]] bool start_with(const std::vector<PathSegment>& prefix) const {
     return is_prefix(prefix, this->path);
   }
 
@@ -1223,7 +1224,9 @@ struct RowNode {
     return os << node.toString();
   }
 
-  void print(bool recursive = true) const { log_debug(toString(recursive)); }
+  void print(const bool recursive = true) const {
+    log_debug(toString(recursive));
+  }
 };
 
 struct QueueItem {
@@ -1237,7 +1240,7 @@ struct QueueItem {
 
   QueueItem(int64_t id, const SchemaRef& schema, int l, std::shared_ptr<Row> r)
       : node_id(id), schema_ref(schema), level(l), row(std::move(r)) {
-    path.push_back(PathSegment{schema.tag(), schema.value(), id});
+    path.emplace_back(schema.tag(), schema.value(), id);
   }
 };
 
@@ -1354,8 +1357,8 @@ populate_rows_bfs(int64_t node_id, const SchemaRef& start_schema,
                           item.level + 1, item.row);
 
             next.path = item.path;
-            next.path.push_back(PathSegment{connections[0].target.value(),
-                                            connections[0].target_id});
+            next.path.emplace_back(connections[0].target.value(),
+                                   connections[0].target_id);
             IF_DEBUG_ENABLED {
               log_debug("continue the path: {}", join_schema_path(next.path));
             }
@@ -1718,9 +1721,6 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_rows(
                 static_cast<arrow::BooleanBuilder*>(builders[i].get())
                     ->Append(value_ref.as_bool());
             break;
-          case ValueType::NA:
-            append_status = builders[i]->AppendNull();
-            break;
           default:
             append_status = builders[i]->AppendNull();
             break;
@@ -1740,7 +1740,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_rows(
   std::vector<std::shared_ptr<arrow::Array>> arrays;
   arrays.reserve(builders.size());
 
-  for (auto& builder : builders) {
+  for (const auto& builder : builders) {
     std::shared_ptr<arrow::Array> array;
     ARROW_RETURN_NOT_OK(builder->Finish(&array));
     arrays.push_back(array);
@@ -1970,11 +1970,6 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
       log_error("schema '{}' doesn't exist", source_schema);
       return arrow::Status::KeyError("schema doesn't exit: {}", source_schema);
     }
-    auto table_res = this->get_table(source_schema);
-    if (!table_res.ok()) {
-      log_error("failed to get table 'from' {}", query.from().toString());
-      return table_res.status();
-    }
     ARROW_ASSIGN_OR_RAISE(auto source_table, this->get_table(source_schema));
     ARROW_RETURN_NOT_OK(query_state.update_table(source_table, query.from()));
     if (auto res = query_state.compute_fully_qualified_names(query.from(),
@@ -2137,7 +2132,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           }
 
           bool source_had_match = false;
-          for (auto edge : outgoing_edges) {
+          for (const auto& edge : outgoing_edges) {
             auto target_id = edge->get_target_id();
             if (query_state.ids.contains(traverse->target().value()) &&
                 !query_state.ids.at(traverse->target().value())
@@ -2146,7 +2141,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
             }
             auto node_result = node_manager_->get_node(target_id);
             if (node_result.ok()) {
-              auto target_node = node_result.ValueOrDie();
+              const auto target_node = node_result.ValueOrDie();
               if (target_node->schema_name == target_schema) {
                 // Then apply all WHERE clauses with AND logic
                 bool passes_all_filters = true;
