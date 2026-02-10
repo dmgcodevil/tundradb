@@ -138,6 +138,10 @@ add_executable(string_ref_concurrent_test
 add_executable(node_version_test
         node_version_test.cpp)
 
+# Node view temporal query test
+add_executable(node_view_test
+        node_view_test.cpp)
+
 # Link against Arrow and GTest
 target_link_libraries(sharding_test
     PRIVATE
@@ -339,6 +343,15 @@ target_link_libraries(node_version_test
         LLVMSupport LLVMCore
 )
 
+target_link_libraries(node_view_test
+        PRIVATE
+        core
+        GTest::GTest
+        GTest::Main
+        spdlog::spdlog
+        LLVMSupport LLVMCore
+)
+
 # Apply sanitizer flags to all test targets if enabled
 if(ENABLE_SANITIZERS)
     target_compile_options(sharding_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
@@ -373,6 +386,9 @@ if(ENABLE_SANITIZERS)
     
     target_compile_options(node_version_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
     target_link_options(node_version_test PRIVATE ${SANITIZER_LINK_FLAGS})
+    
+    target_compile_options(node_view_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
+    target_link_options(node_view_test PRIVATE ${SANITIZER_LINK_FLAGS})
 endif()
 
 # Simple test registration
@@ -392,6 +408,7 @@ add_test(NAME NodeArenaTest COMMAND node_arena_test)
 add_test(NAME NodeTest COMMAND node_test)
 add_test(NAME StringRefConcurrentTest COMMAND string_ref_concurrent_test)
 add_test(NAME NodeVersionTest COMMAND node_version_test)
+add_test(NAME NodeViewTest COMMAND node_view_test)
 
 # Set TSan options for tests after they've been registered
 if(ENABLE_SANITIZERS AND SANITIZER_TYPE STREQUAL "thread" AND EXISTS ${TSAN_SUPPRESSIONS_FILE})

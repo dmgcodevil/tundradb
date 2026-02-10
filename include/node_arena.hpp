@@ -26,12 +26,23 @@ struct NodeHandle;
  *
  * Stores only changed fields; forms a linked list via prev pointer.
  * All versions share the same base node data.
+ *
+ * Bitemporal support:
+ * - valid_from/valid_to: VALIDTIME (when the fact was true in the domain)
+ * - tx_from/tx_to: TXNTIME (when the database knew about the fact)
  */
 struct VersionInfo {
-  // Temporal validity interval: [valid_from, valid_to)
+  // Version identifier
   uint64_t version_id = 0;
+
+  // VALIDTIME: domain validity interval [valid_from, valid_to)
   uint64_t valid_from = 0;
   uint64_t valid_to = std::numeric_limits<uint64_t>::max();
+
+  // TXNTIME: system knowledge interval [tx_from, tx_to)
+  // When the database recorded/believed this version
+  uint64_t tx_from = 0;
+  uint64_t tx_to = std::numeric_limits<uint64_t>::max();
 
   // Linked list to previous version
   VersionInfo* prev = nullptr;
@@ -45,14 +56,38 @@ struct VersionInfo {
 
   VersionInfo() = default;
 
+  // Constructor: initializes both valid and tx times to the same value
   VersionInfo(uint64_t vid, uint64_t ts_from, VersionInfo* prev_ver = nullptr)
-      : version_id(vid), valid_from(ts_from), prev(prev_ver) {}
+      : version_id(vid),
+        valid_from(ts_from),
+        tx_from(ts_from),  // Initially tx_from = valid_from
+        prev(prev_ver) {}
 
+  // Check if valid at a specific VALIDTIME
   bool is_valid_at(uint64_t ts) const {
     return valid_from <= ts && ts < valid_to;
   }
 
-  // O(N)
+  // Check if visible at a bitemporal snapshot (valid_time, tx_time)
+  bool is_visible_at(uint64_t valid_time, uint64_t tx_time) const {
+    return (valid_from <= valid_time && valid_time < valid_to) &&
+           (tx_from <= tx_time && tx_time < tx_to);
+  }
+
+  // Find version visible at bitemporal snapshot
+  const VersionInfo* find_version_at_snapshot(uint64_t valid_time,
+                                              uint64_t tx_time) const {
+    const VersionInfo* current = this;
+    while (current != nullptr) {
+      if (current->is_visible_at(valid_time, tx_time)) {
+        return current;
+      }
+      current = current->prev;
+    }
+    return nullptr;
+  }
+
+  // Legacy: find version at VALIDTIME only (ignores TXNTIME)
   const VersionInfo* find_version_at_time(uint64_t ts) const {
     const VersionInfo* current = this;
     while (current != nullptr) {
@@ -655,6 +690,65 @@ class NodeArena {
     return version_counter_.load(std::memory_order_relaxed);
   }
 
+  /**
+   * Get the field value pointer starting from a specific version.
+   * Used by NodeView for temporal queries.
+   *
+   * @param handle NodeHandle (for accessing base node if needed)
+   * @param version Starting version (pre-resolved by TemporalContext)
+   * @param layout Schema layout
+   * @param field Field to read
+   * @return Pointer to field data or error if not found
+   */
+  static const char* get_field_value_ptr_from_version(
+      const NodeHandle& handle, const VersionInfo* version,
+      const std::shared_ptr<SchemaLayout>& layout,
+      const std::shared_ptr<Field>& field) {
+    const FieldLayout* field_layout = layout->get_field_layout(field);
+    if (!field_layout) {
+      return nullptr;
+    }
+
+    // Try to find in version chain first
+    const char* field_ptr =
+        get_field_ptr_from_version_chain(version, field_layout->index);
+
+    if (field_ptr != nullptr) {
+      return field_ptr;
+    }
+
+    // Not in version chain, read from base node
+    return layout->get_field_value_ptr(static_cast<const char*>(handle.ptr),
+                                       field_layout->index);
+  }
+
+  /**
+   * Get field value starting from a specific version.
+   * Used by NodeView for temporal queries.
+   */
+  static arrow::Result<Value> get_field_value_from_version(
+      const NodeHandle& handle, const VersionInfo* version,
+      const std::shared_ptr<SchemaLayout>& layout,
+      const std::shared_ptr<Field>& field) {
+    const FieldLayout* field_layout = layout->get_field_layout(field);
+    if (!field_layout) {
+      return arrow::Status::KeyError("Field not found in layout");
+    }
+
+    // Try to find in version chain first
+    const char* field_ptr =
+        get_field_ptr_from_version_chain(version, field_layout->index);
+
+    if (field_ptr != nullptr) {
+      // Found in version chain, read directly from the field pointer
+      return layout->get_field_value_from_ptr(field_ptr, *field_layout);
+    }
+
+    // Not in version chain, read from base node
+    return layout->get_field_value(static_cast<const char*>(handle.ptr),
+                                   *field_layout);
+  }
+
  private:
   static uint64_t get_current_timestamp_ns() {
     auto now = std::chrono::system_clock::now();
@@ -699,8 +793,7 @@ class NodeArena {
 
   /** Traverse the version chain to find field pointer. */
   static const char* get_field_ptr_from_version_chain(
-      const VersionInfo* version_info, uint16_t field_idx,
-      const SchemaLayout* layout) {
+      const VersionInfo* version_info, uint16_t field_idx) {
     const VersionInfo* current = version_info;
     while (current != nullptr) {
       // Check if this version has an override for this field
@@ -711,7 +804,7 @@ class NodeArena {
       current = current->prev;
     }
 
-    // Not found in any version, would need to read from base node
+    // not found in any version, would need to read from the base node
     // (caller should handle this case)
     return nullptr;
   }

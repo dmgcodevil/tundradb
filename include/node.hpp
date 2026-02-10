@@ -8,7 +8,9 @@
 
 #include "logger.hpp"
 #include "node_arena.hpp"
+#include "node_view.hpp"
 #include "schema.hpp"
+#include "temporal_context.hpp"
 #include "types.hpp"
 
 namespace tundradb {
@@ -84,6 +86,9 @@ class Node {
 
   [[nodiscard]] std::shared_ptr<Schema> get_schema() const { return schema_; }
 
+  // Get node handle (for testing and internal use)
+  [[nodiscard]] NodeHandle *get_handle() const { return handle_.get(); }
+
   [[deprecated]]
   arrow::Result<bool> update(const std::string &field, Value value,
                              UpdateType update_type) {
@@ -118,6 +123,29 @@ class Node {
   arrow::Result<bool> set_value(const std::shared_ptr<Field> &field,
                                 const Value &value) {
     return update(field, value, SET);
+  }
+
+  /**
+   * Create a temporal view of this node.
+   *
+   * @param ctx TemporalContext with snapshot (valid_time, tx_time).
+   *            If nullptr, returns view of current version (no time-travel).
+   * @return NodeView that resolves version once and caches it.
+   *
+   * Usage:
+   *   TemporalContext ctx(TemporalSnapshot::as_of_valid(timestamp));
+   *   auto view = node.view(&ctx);
+   *   auto age = view.get_value_ptr(age_field);
+   */
+  NodeView view(TemporalContext *ctx = nullptr) {
+    if (!ctx) {
+      // No temporal context or no handle -> use current version
+      return {this, handle_->version_info_, arena_.get(), layout_};
+    }
+
+    // Resolve version using TemporalContext
+    VersionInfo *resolved = ctx->resolve_version(id, *handle_);
+    return {this, resolved, arena_.get(), layout_};
   }
 };
 
@@ -279,6 +307,59 @@ class NodeManager {
     layout_ = create_or_get_layout(schema_name);
   }
 };
+
+// ============================================================================
+// NodeView inline implementations (after Node is fully defined)
+// ============================================================================
+
+inline arrow::Result<const char *> NodeView::get_value_ptr(
+    const std::shared_ptr<Field> &field) const {
+  assert(arena_ != nullptr && "NodeView created with null arena");
+  assert(node_ != nullptr && "NodeView created with null node");
+
+  if (resolved_version_ == nullptr) {
+    // Non-versioned node -> delegate to Node
+    return node_->get_value_ptr(field);
+  }
+
+  const NodeHandle *handle = node_->get_handle();
+  assert(handle != nullptr && "Versioned node must have a handle");
+
+  return arena_->get_field_value_ptr_from_version(*handle, resolved_version_,
+                                                  layout_, field);
+}
+
+inline arrow::Result<Value> NodeView::get_value(
+    const std::shared_ptr<Field> &field) const {
+  assert(arena_ != nullptr && "NodeView created with null arena");
+  assert(node_ != nullptr && "NodeView created with null node");
+
+  if (resolved_version_ == nullptr) {
+    // Non-versioned node -> delegate to Node
+    return node_->get_value(field);
+  }
+
+  const NodeHandle *handle = node_->get_handle();
+  assert(handle != nullptr && "Versioned node must have a handle");
+
+  return arena_->get_field_value_from_version(*handle, resolved_version_,
+                                              layout_, field);
+}
+
+inline bool NodeView::is_visible() const {
+  assert(arena_ != nullptr && "NodeView created with null arena");
+  assert(node_ != nullptr && "NodeView created with null node");
+  const NodeHandle *handle = node_->get_handle();
+  assert(handle != nullptr && "Node must have a handle");
+
+  // Non-versioned nodes are always visible
+  if (!handle->is_versioned()) {
+    return true;
+  }
+
+  // For versioned nodes, check if we found a visible version at the snapshot
+  return resolved_version_ != nullptr;
+}
 
 }  // namespace tundradb
 
