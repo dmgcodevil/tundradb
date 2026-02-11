@@ -10,6 +10,7 @@
 #include <memory>
 #include <string>
 
+#include "clock.hpp"
 #include "free_list_arena.hpp"
 #include "mem_arena.hpp"
 #include "memory_arena.hpp"
@@ -751,10 +752,7 @@ class NodeArena {
 
  private:
   static uint64_t get_current_timestamp_ns() {
-    auto now = std::chrono::system_clock::now();
-    auto duration = now.time_since_epoch();
-    return std::chrono::duration_cast<std::chrono::nanoseconds>(duration)
-        .count();
+    return Clock::instance().now_nanos();
   }
 
   /** Write field directly to node memory (handles strings). */
