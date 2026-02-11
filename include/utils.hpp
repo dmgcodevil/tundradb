@@ -114,7 +114,8 @@ static arrow::Result<llvm::DenseSet<int64_t>> get_ids_from_table(
 
 static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
     const std::shared_ptr<Schema>& schema,
-    const std::vector<std::shared_ptr<Node>>& nodes, size_t chunk_size) {
+    const std::vector<std::shared_ptr<Node>>& nodes, size_t chunk_size,
+    TemporalContext* temporal_context) {
   auto arrow_schema = schema->arrow();
   if (nodes.empty()) {
     std::vector<std::shared_ptr<arrow::ChunkedArray>> empty_columns;
@@ -158,9 +159,12 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
   size_t nodes_in_current_chunk = 0;
 
   for (const auto& node : nodes) {
+    // Use NodeView to read from version chain (supports temporal queries)
+    auto view = node->view(temporal_context);
+
     for (int i = 0; i < schema->num_fields(); i++) {
       const auto& field = schema->field(i);
-      auto field_result = node->get_value_ptr(field);
+      auto field_result = view.get_value_ptr(field);  // ✅ Use NodeView!
       if (!field_result.ok()) {
         ARROW_RETURN_NOT_OK(builders[i]->AppendNull());
       } else {

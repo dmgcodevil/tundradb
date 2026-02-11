@@ -4,6 +4,7 @@
 
 #include "../include/clock.hpp"
 #include "../include/core.hpp"
+#include "../include/logger.hpp"
 #include "../include/node_arena.hpp"
 #include "../include/query.hpp"
 #include "../include/temporal_context.hpp"
@@ -25,15 +26,18 @@ class TemporalQueryTest : public ::testing::Test {
   void SetUp() override {
     // Install mock clock for deterministic testing
     Clock::set_instance(&mock_clock_);
+    // Logger::get_instance().set_level(LogLevel::DEBUG);
     // Create unique test directory
     test_db_path_ = "temporal_test_db_" + std::to_string(now_millis());
 
-    // Create database with persistence
-    auto config = make_config()
-                      .with_db_path(test_db_path_)
-                      .with_shard_capacity(1000)
-                      .with_chunk_size(1000)
-                      .build();
+    // Create database with persistence and versioning enabled
+    auto config =
+        make_config()
+            .with_db_path(test_db_path_)
+            .with_shard_capacity(1000)
+            .with_chunk_size(1000)
+            .with_versioning_enabled(true)  // Enable temporal versioning
+            .build();
 
     db_ = std::make_shared<Database>(config);
 
@@ -125,6 +129,55 @@ TEST_F(TemporalQueryTest, NodeUpdateAtDifferentTimes) {
   auto age_array_current =
       std::static_pointer_cast<arrow::Int32Array>(age_col_current->chunk(0));
   EXPECT_EQ(age_array_current->Value(0), 27);
+
+  // ========================================================================
+  // TEMPORAL QUERIES: Query historical versions
+  // ========================================================================
+
+  // Query AS OF t0: should see age=25 (original version)
+  auto query_t0 = Query::from("u:User")
+                      .as_of_valid_time(t0_)
+                      .where("u.name", CompareOp::Eq, Value("Alice"))
+                      .build();
+  auto result_t0 = db_->query(query_t0);
+  ASSERT_TRUE(result_t0.ok());
+  auto table_t0 = result_t0.ValueOrDie()->table();
+  ASSERT_EQ(table_t0->num_rows(), 1);
+
+  auto age_col_t0 = table_t0->GetColumnByName("u.age");
+  auto age_array_t0 =
+      std::static_pointer_cast<arrow::Int32Array>(age_col_t0->chunk(0));
+  EXPECT_EQ(age_array_t0->Value(0), 25);  // Versioning enabled!
+
+  // Query AS OF t1: should see age=26 (first update)
+  auto query_t1 = Query::from("u:User")
+                      .as_of_valid_time(t1_)
+                      .where("u.name", CompareOp::Eq, Value("Alice"))
+                      .build();
+  auto result_t1 = db_->query(query_t1);
+  ASSERT_TRUE(result_t1.ok());
+  auto table_t1 = result_t1.ValueOrDie()->table();
+  ASSERT_EQ(table_t1->num_rows(), 1);
+
+  auto age_col_t1 = table_t1->GetColumnByName("u.age");
+  auto age_array_t1 =
+      std::static_pointer_cast<arrow::Int32Array>(age_col_t1->chunk(0));
+  EXPECT_EQ(age_array_t1->Value(0), 26);  // Versioning enabled!
+
+  // Query AS OF t2: should see age=27 (second update)
+  auto query_t2 = Query::from("u:User")
+                      .as_of_valid_time(t2_)
+                      .where("u.name", CompareOp::Eq, Value("Alice"))
+                      .build();
+  auto result_t2 = db_->query(query_t2);
+  ASSERT_TRUE(result_t2.ok());
+  auto table_t2 = result_t2.ValueOrDie()->table();
+  ASSERT_EQ(table_t2->num_rows(), 1);
+
+  auto age_col_t2 = table_t2->GetColumnByName("u.age");
+  auto age_array_t2 =
+      std::static_pointer_cast<arrow::Int32Array>(age_col_t2->chunk(0));
+  EXPECT_EQ(age_array_t2->Value(0), 27);
 }
 
 TEST_F(TemporalQueryTest, MultipleFieldUpdateAtSameTime) {
@@ -166,14 +219,17 @@ TEST_F(TemporalQueryTest, ClockAdvanceAndQuery) {
   // Create user at t0
   mock_clock_.set_time(t0_);
   int64_t user_id = create_simple_user("Charlie", 35);
+  uint64_t creation_time = t0_;
 
   // Advance time and update
   mock_clock_.advance_seconds(1);  // 1 second after t0
+  uint64_t update1_time = mock_clock_.now_nanos();
   auto update1 = db_->update_node(user_id, "age", Value(36), UpdateType::SET);
   ASSERT_TRUE(update1.ok());
 
   // Advance time and update again
   mock_clock_.advance_seconds(1);  // 2 seconds after t0
+  uint64_t update2_time = mock_clock_.now_nanos();
   auto update2 = db_->update_node(user_id, "age", Value(37), UpdateType::SET);
   ASSERT_TRUE(update2.ok());
 
@@ -191,6 +247,146 @@ TEST_F(TemporalQueryTest, ClockAdvanceAndQuery) {
   auto age_array =
       std::static_pointer_cast<arrow::Int32Array>(age_col->chunk(0));
   EXPECT_EQ(age_array->Value(0), 37);
+
+  // ========================================================================
+  // TEMPORAL QUERIES: Time travel with precise timestamps
+  // ========================================================================
+
+  // Query AS OF creation_time: should see age=35
+  auto query_creation = Query::from("u:User")
+                            .as_of_valid_time(creation_time)
+                            .where("u.name", CompareOp::Eq, Value("Charlie"))
+                            .build();
+  auto result_creation = db_->query(query_creation);
+  ASSERT_TRUE(result_creation.ok());
+  auto table_creation = result_creation.ValueOrDie()->table();
+  ASSERT_EQ(table_creation->num_rows(), 1);
+  auto age_creation = std::static_pointer_cast<arrow::Int32Array>(
+      table_creation->GetColumnByName("u.age")->chunk(0));
+  EXPECT_EQ(age_creation->Value(0), 35);
+
+  // Query AS OF update1_time: should see age=36
+  auto query_update1 = Query::from("u:User")
+                           .as_of_valid_time(update1_time)
+                           .where("u.name", CompareOp::Eq, Value("Charlie"))
+                           .build();
+  auto result_update1 = db_->query(query_update1);
+  ASSERT_TRUE(result_update1.ok());
+  auto table_update1 = result_update1.ValueOrDie()->table();
+  ASSERT_EQ(table_update1->num_rows(), 1);
+  auto age_update1 = std::static_pointer_cast<arrow::Int32Array>(
+      table_update1->GetColumnByName("u.age")->chunk(0));
+  EXPECT_EQ(age_update1->Value(0), 36);
+
+  // Query AS OF update2_time: should see age=37
+  auto query_update2 = Query::from("u:User")
+                           .as_of_valid_time(update2_time)
+                           .where("u.name", CompareOp::Eq, Value("Charlie"))
+                           .build();
+  auto result_update2 = db_->query(query_update2);
+  ASSERT_TRUE(result_update2.ok());
+  auto table_update2 = result_update2.ValueOrDie()->table();
+  ASSERT_EQ(table_update2->num_rows(), 1);
+  auto age_update2 = std::static_pointer_cast<arrow::Int32Array>(
+      table_update2->GetColumnByName("u.age")->chunk(0));
+  EXPECT_EQ(age_update2->Value(0), 37);
+}
+
+TEST_F(TemporalQueryTest, BitemporalQueryWithUpdates) {
+  // Create user at t0
+  mock_clock_.set_time(t0_);
+  int64_t user_id = create_simple_user("Diana", 40);
+
+  // Update at t1
+  mock_clock_.set_time(t1_);
+  auto update1 = db_->update_node(user_id, "age", Value(41), UpdateType::SET);
+  ASSERT_TRUE(update1.ok());
+
+  // Update at t2
+  mock_clock_.set_time(t2_);
+  auto update2 = db_->update_node(user_id, "age", Value(42), UpdateType::SET);
+  ASSERT_TRUE(update2.ok());
+
+  // ========================================================================
+  // BITEMPORAL QUERIES: Query with both VALIDTIME and TXNTIME
+  // ========================================================================
+
+  // Query AS OF (valid=t0, tx=t0): should see age=40
+  auto query_t0_t0 = Query::from("u:User")
+                         .as_of(t0_, t0_)
+                         .where("u.name", CompareOp::Eq, Value("Diana"))
+                         .build();
+  auto result_t0_t0 = db_->query(query_t0_t0);
+  ASSERT_TRUE(result_t0_t0.ok());
+  ASSERT_EQ(result_t0_t0.ValueOrDie()->table()->num_rows(), 1);
+  auto age_t0_t0 = std::static_pointer_cast<arrow::Int32Array>(
+      result_t0_t0.ValueOrDie()->table()->GetColumnByName("u.age")->chunk(0));
+  EXPECT_EQ(age_t0_t0->Value(0), 40);
+
+  // Query AS OF (valid=t1, tx=t1): should see age=41
+  auto query_t1_t1 = Query::from("u:User")
+                         .as_of(t1_, t1_)
+                         .where("u.name", CompareOp::Eq, Value("Diana"))
+                         .build();
+  auto result_t1_t1 = db_->query(query_t1_t1);
+  ASSERT_TRUE(result_t1_t1.ok());
+  ASSERT_EQ(result_t1_t1.ValueOrDie()->table()->num_rows(), 1);
+  auto age_t1_t1 = std::static_pointer_cast<arrow::Int32Array>(
+      result_t1_t1.ValueOrDie()->table()->GetColumnByName("u.age")->chunk(0));
+  EXPECT_EQ(age_t1_t1->Value(0), 41);
+
+  // Query AS OF (valid=t2, tx=t2): should see age=42
+  auto query_t2_t2 = Query::from("u:User")
+                         .as_of(t2_, t2_)
+                         .where("u.name", CompareOp::Eq, Value("Diana"))
+                         .build();
+  auto result_t2_t2 = db_->query(query_t2_t2);
+  ASSERT_TRUE(result_t2_t2.ok());
+  ASSERT_EQ(result_t2_t2.ValueOrDie()->table()->num_rows(), 1);
+  auto age_t2 = std::static_pointer_cast<arrow::Int32Array>(
+      result_t2_t2.ValueOrDie()->table()->GetColumnByName("u.age")->chunk(0));
+  EXPECT_EQ(age_t2->Value(0), 42);
+
+  // Query AS OF (valid=t0, tx=t2): "What did we know at t2 about t0?"
+  // Should see age=40 (the value that was true at t0)
+  auto query_t0_tx_t2 = Query::from("u:User")
+                            .as_of(t0_, t2_)
+                            .where("u.name", CompareOp::Eq, Value("Diana"))
+                            .build();
+  auto result_t0_tx_t2 = db_->query(query_t0_tx_t2);
+  ASSERT_TRUE(result_t0_tx_t2.ok());
+  ASSERT_EQ(result_t0_tx_t2.ValueOrDie()->table()->num_rows(), 1);
+  auto age_t0_tx_t2 = std::static_pointer_cast<arrow::Int32Array>(
+      result_t0_tx_t2.ValueOrDie()->table()->GetColumnByName("u.age")->chunk(
+          0));
+  EXPECT_EQ(age_t0_tx_t2->Value(0), 40);
+}
+
+TEST_F(TemporalQueryTest, TemporalQueryBetweenUpdateTimes) {
+  // Create user at t0
+  mock_clock_.set_time(t0_);
+  int64_t user_id = create_simple_user("Eve", 50);
+
+  // Update at t1
+  mock_clock_.set_time(t1_);
+  auto update1 = db_->update_node(user_id, "age", Value(51), UpdateType::SET);
+  ASSERT_TRUE(update1.ok());
+
+  // Calculate midpoint between t0 and t1
+  uint64_t t_mid = (t0_ + t1_) / 2;
+
+  // Query AS OF t_mid (between t0 and t1): should see age=50 (the t0 version)
+  auto query_mid = Query::from("u:User")
+                       .as_of_valid_time(t_mid)
+                       .where("u.name", CompareOp::Eq, Value("Eve"))
+                       .build();
+  auto result_mid = db_->query(query_mid);
+  ASSERT_TRUE(result_mid.ok());
+  auto table_mid = result_mid.ValueOrDie()->table();
+  ASSERT_EQ(table_mid->num_rows(), 1);
+  auto age_mid = std::static_pointer_cast<arrow::Int32Array>(
+      table_mid->GetColumnByName("u.age")->chunk(0));
+  EXPECT_EQ(age_mid->Value(0), 50);  // Should see the version from t0
 }
 
 TEST_F(TemporalQueryTest, CurrentVersionQuery) {

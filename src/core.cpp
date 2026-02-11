@@ -800,7 +800,7 @@ struct Row {
   // Optimized: set cells from node using field indices
   void set_cell_from_node(const std::vector<int>& field_indices,
                           const std::shared_ptr<Node>& node,
-                          TemporalContext* temporal_context = nullptr) {
+                          TemporalContext* temporal_context) {
     // Create temporal view (nullptr = current version)
     auto view = node->view(temporal_context);
 
@@ -1997,7 +1997,9 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
       log_error("schema '{}' doesn't exist", source_schema);
       return arrow::Status::KeyError("schema doesn't exit: {}", source_schema);
     }
-    ARROW_ASSIGN_OR_RAISE(auto source_table, this->get_table(source_schema));
+    ARROW_ASSIGN_OR_RAISE(
+        auto source_table,
+        this->get_table(source_schema, query_state.temporal_context.get()));
     ARROW_RETURN_NOT_OK(query_state.update_table(source_table, query.from()));
     if (auto res = query_state.compute_fully_qualified_names(query.from(),
                                                              source_schema);
@@ -2136,8 +2138,10 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
             log_debug("Source table '{}' not found. Loading",
                       traverse->source().toString());
           }
-          ARROW_ASSIGN_OR_RAISE(auto source_table,
-                                this->get_table(source_schema));
+          ARROW_ASSIGN_OR_RAISE(
+              auto source_table,
+              this->get_table(source_schema,
+                              query_state.temporal_context.get()));
           ARROW_RETURN_NOT_OK(
               query_state.update_table(source_table, traverse->source()));
         }
@@ -2273,7 +2277,9 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
               matched_target_ids.begin(), matched_target_ids.end());
         } else {  // Right, Full remove nodes with incoming connections
           auto target_ids =
-              get_ids_from_table(get_table(target_schema).ValueOrDie())
+              get_ids_from_table(
+                  get_table(target_schema, query_state.temporal_context.get())
+                      .ValueOrDie())
                   .ValueOrDie();
           IF_DEBUG_ENABLED {
             log_debug(

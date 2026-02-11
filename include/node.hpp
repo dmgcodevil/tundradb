@@ -153,12 +153,15 @@ class NodeManager {
  public:
   explicit NodeManager(std::shared_ptr<SchemaRegistry> schema_registry,
                        const bool validation_enabled = true,
-                       const bool use_node_arena = true) {
+                       const bool use_node_arena = true,
+                       const bool enable_versioning = false) {
     validation_enabled_ = validation_enabled;
     use_node_arena_ = use_node_arena;
     schema_registry_ = std::move(schema_registry);
     layout_registry_ = std::make_shared<LayoutRegistry>();
-    node_arena_ = node_arena_factory::create_free_list_arena(layout_registry_);
+    // Create arena with versioning enabled if requested
+    node_arena_ = node_arena_factory::create_free_list_arena(
+        layout_registry_, 2 * 1024 * 1024, 64, enable_versioning);
   }
 
   ~NodeManager() { node_arena_->clear(); }
@@ -221,16 +224,38 @@ class NodeManager {
       NodeHandle node_handle = node_arena_->allocate_node(layout_);
       // Logger::get_instance().debug("node has been allocated at {}",
       //                              node_handle.ptr);
-      node_arena_->set_field_value(node_handle, layout_,
-                                   schema_->get_field("id"), Value{id});
-      for (const auto &field : schema_->fields()) {
-        if (field->name() == "id") continue;
-        if (!data.contains(field->name())) {
-          // Logger::get_instance().debug("{} set NA value", field->name());
-          node_arena_->set_field_value(node_handle, layout_, field, Value());
-        } else {
-          const auto value = data.find(field->name())->second;
-          node_arena_->set_field_value(node_handle, layout_, field, value);
+
+      // For versioned nodes, use set_field_value_v0 for initial population
+      // For non-versioned nodes, set_field_value_v0 is the same as
+      // set_field_value
+      const bool is_versioned = node_handle.is_versioned();
+
+      if (is_versioned) {
+        // Initial population of v0 (base node)
+        node_arena_->set_field_value_v0(node_handle, layout_,
+                                        schema_->get_field("id"), Value{id});
+        for (const auto &field : schema_->fields()) {
+          if (field->name() == "id") continue;
+          if (!data.contains(field->name())) {
+            node_arena_->set_field_value_v0(node_handle, layout_, field,
+                                            Value());
+          } else {
+            const auto value = data.find(field->name())->second;
+            node_arena_->set_field_value_v0(node_handle, layout_, field, value);
+          }
+        }
+      } else {
+        // Non-versioned: use regular set_field_value
+        node_arena_->set_field_value(node_handle, layout_,
+                                     schema_->get_field("id"), Value{id});
+        for (const auto &field : schema_->fields()) {
+          if (field->name() == "id") continue;
+          if (!data.contains(field->name())) {
+            node_arena_->set_field_value(node_handle, layout_, field, Value());
+          } else {
+            const auto value = data.find(field->name())->second;
+            node_arena_->set_field_value(node_handle, layout_, field, value);
+          }
         }
       }
 

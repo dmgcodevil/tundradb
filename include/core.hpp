@@ -237,7 +237,7 @@ class Shard {
     return nodes_[node_id]->update(field, value, update_type);
   }
 
-  arrow::Result<std::shared_ptr<arrow::Table>> get_table() {
+  arrow::Result<std::shared_ptr<arrow::Table>> get_table(TemporalContext *ctx) {
     if (dirty_ || !table_) {
       ARROW_ASSIGN_OR_RAISE(const auto schema,
                             schema_registry_->get(schema_name));
@@ -251,7 +251,8 @@ class Shard {
           result, [](const std::shared_ptr<Node> &a,
                      const std::shared_ptr<Node> &b) { return a->id < b->id; });
 
-      ARROW_ASSIGN_OR_RAISE(table_, create_table(schema, result, chunk_size));
+      ARROW_ASSIGN_OR_RAISE(table_,
+                            create_table(schema, result, chunk_size, ctx));
       dirty_ = false;
     }
     return table_;
@@ -575,7 +576,7 @@ class ShardManager {
   }
 
   arrow::Result<std::vector<std::shared_ptr<arrow::Table>>> get_tables(
-      const std::string &schema_name) {
+      const std::string &schema_name, TemporalContext *temporal_context) {
     const auto schema_it = shards_.find(schema_name);
     if (schema_it == shards_.end()) {
       return std::vector<std::shared_ptr<arrow::Table>>{};
@@ -590,7 +591,7 @@ class ShardManager {
 
     std::vector<std::shared_ptr<arrow::Table>> tables;
     for (const auto &shard : sorted_shards) {
-      ARROW_ASSIGN_OR_RAISE(auto table, shard->get_table());
+      ARROW_ASSIGN_OR_RAISE(auto table, shard->get_table(temporal_context));
       if (table->num_rows() > 0) {
         tables.push_back(table);
       }
@@ -673,7 +674,8 @@ class Database {
         shard_manager_(
             std::make_shared<ShardManager>(schema_registry_, config)),
         node_manager_(std::make_shared<NodeManager>(
-            schema_registry_, config.is_validation_enabled())),
+            schema_registry_, config.is_validation_enabled(), true,
+            config.is_versioning_enabled())),
         config_(config),
         persistence_enabled_(config.is_persistence_enabled()),
         edge_store_(std::make_shared<EdgeStore>(0, config.get_chunk_size())) {
@@ -792,7 +794,9 @@ class Database {
   arrow::Result<bool> compact_all() { return shard_manager_->compact_all(); }
 
   arrow::Result<std::shared_ptr<arrow::Table>> get_table(
-      const std::string &schema_name, size_t chunk_size = 10000) const {
+      const std::string &schema_name,
+      TemporalContext *temporal_context = nullptr,
+      size_t chunk_size = 10000) const {
     ARROW_ASSIGN_OR_RAISE(auto schema, schema_registry_->get(schema_name));
     auto arrow_schema = schema->arrow();
     ARROW_ASSIGN_OR_RAISE(auto all_nodes,
@@ -813,7 +817,7 @@ class Database {
       return a->id < b->id;
     });
 
-    return create_table(schema, all_nodes, chunk_size);
+    return create_table(schema, all_nodes, chunk_size, temporal_context);
   }
 
   arrow::Result<size_t> get_shard_count(const std::string &schema_name) const {
