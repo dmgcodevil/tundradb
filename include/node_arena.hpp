@@ -517,7 +517,7 @@ class NodeArena {
       const std::vector<std::pair<uint16_t, Value>>& field_updates) {
     if (field_updates.empty()) return true;
 
-    // Non-versioned: update each field directly
+    // Non-versioned: write directly to base node
     if (!versioning_enabled_ || !current_handle.is_versioned()) {
       for (const auto& [field_idx, value] : field_updates) {
         if (field_idx >= layout->get_fields().size()) {
@@ -547,19 +547,51 @@ class NodeArena {
     VersionInfo* new_version_info = new (version_info_memory)
         VersionInfo(new_version_id, now, old_version_info);
 
-    // Process each field update
+    // ========================================================================
+    // BATCH ALLOCATION: Calculate total memory needed for all fields
+    // ========================================================================
+    size_t total_size = 0;
+    size_t max_alignment = 1;
+
+    // First pass: calculate total size and max alignment
     for (const auto& [field_idx, new_value] : field_updates) {
       if (field_idx >= layout->get_fields().size()) {
         return arrow::Status::IndexError("Field index out of bounds");
       }
 
+      if (!new_value.is_null()) {  // NULL uses nullptr sentinel (no allocation)
+        const FieldLayout& field_layout = layout->get_fields()[field_idx];
+        total_size += field_layout.size;
+        max_alignment = std::max(max_alignment, field_layout.alignment);
+      }
+    }
+
+    // Batch allocate memory for all non-null fields
+    char* batch_memory = nullptr;
+    if (total_size > 0) {
+      batch_memory = static_cast<char*>(
+          version_arena_->allocate(total_size, max_alignment));
+      if (!batch_memory) {
+        return arrow::Status::OutOfMemory(
+            "Failed to batch allocate field storage");
+      }
+    }
+
+    // Second pass: write values and assign pointers
+    size_t offset = 0;
+    for (const auto& [field_idx, new_value] : field_updates) {
       const FieldLayout& field_layout = layout->get_fields()[field_idx];
 
       // Handle NULL: use nullptr sentinel
       if (new_value.is_null()) {
         new_version_info->updated_fields[field_idx] = nullptr;
-        continue;
+        continue;  // Skip batch_memory usage for NULL fields
       }
+
+      // At this point, field is non-NULL, so batch_memory must be allocated
+      // (because total_size > 0 when any field is non-NULL)
+      assert(batch_memory != nullptr &&
+             "Batch memory must be allocated for non-null fields");
 
       // Prepare value (convert strings to StringRef)
       Value storage_value = new_value;
@@ -569,12 +601,9 @@ class NodeArena {
         storage_value = Value{str_ref, field_layout.type};
       }
 
-      // Allocate and write field value
-      char* field_storage = static_cast<char*>(
-          version_arena_->allocate(field_layout.size, field_layout.alignment));
-      if (!field_storage) {
-        return arrow::Status::OutOfMemory("Failed to allocate field storage");
-      }
+      // Use batch-allocated memory (safe because batch_memory != nullptr here)
+      char* field_storage = batch_memory + offset;
+      offset += field_layout.size;
 
       if (!write_value_to_memory(field_storage, field_layout.type,
                                  storage_value)) {

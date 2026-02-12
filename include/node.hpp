@@ -222,40 +222,25 @@ class NodeManager {
 
     if (use_node_arena_) {
       NodeHandle node_handle = node_arena_->allocate_node(layout_);
-      // Logger::get_instance().debug("node has been allocated at {}",
-      //                              node_handle.ptr);
 
-      // For versioned nodes, use set_field_value_v0 for initial population
-      // For non-versioned nodes, set_field_value_v0 is the same as
-      // set_field_value
-      const bool is_versioned = node_handle.is_versioned();
+      // Initial population of v0: write directly to base node
+      // Use set_field_value_v0 for all fields (doesn't create versions)
+      if (!node_arena_->set_field_value_v0(
+              node_handle, layout_, schema_->get_field("id"), Value{id})) {
+        return arrow::Status::Invalid("Failed to set id field");
+      }
 
-      if (is_versioned) {
-        // Initial population of v0 (base node)
-        node_arena_->set_field_value_v0(node_handle, layout_,
-                                        schema_->get_field("id"), Value{id});
-        for (const auto &field : schema_->fields()) {
-          if (field->name() == "id") continue;
-          if (!data.contains(field->name())) {
-            node_arena_->set_field_value_v0(node_handle, layout_, field,
-                                            Value());
-          } else {
-            const auto value = data.find(field->name())->second;
-            node_arena_->set_field_value_v0(node_handle, layout_, field, value);
-          }
-        }
-      } else {
-        // Non-versioned: use regular set_field_value
-        node_arena_->set_field_value(node_handle, layout_,
-                                     schema_->get_field("id"), Value{id});
-        for (const auto &field : schema_->fields()) {
-          if (field->name() == "id") continue;
-          if (!data.contains(field->name())) {
-            node_arena_->set_field_value(node_handle, layout_, field, Value());
-          } else {
-            const auto value = data.find(field->name())->second;
-            node_arena_->set_field_value(node_handle, layout_, field, value);
-          }
+      for (const auto &field : schema_->fields()) {
+        if (field->name() == "id") continue;
+
+        Value value;
+        if (data.contains(field->name())) {
+          value = data.find(field->name())->second;
+        }  // else: Value() = NULL
+
+        if (!node_arena_->set_field_value_v0(node_handle, layout_, field,
+                                             value)) {
+          return arrow::Status::Invalid("Failed to set field ", field->name());
         }
       }
 
