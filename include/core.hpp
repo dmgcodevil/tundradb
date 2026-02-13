@@ -238,7 +238,8 @@ class Shard {
   }
 
   arrow::Result<std::shared_ptr<arrow::Table>> get_table(TemporalContext *ctx) {
-    if (dirty_ || !table_) {
+    // if we have ctx we need to create a new table every time
+    if (dirty_ || !table_ || ctx) {
       ARROW_ASSIGN_OR_RAISE(const auto schema,
                             schema_registry_->get(schema_name));
       auto arrow_schema = schema->arrow();
@@ -251,10 +252,20 @@ class Shard {
           result, [](const std::shared_ptr<Node> &a,
                      const std::shared_ptr<Node> &b) { return a->id < b->id; });
 
-      ARROW_ASSIGN_OR_RAISE(table_,
+      ARROW_ASSIGN_OR_RAISE(auto table_res, 
                             create_table(schema, result, chunk_size, ctx));
-      dirty_ = false;
+      
+      if (!ctx) {
+        // Non-temporal query: cache the table for reuse
+        table_ = table_res;
+        dirty_ = false;
+      }
+      
+      // Return the newly created table (temporal or non-temporal)
+      return table_res;
     }
+    
+    // Reuse cached table (only for non-temporal queries)
     return table_;
   }
 
