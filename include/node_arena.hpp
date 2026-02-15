@@ -313,6 +313,10 @@ struct NodeHandle {
  */
 class NodeArena {
  public:
+  // consts
+  static constexpr size_t kInitialSize = 2 * 1024 * 1024;  // 2MB default
+  static constexpr size_t kMinFragmentSize = 64;  // 64 bytes minimum fragment
+
   /**
    * Constructor takes any MemArena implementation + StringArena for strings.
    *
@@ -739,11 +743,10 @@ class NodeArena {
       return nullptr;
     }
 
-    // Try to find in version chain first
-    const char* field_ptr =
+    auto [found, field_ptr] =
         get_field_ptr_from_version_chain(version, field_layout->index);
 
-    if (field_ptr != nullptr) {
+    if (found) {
       return field_ptr;
     }
 
@@ -766,11 +769,15 @@ class NodeArena {
     }
 
     // Try to find in version chain first
-    const char* field_ptr =
+    auto [found, field_ptr] =
         get_field_ptr_from_version_chain(version, field_layout->index);
 
-    if (field_ptr != nullptr) {
-      // Found in version chain, read directly from the field pointer
+    if (found) {
+      if (field_ptr == nullptr) {
+        // Explicit NULL value
+        return Value{};
+      }
+      // Read value from version chain
       return layout->get_field_value_from_ptr(field_ptr, *field_layout);
     }
 
@@ -819,21 +826,27 @@ class NodeArena {
   }
 
   /** Traverse the version chain to find field pointer. */
-  static const char* get_field_ptr_from_version_chain(
+  /**
+   * Get field pointer from version chain.
+   * Returns pair<found, ptr>:
+   *   - {true, nullptr}  = field found and is explicitly NULL
+   *   - {true, ptr}      = field found with value at ptr
+   *   - {false, nullptr} = field not found in version chain (read from base)
+   */
+  static std::pair<bool, const char*> get_field_ptr_from_version_chain(
       const VersionInfo* version_info, uint16_t field_idx) {
     const VersionInfo* current = version_info;
     while (current != nullptr) {
       // Check if this version has an override for this field
       if (auto it = current->updated_fields.find(field_idx);
           it != current->updated_fields.end()) {
-        return it->second;
+        return {true, it->second};  // Found (value or nullptr for NULL)
       }
       current = current->prev;
     }
 
-    // not found in any version, would need to read from the base node
-    // (caller should handle this case)
-    return nullptr;
+    // Not found in any version - read from base node
+    return {false, nullptr};
   }
 
   /** Write value to memory (type-safe). */
@@ -889,7 +902,7 @@ namespace node_arena_factory {
 /** Create NodeArena with MemoryArena (fast, no individual deallocation). */
 inline std::unique_ptr<NodeArena> create_simple_arena(
     const std::shared_ptr<LayoutRegistry>& layout_registry,
-    size_t initial_size = 2 * 1024 * 1024,  // 2MB default
+    size_t initial_size = NodeArena::kInitialSize,
     bool enable_versioning = false) {
   auto mem_arena = std::make_unique<MemoryArena>(initial_size);
   return std::make_unique<NodeArena>(std::move(mem_arena), layout_registry,
@@ -899,8 +912,8 @@ inline std::unique_ptr<NodeArena> create_simple_arena(
 /** Create NodeArena with FreeListArena (supports individual deallocation). */
 inline std::unique_ptr<NodeArena> create_free_list_arena(
     const std::shared_ptr<LayoutRegistry>& layout_registry,
-    size_t initial_size = 2 * 1024 * 1024,  // 2MB default
-    size_t min_fragment_size = 64,          // 64 bytes minimum fragment
+    size_t initial_size = NodeArena::kInitialSize,
+    size_t min_fragment_size = NodeArena::kMinFragmentSize,
     bool enable_versioning = false) {
   auto mem_arena =
       std::make_unique<FreeListArena>(initial_size, min_fragment_size);

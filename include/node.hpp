@@ -139,7 +139,7 @@ class Node {
    */
   NodeView view(TemporalContext *ctx = nullptr) {
     if (!ctx) {
-      // No temporal context or no handle -> use current version
+      // No temporal context  > use the current version
       return {this, handle_->version_info_, arena_.get(), layout_};
     }
 
@@ -161,7 +161,8 @@ class NodeManager {
     layout_registry_ = std::make_shared<LayoutRegistry>();
     // Create arena with versioning enabled if requested
     node_arena_ = node_arena_factory::create_free_list_arena(
-        layout_registry_, 2 * 1024 * 1024, 64, enable_versioning);
+        layout_registry_, NodeArena::kInitialSize, NodeArena::kMinFragmentSize,
+        enable_versioning);
   }
 
   ~NodeManager() { node_arena_->clear(); }

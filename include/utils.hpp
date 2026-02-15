@@ -162,6 +162,11 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
     // Use NodeView to read from version chain (supports temporal queries)
     auto view = node->view(temporal_context);
 
+    // Skip nodes that are not visible at this temporal snapshot
+    if (!view.is_visible()) {
+      continue;  // Node doesn't exist at queried time
+    }
+
     for (int i = 0; i < schema->num_fields(); i++) {
       const auto& field = schema->field(i);
       auto field_result = view.get_value_ptr(field);  // ✅ Use NodeView!
@@ -239,6 +244,21 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
       ARROW_RETURN_NOT_OK(builders[i]->Finish(&array));
       chunks_per_field[i].push_back(array);
     }
+  }
+
+  // Handle case where all nodes were filtered out by temporal visibility
+  // Need to create empty arrays for each field
+  if (chunks_per_field[0].empty()) {
+    std::vector<std::shared_ptr<arrow::ChunkedArray>> empty_columns;
+    empty_columns.reserve(arrow_schema->num_fields());
+    for (int i = 0; i < arrow_schema->num_fields(); i++) {
+      // Create empty array of correct type
+      std::shared_ptr<arrow::Array> empty_array;
+      ARROW_RETURN_NOT_OK(builders[i]->Finish(&empty_array));
+      empty_columns.push_back(
+          std::make_shared<arrow::ChunkedArray>(empty_array));
+    }
+    return arrow::Table::Make(arrow_schema, empty_columns);
   }
 
   std::vector<std::shared_ptr<arrow::ChunkedArray>> chunked_arrays;
