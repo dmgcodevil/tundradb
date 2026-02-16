@@ -36,6 +36,9 @@ class DatabaseConfig {
 
   bool validation_enabled = true;
 
+  // Enable temporal versioning (copy-on-write for time-travel queries)
+  bool versioning_enabled_ = false;
+
   friend class DatabaseConfigBuilder;
 
  public:
@@ -51,6 +54,7 @@ class DatabaseConfig {
   std::string get_db_path() const { return db_path; }
   bool is_persistence_enabled() const { return persistence_enabled; }
   bool is_validation_enabled() const { return validation_enabled; }
+  bool is_versioning_enabled() const { return versioning_enabled_; }
 };
 
 class DatabaseConfigBuilder {
@@ -97,6 +101,11 @@ class DatabaseConfigBuilder {
 
   DatabaseConfigBuilder &with_validation_enabled(const bool enabled) {
     config.validation_enabled = enabled;
+    return *this;
+  }
+
+  DatabaseConfigBuilder &with_versioning_enabled(const bool enabled) {
+    config.versioning_enabled_ = enabled;
     return *this;
   }
 

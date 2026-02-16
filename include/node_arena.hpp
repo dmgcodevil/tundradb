@@ -10,6 +10,7 @@
 #include <memory>
 #include <string>
 
+#include "clock.hpp"
 #include "free_list_arena.hpp"
 #include "mem_arena.hpp"
 #include "memory_arena.hpp"
@@ -26,12 +27,23 @@ struct NodeHandle;
  *
  * Stores only changed fields; forms a linked list via prev pointer.
  * All versions share the same base node data.
+ *
+ * Bitemporal support:
+ * - valid_from/valid_to: VALIDTIME (when the fact was true in the domain)
+ * - tx_from/tx_to: TXNTIME (when the database knew about the fact)
  */
 struct VersionInfo {
-  // Temporal validity interval: [valid_from, valid_to)
+  // Version identifier
   uint64_t version_id = 0;
+
+  // VALIDTIME: domain validity interval [valid_from, valid_to)
   uint64_t valid_from = 0;
   uint64_t valid_to = std::numeric_limits<uint64_t>::max();
+
+  // TXNTIME: system knowledge interval [tx_from, tx_to)
+  // When the database recorded/believed this version
+  uint64_t tx_from = 0;
+  uint64_t tx_to = std::numeric_limits<uint64_t>::max();
 
   // Linked list to previous version
   VersionInfo* prev = nullptr;
@@ -45,14 +57,38 @@ struct VersionInfo {
 
   VersionInfo() = default;
 
+  // Constructor: initializes both valid and tx times to the same value
   VersionInfo(uint64_t vid, uint64_t ts_from, VersionInfo* prev_ver = nullptr)
-      : version_id(vid), valid_from(ts_from), prev(prev_ver) {}
+      : version_id(vid),
+        valid_from(ts_from),
+        tx_from(ts_from),  // Initially tx_from = valid_from
+        prev(prev_ver) {}
 
+  // Check if valid at a specific VALIDTIME
   bool is_valid_at(uint64_t ts) const {
     return valid_from <= ts && ts < valid_to;
   }
 
-  // O(N)
+  // Check if visible at a bitemporal snapshot (valid_time, tx_time)
+  bool is_visible_at(uint64_t valid_time, uint64_t tx_time) const {
+    return (valid_from <= valid_time && valid_time < valid_to) &&
+           (tx_from <= tx_time && tx_time < tx_to);
+  }
+
+  // Find version visible at bitemporal snapshot
+  const VersionInfo* find_version_at_snapshot(uint64_t valid_time,
+                                              uint64_t tx_time) const {
+    const VersionInfo* current = this;
+    while (current != nullptr) {
+      if (current->is_visible_at(valid_time, tx_time)) {
+        return current;
+      }
+      current = current->prev;
+    }
+    return nullptr;
+  }
+
+  // Legacy: find version at VALIDTIME only (ignores TXNTIME)
   const VersionInfo* find_version_at_time(uint64_t ts) const {
     const VersionInfo* current = this;
     while (current != nullptr) {
@@ -277,6 +313,10 @@ struct NodeHandle {
  */
 class NodeArena {
  public:
+  // consts
+  static constexpr size_t kInitialSize = 2 * 1024 * 1024;  // 2MB default
+  static constexpr size_t kMinFragmentSize = 64;  // 64 bytes minimum fragment
+
   /**
    * Constructor takes any MemArena implementation + StringArena for strings.
    *
@@ -481,7 +521,7 @@ class NodeArena {
       const std::vector<std::pair<uint16_t, Value>>& field_updates) {
     if (field_updates.empty()) return true;
 
-    // Non-versioned: update each field directly
+    // Non-versioned: write directly to base node
     if (!versioning_enabled_ || !current_handle.is_versioned()) {
       for (const auto& [field_idx, value] : field_updates) {
         if (field_idx >= layout->get_fields().size()) {
@@ -511,19 +551,51 @@ class NodeArena {
     VersionInfo* new_version_info = new (version_info_memory)
         VersionInfo(new_version_id, now, old_version_info);
 
-    // Process each field update
+    // ========================================================================
+    // BATCH ALLOCATION: Calculate total memory needed for all fields
+    // ========================================================================
+    size_t total_size = 0;
+    size_t max_alignment = 1;
+
+    // First pass: calculate total size and max alignment
     for (const auto& [field_idx, new_value] : field_updates) {
       if (field_idx >= layout->get_fields().size()) {
         return arrow::Status::IndexError("Field index out of bounds");
       }
 
+      if (!new_value.is_null()) {  // NULL uses nullptr sentinel (no allocation)
+        const FieldLayout& field_layout = layout->get_fields()[field_idx];
+        total_size += field_layout.size;
+        max_alignment = std::max(max_alignment, field_layout.alignment);
+      }
+    }
+
+    // Batch allocate memory for all non-null fields
+    char* batch_memory = nullptr;
+    if (total_size > 0) {
+      batch_memory = static_cast<char*>(
+          version_arena_->allocate(total_size, max_alignment));
+      if (!batch_memory) {
+        return arrow::Status::OutOfMemory(
+            "Failed to batch allocate field storage");
+      }
+    }
+
+    // Second pass: write values and assign pointers
+    size_t offset = 0;
+    for (const auto& [field_idx, new_value] : field_updates) {
       const FieldLayout& field_layout = layout->get_fields()[field_idx];
 
       // Handle NULL: use nullptr sentinel
       if (new_value.is_null()) {
         new_version_info->updated_fields[field_idx] = nullptr;
-        continue;
+        continue;  // Skip batch_memory usage for NULL fields
       }
+
+      // At this point, field is non-NULL, so batch_memory must be allocated
+      // (because total_size > 0 when any field is non-NULL)
+      assert(batch_memory != nullptr &&
+             "Batch memory must be allocated for non-null fields");
 
       // Prepare value (convert strings to StringRef)
       Value storage_value = new_value;
@@ -533,12 +605,9 @@ class NodeArena {
         storage_value = Value{str_ref, field_layout.type};
       }
 
-      // Allocate and write field value
-      char* field_storage = static_cast<char*>(
-          version_arena_->allocate(field_layout.size, field_layout.alignment));
-      if (!field_storage) {
-        return arrow::Status::OutOfMemory("Failed to allocate field storage");
-      }
+      // Use batch-allocated memory (safe because batch_memory != nullptr here)
+      char* field_storage = batch_memory + offset;
+      offset += field_layout.size;
 
       if (!write_value_to_memory(field_storage, field_layout.type,
                                  storage_value)) {
@@ -655,12 +724,71 @@ class NodeArena {
     return version_counter_.load(std::memory_order_relaxed);
   }
 
+  /**
+   * Get the field value pointer starting from a specific version.
+   * Used by NodeView for temporal queries.
+   *
+   * @param handle NodeHandle (for accessing base node if needed)
+   * @param version Starting version (pre-resolved by TemporalContext)
+   * @param layout Schema layout
+   * @param field Field to read
+   * @return Pointer to field data or error if not found
+   */
+  static const char* get_field_value_ptr_from_version(
+      const NodeHandle& handle, const VersionInfo* version,
+      const std::shared_ptr<SchemaLayout>& layout,
+      const std::shared_ptr<Field>& field) {
+    const FieldLayout* field_layout = layout->get_field_layout(field);
+    if (!field_layout) {
+      return nullptr;
+    }
+
+    auto [found, field_ptr] =
+        get_field_ptr_from_version_chain(version, field_layout->index);
+
+    if (found) {
+      return field_ptr;
+    }
+
+    // Not in version chain, read from base node
+    return layout->get_field_value_ptr(static_cast<const char*>(handle.ptr),
+                                       field_layout->index);
+  }
+
+  /**
+   * Get field value starting from a specific version.
+   * Used by NodeView for temporal queries.
+   */
+  static arrow::Result<Value> get_field_value_from_version(
+      const NodeHandle& handle, const VersionInfo* version,
+      const std::shared_ptr<SchemaLayout>& layout,
+      const std::shared_ptr<Field>& field) {
+    const FieldLayout* field_layout = layout->get_field_layout(field);
+    if (!field_layout) {
+      return arrow::Status::KeyError("Field not found in layout");
+    }
+
+    // Try to find in version chain first
+    auto [found, field_ptr] =
+        get_field_ptr_from_version_chain(version, field_layout->index);
+
+    if (found) {
+      if (field_ptr == nullptr) {
+        // Explicit NULL value
+        return Value{};
+      }
+      // Read value from version chain
+      return layout->get_field_value_from_ptr(field_ptr, *field_layout);
+    }
+
+    // Not in version chain, read from base node
+    return layout->get_field_value(static_cast<const char*>(handle.ptr),
+                                   *field_layout);
+  }
+
  private:
   static uint64_t get_current_timestamp_ns() {
-    auto now = std::chrono::system_clock::now();
-    auto duration = now.time_since_epoch();
-    return std::chrono::duration_cast<std::chrono::nanoseconds>(duration)
-        .count();
+    return Clock::instance().now_nanos();
   }
 
   /** Write field directly to node memory (handles strings). */
@@ -698,22 +826,27 @@ class NodeArena {
   }
 
   /** Traverse the version chain to find field pointer. */
-  static const char* get_field_ptr_from_version_chain(
-      const VersionInfo* version_info, uint16_t field_idx,
-      const SchemaLayout* layout) {
+  /**
+   * Get field pointer from version chain.
+   * Returns pair<found, ptr>:
+   *   - {true, nullptr}  = field found and is explicitly NULL
+   *   - {true, ptr}      = field found with value at ptr
+   *   - {false, nullptr} = field not found in version chain (read from base)
+   */
+  static std::pair<bool, const char*> get_field_ptr_from_version_chain(
+      const VersionInfo* version_info, uint16_t field_idx) {
     const VersionInfo* current = version_info;
     while (current != nullptr) {
       // Check if this version has an override for this field
       if (auto it = current->updated_fields.find(field_idx);
           it != current->updated_fields.end()) {
-        return it->second;
+        return {true, it->second};  // Found (value or nullptr for NULL)
       }
       current = current->prev;
     }
 
-    // Not found in any version, would need to read from base node
-    // (caller should handle this case)
-    return nullptr;
+    // Not found in any version - read from base node
+    return {false, nullptr};
   }
 
   /** Write value to memory (type-safe). */
@@ -769,7 +902,7 @@ namespace node_arena_factory {
 /** Create NodeArena with MemoryArena (fast, no individual deallocation). */
 inline std::unique_ptr<NodeArena> create_simple_arena(
     const std::shared_ptr<LayoutRegistry>& layout_registry,
-    size_t initial_size = 2 * 1024 * 1024,  // 2MB default
+    size_t initial_size = NodeArena::kInitialSize,
     bool enable_versioning = false) {
   auto mem_arena = std::make_unique<MemoryArena>(initial_size);
   return std::make_unique<NodeArena>(std::move(mem_arena), layout_registry,
@@ -779,8 +912,8 @@ inline std::unique_ptr<NodeArena> create_simple_arena(
 /** Create NodeArena with FreeListArena (supports individual deallocation). */
 inline std::unique_ptr<NodeArena> create_free_list_arena(
     const std::shared_ptr<LayoutRegistry>& layout_registry,
-    size_t initial_size = 2 * 1024 * 1024,  // 2MB default
-    size_t min_fragment_size = 64,          // 64 bytes minimum fragment
+    size_t initial_size = NodeArena::kInitialSize,
+    size_t min_fragment_size = NodeArena::kMinFragmentSize,
     bool enable_versioning = false) {
   auto mem_arena =
       std::make_unique<FreeListArena>(initial_size, min_fragment_size);

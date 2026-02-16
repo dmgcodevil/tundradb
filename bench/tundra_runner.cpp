@@ -104,8 +104,8 @@ void load_data(Database& db, const std::string& users_csv,
     db.connect(wsrc->Value(i), "WORKS_AT", users_count + wdst->Value(i)).ValueOrDie();
   }
 
-  db.get_table("User").ValueOrDie();
-  db.get_table("Company").ValueOrDie();
+  db.get_table("User", nullptr).ValueOrDie();
+  db.get_table("Company", nullptr).ValueOrDie();
   
   auto load_end = std::chrono::high_resolution_clock::now();
   auto load_duration = std::chrono::duration_cast<std::chrono::milliseconds>(

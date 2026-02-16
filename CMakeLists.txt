@@ -222,6 +222,7 @@ add_library(core
         src/schema.cpp
         src/arrow_utils.cpp
         src/types.cpp
+        src/clock.cpp
 )
 
 target_include_directories(core

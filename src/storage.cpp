@@ -82,7 +82,7 @@ arrow::Result<std::string> Storage::write_shard(
   if (!shard) {
     return arrow::Status::Invalid("Cannot write null shard");
   }
-  ARROW_ASSIGN_OR_RAISE(const auto table, shard->get_table());
+  ARROW_ASSIGN_OR_RAISE(const auto table, shard->get_table(nullptr));
   const std::string& schema_name = shard->schema_name;
 
   return write_table(table, shard->chunk_size, schema_name);

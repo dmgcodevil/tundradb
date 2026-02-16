@@ -8,7 +8,9 @@
 
 #include "logger.hpp"
 #include "node_arena.hpp"
+#include "node_view.hpp"
 #include "schema.hpp"
+#include "temporal_context.hpp"
 #include "types.hpp"
 
 namespace tundradb {
@@ -84,6 +86,9 @@ class Node {
 
   [[nodiscard]] std::shared_ptr<Schema> get_schema() const { return schema_; }
 
+  // Get node handle (for testing and internal use)
+  [[nodiscard]] NodeHandle *get_handle() const { return handle_.get(); }
+
   [[deprecated]]
   arrow::Result<bool> update(const std::string &field, Value value,
                              UpdateType update_type) {
@@ -119,18 +124,45 @@ class Node {
                                 const Value &value) {
     return update(field, value, SET);
   }
+
+  /**
+   * Create a temporal view of this node.
+   *
+   * @param ctx TemporalContext with snapshot (valid_time, tx_time).
+   *            If nullptr, returns view of current version (no time-travel).
+   * @return NodeView that resolves version once and caches it.
+   *
+   * Usage:
+   *   TemporalContext ctx(TemporalSnapshot::as_of_valid(timestamp));
+   *   auto view = node.view(&ctx);
+   *   auto age = view.get_value_ptr(age_field);
+   */
+  NodeView view(TemporalContext *ctx = nullptr) {
+    if (!ctx) {
+      // No temporal context  > use the current version
+      return {this, handle_->version_info_, arena_.get(), layout_};
+    }
+
+    // Resolve version using TemporalContext
+    VersionInfo *resolved = ctx->resolve_version(id, *handle_);
+    return {this, resolved, arena_.get(), layout_};
+  }
 };
 
 class NodeManager {
  public:
   explicit NodeManager(std::shared_ptr<SchemaRegistry> schema_registry,
                        const bool validation_enabled = true,
-                       const bool use_node_arena = true) {
+                       const bool use_node_arena = true,
+                       const bool enable_versioning = false) {
     validation_enabled_ = validation_enabled;
     use_node_arena_ = use_node_arena;
     schema_registry_ = std::move(schema_registry);
     layout_registry_ = std::make_shared<LayoutRegistry>();
-    node_arena_ = node_arena_factory::create_free_list_arena(layout_registry_);
+    // Create arena with versioning enabled if requested
+    node_arena_ = node_arena_factory::create_free_list_arena(
+        layout_registry_, NodeArena::kInitialSize, NodeArena::kMinFragmentSize,
+        enable_versioning);
   }
 
   ~NodeManager() { node_arena_->clear(); }
@@ -191,18 +223,25 @@ class NodeManager {
 
     if (use_node_arena_) {
       NodeHandle node_handle = node_arena_->allocate_node(layout_);
-      // Logger::get_instance().debug("node has been allocated at {}",
-      //                              node_handle.ptr);
-      node_arena_->set_field_value(node_handle, layout_,
-                                   schema_->get_field("id"), Value{id});
+
+      // Initial population of v0: write directly to base node
+      // Use set_field_value_v0 for all fields (doesn't create versions)
+      if (!node_arena_->set_field_value_v0(
+              node_handle, layout_, schema_->get_field("id"), Value{id})) {
+        return arrow::Status::Invalid("Failed to set id field");
+      }
+
       for (const auto &field : schema_->fields()) {
         if (field->name() == "id") continue;
-        if (!data.contains(field->name())) {
-          // Logger::get_instance().debug("{} set NA value", field->name());
-          node_arena_->set_field_value(node_handle, layout_, field, Value());
-        } else {
-          const auto value = data.find(field->name())->second;
-          node_arena_->set_field_value(node_handle, layout_, field, value);
+
+        Value value;
+        if (data.contains(field->name())) {
+          value = data.find(field->name())->second;
+        }  // else: Value() = NULL
+
+        if (!node_arena_->set_field_value_v0(node_handle, layout_, field,
+                                             value)) {
+          return arrow::Status::Invalid("Failed to set field ", field->name());
         }
       }
 
@@ -279,6 +318,59 @@ class NodeManager {
     layout_ = create_or_get_layout(schema_name);
   }
 };
+
+// ============================================================================
+// NodeView inline implementations (after Node is fully defined)
+// ============================================================================
+
+inline arrow::Result<const char *> NodeView::get_value_ptr(
+    const std::shared_ptr<Field> &field) const {
+  assert(arena_ != nullptr && "NodeView created with null arena");
+  assert(node_ != nullptr && "NodeView created with null node");
+
+  if (resolved_version_ == nullptr) {
+    // Non-versioned node -> delegate to Node
+    return node_->get_value_ptr(field);
+  }
+
+  const NodeHandle *handle = node_->get_handle();
+  assert(handle != nullptr && "Versioned node must have a handle");
+
+  return arena_->get_field_value_ptr_from_version(*handle, resolved_version_,
+                                                  layout_, field);
+}
+
+inline arrow::Result<Value> NodeView::get_value(
+    const std::shared_ptr<Field> &field) const {
+  assert(arena_ != nullptr && "NodeView created with null arena");
+  assert(node_ != nullptr && "NodeView created with null node");
+
+  if (resolved_version_ == nullptr) {
+    // Non-versioned node -> delegate to Node
+    return node_->get_value(field);
+  }
+
+  const NodeHandle *handle = node_->get_handle();
+  assert(handle != nullptr && "Versioned node must have a handle");
+
+  return arena_->get_field_value_from_version(*handle, resolved_version_,
+                                              layout_, field);
+}
+
+inline bool NodeView::is_visible() const {
+  assert(arena_ != nullptr && "NodeView created with null arena");
+  assert(node_ != nullptr && "NodeView created with null node");
+  const NodeHandle *handle = node_->get_handle();
+  assert(handle != nullptr && "Node must have a handle");
+
+  // Non-versioned nodes are always visible
+  if (!handle->is_versioned()) {
+    return true;
+  }
+
+  // For versioned nodes, check if we found a visible version at the snapshot
+  return resolved_version_ != nullptr;
+}
 
 }  // namespace tundradb
 

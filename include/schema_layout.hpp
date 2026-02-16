@@ -84,14 +84,14 @@ class SchemaLayout {
   /**
    * Get the size of the bit set in bytes
    */
-  size_t get_bitset_size() const {
+  [[nodiscard]] size_t get_bitset_size() const {
     return get_bitset_size_bytes(fields_.size());
   }
 
   /**
    * Get the offset where actual field data starts (after bit set + alignment)
    */
-  size_t get_data_offset() const { return data_offset_; }
+  [[nodiscard]] size_t get_data_offset() const { return data_offset_; }
 
   /**
    * Finalize the layout - adds padding to ensure proper alignment
@@ -107,7 +107,7 @@ class SchemaLayout {
   /**
    * Get the total size including bit set and data
    */
-  size_t get_total_size_with_bitset() const {
+  [[nodiscard]] size_t get_total_size_with_bitset() const {
     return data_offset_ + total_size_;
   }
 
@@ -146,6 +146,22 @@ class SchemaLayout {
   Value get_field_value(const char* node_data,
                         const std::shared_ptr<Field>& field) const {
     return get_field_value(node_data, field->index_);
+  }
+
+  /**
+   * Get field value directly from field pointer (no address math).
+   * Used by versioning when we already have the exact field data pointer.
+   *
+   * @param field_ptr Direct pointer to field data (from updated_fields)
+   * @param field_layout Field layout for type information
+   * @return Value read from field_ptr
+   */
+  Value get_field_value_from_ptr(const char* field_ptr,
+                                 const FieldLayout& field_layout) const {
+    if (field_ptr == nullptr) {
+      return Value{};  // Explicit NULL
+    }
+    return Value::read_value_from_memory(field_ptr, field_layout.type);
   }
 
   /**
@@ -331,7 +347,7 @@ class LayoutRegistry {
     return layouts_.erase(schema_name) > 0;
   }
 
-  std::vector<std::string> get_schema_names() const {
+  [[nodiscard]] std::vector<std::string> get_schema_names() const {
     std::vector<std::string> names;
     names.reserve(layouts_.size());
     for (auto const& entry : layouts_) {

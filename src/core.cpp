@@ -1,5 +1,7 @@
 #include "../include/core.hpp"
 
+#include "../include/temporal_context.hpp"
+
 using namespace tundradb;
 
 #include <arrow/dataset/dataset.h>
@@ -206,13 +208,16 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
     log_debug("Adding data from {} nodes to builders", nodes.size());
   }
   for (const auto& node : nodes) {
+    // Create temporal view (nullptr = current version)
+    auto view = node->view(nullptr);
+
     // Add each field's value to the appropriate builder
     for (int i = 0; i < schema->num_fields(); i++) {
       auto field = schema->field(i);
       const auto& field_name = field->name();
 
       // Find the value in the node's data
-      auto res = node->get_value_ptr(field);
+      auto res = view.get_value_ptr(field);
       if (res.ok()) {
         // Convert Value to Arrow scalar and append to builder
         auto value = res.ValueOrDie();
@@ -440,6 +445,9 @@ struct QueryState {
   std::shared_ptr<NodeManager> node_manager;
   std::shared_ptr<SchemaRegistry> schema_registry;
   std::vector<Traverse> traversals;
+
+  // Temporal context for time-travel queries (nullptr = current version)
+  std::unique_ptr<TemporalContext> temporal_context;
 
   // Connection object pooling to avoid repeated allocations
   class ConnectionPool {
@@ -791,13 +799,20 @@ struct Row {
 
   // Optimized: set cells from node using field indices
   void set_cell_from_node(const std::vector<int>& field_indices,
-                          const std::shared_ptr<Node>& node) {
+                          const std::shared_ptr<Node>& node,
+                          TemporalContext* temporal_context) {
+    // Create temporal view (nullptr = current version)
+    auto view = node->view(temporal_context);
+
     const auto& fields = node->get_schema()->fields();
     const size_t n = std::min(fields.size(), field_indices.size());
     for (size_t i = 0; i < n; ++i) {
       const auto& field = fields[i];
       const int field_id = field_indices[i];
-      this->set_cell(field_id, node->get_value_ref(field));
+      auto value_ref_result = view.get_value_ref(field);
+      if (value_ref_result.ok()) {
+        this->set_cell(field_id, value_ref_result.ValueOrDie());
+      }
     }
   }
 
@@ -1307,7 +1322,8 @@ populate_rows_bfs(int64_t node_id, const SchemaRef& start_schema,
             "Missing precomputed fq_field_names for alias {}",
             item.schema_ref.value());
       }
-      item.row->set_cell_from_node(it_fq->second, node);
+      item.row->set_cell_from_node(it_fq->second, node,
+                                   query_state.temporal_context.get());
       const uint64_t packed = hash_code_(item.schema_ref, item.node_id);
       global_visited.insert(packed);
       item.path_visited_nodes.insert(packed);
@@ -1946,6 +1962,17 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
   QueryState query_state;
   auto result = std::make_shared<QueryResult>();
 
+  // Initialize temporal context if AS OF clause is present
+  if (query.temporal_snapshot().has_value()) {
+    query_state.temporal_context =
+        std::make_unique<TemporalContext>(query.temporal_snapshot().value());
+    IF_DEBUG_ENABLED {
+      log_debug("Temporal query: AS OF VALIDTIME={}, TXNTIME={}",
+                query_state.temporal_context->snapshot().valid_time,
+                query_state.temporal_context->snapshot().tx_time);
+    }
+  }
+
   // Pre-size hash maps to avoid expensive resizing during execution
   query_state.reserve_capacity(query);
 
@@ -1970,7 +1997,9 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
       log_error("schema '{}' doesn't exist", source_schema);
       return arrow::Status::KeyError("schema doesn't exit: {}", source_schema);
     }
-    ARROW_ASSIGN_OR_RAISE(auto source_table, this->get_table(source_schema));
+    ARROW_ASSIGN_OR_RAISE(
+        auto source_table,
+        this->get_table(source_schema, query_state.temporal_context.get()));
     ARROW_RETURN_NOT_OK(query_state.update_table(source_table, query.from()));
     if (auto res = query_state.compute_fully_qualified_names(query.from(),
                                                              source_schema);
@@ -2109,8 +2138,10 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
             log_debug("Source table '{}' not found. Loading",
                       traverse->source().toString());
           }
-          ARROW_ASSIGN_OR_RAISE(auto source_table,
-                                this->get_table(source_schema));
+          ARROW_ASSIGN_OR_RAISE(
+              auto source_table,
+              this->get_table(source_schema,
+                              query_state.temporal_context.get()));
           ARROW_RETURN_NOT_OK(
               query_state.update_table(source_table, traverse->source()));
         }
@@ -2246,7 +2277,9 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
               matched_target_ids.begin(), matched_target_ids.end());
         } else {  // Right, Full remove nodes with incoming connections
           auto target_ids =
-              get_ids_from_table(get_table(target_schema).ValueOrDie())
+              get_ids_from_table(
+                  get_table(target_schema, query_state.temporal_context.get())
+                      .ValueOrDie())
                   .ValueOrDie();
           IF_DEBUG_ENABLED {
             log_debug(

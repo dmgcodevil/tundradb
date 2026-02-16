@@ -14,6 +14,7 @@
 
 #include "node.hpp"
 #include "schema.hpp"
+#include "temporal_context.hpp"
 #include "types.hpp"
 
 namespace tundradb {
@@ -809,16 +810,19 @@ class Query {
   std::shared_ptr<Select> select_;
   bool inline_where_;
   ExecutionConfig execution_config_;
+  std::optional<TemporalSnapshot> temporal_snapshot_;
 
  public:
   Query(SchemaRef from, std::vector<std::shared_ptr<Clause>> clauses,
         std::shared_ptr<Select> select, bool optimize_where,
-        ExecutionConfig execution_config)
+        ExecutionConfig execution_config,
+        std::optional<TemporalSnapshot> temporal_snapshot = std::nullopt)
       : from_(std::move(from)),
         clauses_(std::move(clauses)),
         select_(std::move(select)),
         inline_where_(optimize_where),
-        execution_config_(execution_config) {}
+        execution_config_(execution_config),
+        temporal_snapshot_(std::move(temporal_snapshot)) {}
 
   class Builder;
   [[nodiscard]] const SchemaRef& from() const { return from_; }
@@ -834,6 +838,11 @@ class Query {
     return execution_config_;
   }
 
+  [[nodiscard]] const std::optional<TemporalSnapshot>& temporal_snapshot()
+      const {
+    return temporal_snapshot_;
+  }
+
   static Builder from(const std::string& schema) { return Builder(schema); }
 
   class Builder {
@@ -843,6 +852,7 @@ class Query {
     std::shared_ptr<Select> select_;
     bool inline_where_ = false;
     ExecutionConfig execution_config_;
+    std::optional<TemporalSnapshot> temporal_snapshot_;
 
    public:
     explicit Builder(const std::string& schema)
@@ -936,9 +946,46 @@ class Query {
       return *this;
     }
 
+    /**
+     * Set valid time for temporal query (AS OF VALIDTIME).
+     * @param timestamp Nanosecond timestamp for valid time dimension
+     */
+    Builder& as_of_valid_time(uint64_t timestamp) {
+      if (!temporal_snapshot_.has_value()) {
+        temporal_snapshot_ = TemporalSnapshot::as_of_valid(timestamp);
+      } else {
+        temporal_snapshot_->valid_time = timestamp;
+      }
+      return *this;
+    }
+
+    /**
+     * Set transaction time for temporal query (AS OF TXNTIME).
+     * @param timestamp Nanosecond timestamp for transaction time dimension
+     */
+    Builder& as_of_tx_time(uint64_t timestamp) {
+      if (!temporal_snapshot_.has_value()) {
+        temporal_snapshot_ = TemporalSnapshot::as_of_tx(timestamp);
+      } else {
+        temporal_snapshot_->tx_time = timestamp;
+      }
+      return *this;
+    }
+
+    /**
+     * Set both valid and transaction times for bitemporal query.
+     * @param valid_timestamp Valid time (when fact was true in domain)
+     * @param tx_timestamp Transaction time (when DB recorded it)
+     */
+    Builder& as_of(uint64_t valid_timestamp, uint64_t tx_timestamp) {
+      temporal_snapshot_ = TemporalSnapshot{valid_timestamp, tx_timestamp};
+      return *this;
+    }
+
     Query build() {
-      return {from_, std::move(clauses_), std::move(select_), inline_where_,
-              execution_config_};
+      return {
+          from_,         std::move(clauses_), std::move(select_),
+          inline_where_, execution_config_,   std::move(temporal_snapshot_)};
     }
   };
 };
