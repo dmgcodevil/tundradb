@@ -233,7 +233,9 @@ TEST_F(DatabaseTest, CreateDbAndSnapshot) {
   auto manifest_json =
       read_json_file<nlohmann::json>(manifest_path).ValueOrDie();
   EXPECT_EQ(manifest_json["edge_id_seq"], 0);
-  EXPECT_EQ(manifest_json["node_id_seq"], 0);
+  // node_id_seq is now per-schema (a map)
+  EXPECT_TRUE(manifest_json["node_id_seq_per_schema"].is_object());
+  EXPECT_TRUE(manifest_json["node_id_seq_per_schema"].empty());  // No schemas yet
   EXPECT_EQ(manifest_json["shard_id_seq"], 0);
   EXPECT_TRUE(manifest_json["edges"].empty());
   EXPECT_TRUE(manifest_json["shards"].empty());

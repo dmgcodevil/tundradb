@@ -336,7 +336,7 @@ constexpr bool is_warn_enabled() {
   } while (0)
 
 // Conditional code blocks - completely eliminated when disabled
-#define IF_DEBUG_ENABLED if constexpr (true)
+#define IF_DEBUG_ENABLED if constexpr (is_debug_enabled())
 
 #define IF_INFO_ENABLED if constexpr (is_info_enabled())
 

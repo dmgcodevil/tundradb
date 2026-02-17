@@ -541,7 +541,6 @@ struct QueryState {
     for (const auto& f : schema->fields()) {
       std::string fq_name = alias + "." + f->name();
       int field_id = next_field_id.fetch_add(1);
-
       names.emplace_back(fq_name);
       indices.emplace_back(field_id);
       field_id_to_name[field_id] = fq_name;
