@@ -1312,9 +1312,10 @@ populate_rows_bfs(int64_t node_id, const SchemaRef& start_schema,
       auto item = queue.front();
       queue.pop();
       auto item_schema = item.schema_ref.is_declaration()
-                ? item.schema_ref.schema()
-                : query_state.aliases.at(item.schema_ref.value());
-      auto node = query_state.node_manager->get_node(item_schema, item.node_id).ValueOrDie();
+                             ? item.schema_ref.schema()
+                             : query_state.aliases.at(item.schema_ref.value());
+      auto node = query_state.node_manager->get_node(item_schema, item.node_id)
+                      .ValueOrDie();
       const auto& it_fq =
           query_state.schema_field_indices.find(item.schema_ref.value());
       if (it_fq == query_state.schema_field_indices.end()) {
@@ -2172,7 +2173,8 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
                      .contains(target_id)) {
               continue;
             }
-            auto node_result = node_manager_->get_node(target_schema, target_id);
+            auto node_result =
+                node_manager_->get_node(target_schema, target_id);
             if (node_result.ok()) {
               const auto target_node = node_result.ValueOrDie();
               if (target_node->schema_name == target_schema) {
@@ -2283,21 +2285,21 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
                   get_table(target_schema, query_state.temporal_context.get())
                       .ValueOrDie())
                   .ValueOrDie();
-          
+
           llvm::DenseSet<int64_t> result;
-          
+
           // Check if this is a self-join (same schema for source and target)
           if (source_schema == target_schema) {
             // Self-join: Exclude nodes that were sources with matches
-            // (prevents same node appearing as both source and unmatched target)
+            // (prevents same node appearing as both source and unmatched
+            // target)
             dense_difference(target_ids, matched_source_ids, result);
             IF_DEBUG_ENABLED {
               log_debug(
                   "traverse type: '{}' (Right/Full, self-join), "
                   "matched_source_ids=[{}], unmatched_targets=[{}], total={}",
                   traverse->target().value(),
-                  join_container(matched_source_ids),
-                  join_container(result),
+                  join_container(matched_source_ids), join_container(result),
                   result.size());
             }
           } else {
@@ -2313,11 +2315,10 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
                   "matched_targets=[{}], unmatched_targets=[{}], total={}",
                   traverse->target().value(),
                   join_container(matched_target_ids),
-                  join_container(unmatched_targets),
-                  result.size());
+                  join_container(unmatched_targets), result.size());
             }
           }
-          
+
           query_state.ids[traverse->target().value()] = result;
         }
 

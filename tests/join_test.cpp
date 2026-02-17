@@ -470,8 +470,9 @@ TEST(JoinTest, MultiPathToSameTarget) {
           .traverse("f", "works-at", "c2:companies", TraverseType::Inner)
           .where("c1.id", CompareOp::Eq,
                  Value((int64_t)0))  // Filter for alex's company (IBM ID 0)
-          .where("c2.id", CompareOp::Eq,
-                 Value((int64_t)0))  // Filter for friend's company (also IBM ID 0)
+          .where(
+              "c2.id", CompareOp::Eq,
+              Value((int64_t)0))  // Filter for friend's company (also IBM ID 0)
           .build();
 
   auto query_result = db->query(query);
@@ -1521,10 +1522,12 @@ TEST(JoinTest, MultiPatternPathThroughFriends) {
   }
 
   // Create relationships
-  db_custom->connect(0, "FRIEND", 1).ValueOrDie();    // Alex -> Bob
-  db_custom->connect(1, "FRIEND", 0).ValueOrDie();    // Bob -> Alex
-  db_custom->connect(0, "WORKS_AT", 0).ValueOrDie();  // Alex -> Google (Company ID 0)
-  db_custom->connect(1, "WORKS_AT", 1).ValueOrDie();  // Bob -> IBM (Company ID 1)
+  db_custom->connect(0, "FRIEND", 1).ValueOrDie();  // Alex -> Bob
+  db_custom->connect(1, "FRIEND", 0).ValueOrDie();  // Bob -> Alex
+  db_custom->connect(0, "WORKS_AT", 0)
+      .ValueOrDie();  // Alex -> Google (Company ID 0)
+  db_custom->connect(1, "WORKS_AT", 1)
+      .ValueOrDie();  // Bob -> IBM (Company ID 1)
 
   // Run the query: MATCH (u:User)-[:FRIEND INNER]->(f:User), (f)-[:WORKS_AT
   // INNER]->(c:Company)

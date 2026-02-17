@@ -187,11 +187,12 @@ TEST_F(TemporalQueryTest, MultipleFieldUpdateAtSameTime) {
 
   // Update both age and active at t1
   mock_clock_.set_time(t1_);
-  auto update1 = db_->update_node("User", user_id, "age", Value(31), UpdateType::SET);
+  auto update1 =
+      db_->update_node("User", user_id, "age", Value(31), UpdateType::SET);
   ASSERT_TRUE(update1.ok());
 
-  auto update2 =
-      db_->update_node("User", user_id, "active", Value(false), UpdateType::SET);
+  auto update2 = db_->update_node("User", user_id, "active", Value(false),
+                                  UpdateType::SET);
   ASSERT_TRUE(update2.ok());
 
   // Query at current time: should see age=31, active=false
@@ -224,13 +225,15 @@ TEST_F(TemporalQueryTest, ClockAdvanceAndQuery) {
   // Advance time and update
   mock_clock_.advance_seconds(1);  // 1 second after t0
   uint64_t update1_time = mock_clock_.now_nanos();
-  auto update1 = db_->update_node("User", user_id, "age", Value(36), UpdateType::SET);
+  auto update1 =
+      db_->update_node("User", user_id, "age", Value(36), UpdateType::SET);
   ASSERT_TRUE(update1.ok());
 
   // Advance time and update again
   mock_clock_.advance_seconds(1);  // 2 seconds after t0
   uint64_t update2_time = mock_clock_.now_nanos();
-  auto update2 = db_->update_node("User", user_id, "age", Value(37), UpdateType::SET);
+  auto update2 =
+      db_->update_node("User", user_id, "age", Value(37), UpdateType::SET);
   ASSERT_TRUE(update2.ok());
 
   // Query current: should see age=37
@@ -299,12 +302,14 @@ TEST_F(TemporalQueryTest, BitemporalQueryWithUpdates) {
 
   // Update at t1
   mock_clock_.set_time(t1_);
-  auto update1 = db_->update_node("User", user_id, "age", Value(41), UpdateType::SET);
+  auto update1 =
+      db_->update_node("User", user_id, "age", Value(41), UpdateType::SET);
   ASSERT_TRUE(update1.ok());
 
   // Update at t2
   mock_clock_.set_time(t2_);
-  auto update2 = db_->update_node("User", user_id, "age", Value(42), UpdateType::SET);
+  auto update2 =
+      db_->update_node("User", user_id, "age", Value(42), UpdateType::SET);
   ASSERT_TRUE(update2.ok());
 
   // ========================================================================
@@ -369,7 +374,8 @@ TEST_F(TemporalQueryTest, TemporalQueryBetweenUpdateTimes) {
 
   // Update at t1
   mock_clock_.set_time(t1_);
-  auto update1 = db_->update_node("User", user_id, "age", Value(51), UpdateType::SET);
+  auto update1 =
+      db_->update_node("User", user_id, "age", Value(51), UpdateType::SET);
   ASSERT_TRUE(update1.ok());
 
   // Calculate midpoint between t0 and t1
@@ -583,12 +589,14 @@ TEST_F(TemporalQueryTest, NullFieldInVersionChain) {
 
   // Update age to 30 at t1
   mock_clock_.set_time(t1_);
-  auto update1 = db_->update_node("User", user_id, "age", Value(30), UpdateType::SET);
+  auto update1 =
+      db_->update_node("User", user_id, "age", Value(30), UpdateType::SET);
   ASSERT_TRUE(update1.ok());
 
   // Update age to NULL at t2
   mock_clock_.set_time(t2_);
-  auto update2 = db_->update_node("User", user_id, "age", Value(), UpdateType::SET);
+  auto update2 =
+      db_->update_node("User", user_id, "age", Value(), UpdateType::SET);
   ASSERT_TRUE(update2.ok());
 
   // Query at t0: should see age=25
@@ -697,7 +705,8 @@ TEST_F(TemporalQueryTest, MultipleNodesIndependentVersions) {
   int64_t bob_id = create_simple_user("Bob", 30);
 
   mock_clock_.set_time(t2_);
-  auto bob_update = db_->update_node("User", bob_id, "age", Value(31), UpdateType::SET);
+  auto bob_update =
+      db_->update_node("User", bob_id, "age", Value(31), UpdateType::SET);
   ASSERT_TRUE(bob_update.ok());
 
   // Query at t0: should see only Alice (age=25)
@@ -774,8 +783,8 @@ TEST_F(TemporalQueryTest, VersioningDisabledFallback) {
 
   // Update to age=26
   mock_clock_.set_time(t1_);
-  auto update_result =
-      db_no_version->update_node("User", user_id, "age", Value(26), UpdateType::SET);
+  auto update_result = db_no_version->update_node("User", user_id, "age",
+                                                  Value(26), UpdateType::SET);
   ASSERT_TRUE(update_result.ok());
 
   // Temporal query at t0 (should return CURRENT version, not historical)

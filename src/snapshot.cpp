@@ -203,14 +203,15 @@ arrow::Result<Snapshot> SnapshotManager::commit() {
   std::stringstream node_counters_str;
   node_counters_str << "{";
   size_t idx = 0;
-  for (const auto& [schema_name, counter] : new_manifest.node_id_seq_per_schema) {
+  for (const auto &[schema_name, counter] :
+       new_manifest.node_id_seq_per_schema) {
     node_counters_str << schema_name << ":" << counter;
     if (idx++ < new_manifest.node_id_seq_per_schema.size() - 1) {
       node_counters_str << ", ";
     }
   }
   node_counters_str << "}";
-  
+
   log_info("Saving counters: edge_id_seq=" +
            std::to_string(new_manifest.edge_id_seq) +
            ", node_id_seq_per_schema=" + node_counters_str.str() +

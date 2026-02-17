@@ -88,7 +88,7 @@ TEST_F(NodeTest, NodeManagerGetNode) {
   int64_t node_id = original_node->id;
 
   // Retrieve node
-  auto retrieved_result = node_manager_->get_node("User",node_id);
+  auto retrieved_result = node_manager_->get_node("User", node_id);
   ASSERT_TRUE(retrieved_result.ok());
 
   auto retrieved_node = retrieved_result.ValueOrDie();
@@ -112,15 +112,15 @@ TEST_F(NodeTest, NodeManagerRemoveNode) {
   int64_t node_id = node->id;
 
   // Verify node exists
-  auto get_result = node_manager_->get_node("User",node_id);
+  auto get_result = node_manager_->get_node("User", node_id);
   ASSERT_TRUE(get_result.ok());
 
   // Remove node
-  bool removed = node_manager_->remove_node("User",node_id);
+  bool removed = node_manager_->remove_node("User", node_id);
   EXPECT_TRUE(removed);
 
   // Verify node no longer exists
-  auto get_result_after = node_manager_->get_node("User",node_id);
+  auto get_result_after = node_manager_->get_node("User", node_id);
   // EXPECT_FALSE(get_result_after.ok()) << "Node should not exist after
   // removal";
 }
@@ -417,8 +417,8 @@ TEST_F(NodeTest, MultipleNodesAndIdCounter) {
   EXPECT_EQ(node_manager_->get_id_counter("User"), 102);
 
   // Verify both nodes exist and are different
-  auto get1_result = node_manager_->get_node("User",100);
-  auto get2_result = node_manager_->get_node("User",101);
+  auto get1_result = node_manager_->get_node("User", 100);
+  auto get2_result = node_manager_->get_node("User", 101);
 
   ASSERT_TRUE(get1_result.ok());
   ASSERT_TRUE(get2_result.ok());
@@ -453,7 +453,7 @@ TEST_F(NodeTest, PerformanceTest) {
 
   // Access all nodes and verify data
   for (int i = 0; i < num_nodes; ++i) {
-    auto node_result = node_manager_->get_node("User",node_ids[i]);
+    auto node_result = node_manager_->get_node("User", node_ids[i]);
     ASSERT_TRUE(node_result.ok()) << "Failed to get node " << i;
 
     auto node = node_result.ValueOrDie();
