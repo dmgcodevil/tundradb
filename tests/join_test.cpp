@@ -970,7 +970,7 @@ TEST(JoinTest, MultiLevelLeftJoin) {
                       l_id_col->GetScalar(i).ValueOrDie())
                       ->value;
 
-      if (u_id == 0 && f_id == 2 && l_id == 5) {
+      if (u_id == 0 && f_id == 2 && l_id == 0) {  // l_id=0 (IBM per-schema)
         found_alex_jeff_ibm = true;
         break;
       }
