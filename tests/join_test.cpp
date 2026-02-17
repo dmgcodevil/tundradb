@@ -112,7 +112,7 @@ TEST(JoinTest, UserFriendCompanyInnerJoin) {
   auto db = setup_test_db();
 
   db->connect(0, "friend", 1).ValueOrDie();
-  db->connect(1, "works-at", 6).ValueOrDie();
+  db->connect(1, "works-at", 1).ValueOrDie();
 
   Query query =
       Query::from("u:users")
@@ -144,7 +144,7 @@ TEST(JoinTest, UserFriendCompanyInnerJoin) {
   expected_cells["f.name"] = arrow::MakeScalar("bob");
   expected_cells["f.age"] = arrow::MakeScalar((int64_t)31);
 
-  expected_cells["c.id"] = arrow::MakeScalar((int64_t)6);
+  expected_cells["c.id"] = arrow::MakeScalar((int64_t)1);
   expected_cells["c.name"] = arrow::MakeScalar("google");
   expected_cells["c.size"] = arrow::MakeScalar((int64_t)3000);
 
@@ -248,7 +248,7 @@ TEST(JoinTest, InnerJoinFromSameNodeMultiTarget) {
   auto db = setup_test_db();
   db->connect(0, "friend", 1).ValueOrDie();    // alex -> bob
   db->connect(0, "friend", 2).ValueOrDie();    // alex -> jeff
-  db->connect(0, "works-at", 6).ValueOrDie();  // alex -> google
+  db->connect(0, "works-at", 1).ValueOrDie();  // alex -> google
 
   Query query =
       Query::from("u:users")
@@ -282,7 +282,7 @@ TEST(JoinTest, InnerJoinFromSameNodeMultiTarget) {
     expected_row1["f.name"] = arrow::MakeScalar("bob");
     expected_row1["f.age"] = arrow::MakeScalar((int64_t)31);
     // Google (company)
-    expected_row1["c.id"] = arrow::MakeScalar((int64_t)6);
+    expected_row1["c.id"] = arrow::MakeScalar((int64_t)1);
     expected_row1["c.name"] = arrow::MakeScalar("google");
     expected_row1["c.size"] = arrow::MakeScalar((int64_t)3000);
 
@@ -312,7 +312,7 @@ TEST(JoinTest, InnerJoinFromSameNodeMultiTarget) {
     expected_row2["f.name"] = arrow::MakeScalar("jeff");
     expected_row2["f.age"] = arrow::MakeScalar((int64_t)33);
     // Google (company)
-    expected_row2["c.id"] = arrow::MakeScalar((int64_t)6);
+    expected_row2["c.id"] = arrow::MakeScalar((int64_t)1);
     expected_row2["c.name"] = arrow::MakeScalar("google");
     expected_row2["c.size"] = arrow::MakeScalar((int64_t)3000);
 
@@ -334,9 +334,9 @@ TEST(JoinTest, InnerJoinFromSameNodeAndEndConnections) {
   auto db = setup_test_db();
   db->connect(0, "friend", 1).ValueOrDie();    // alex -> bob
   db->connect(0, "friend", 2).ValueOrDie();    // alex -> jeff
-  db->connect(0, "works-at", 5).ValueOrDie();  // alex -> ibm
-  db->connect(1, "works-at", 6).ValueOrDie();  // bob -> google
-  db->connect(2, "works-at", 7).ValueOrDie();  // jeff -> aws
+  db->connect(0, "works-at", 0).ValueOrDie();  // alex -> ibm
+  db->connect(1, "works-at", 1).ValueOrDie();  // bob -> google
+  db->connect(2, "works-at", 2).ValueOrDie();  // jeff -> aws
 
   Query query =
       Query::from("u:users")
@@ -371,7 +371,7 @@ TEST(JoinTest, InnerJoinFromSameNodeAndEndConnections) {
     expected_row1["f.name"] = arrow::MakeScalar("bob");
     expected_row1["f.age"] = arrow::MakeScalar((int64_t)31);
     // IBM (company)
-    expected_row1["c.id"] = arrow::MakeScalar((int64_t)5);
+    expected_row1["c.id"] = arrow::MakeScalar((int64_t)0);
     expected_row1["c.name"] = arrow::MakeScalar("ibm");
     expected_row1["c.size"] = arrow::MakeScalar((int64_t)1000);
 
@@ -401,7 +401,7 @@ TEST(JoinTest, InnerJoinFromSameNodeAndEndConnections) {
     expected_row2["f.name"] = arrow::MakeScalar("jeff");
     expected_row2["f.age"] = arrow::MakeScalar((int64_t)33);
     // IBM (company)
-    expected_row2["c.id"] = arrow::MakeScalar((int64_t)5);
+    expected_row2["c.id"] = arrow::MakeScalar((int64_t)0);
     expected_row2["c.name"] = arrow::MakeScalar("ibm");
     expected_row2["c.size"] = arrow::MakeScalar((int64_t)1000);
 
@@ -424,7 +424,7 @@ TEST(JoinTest, EmptyResultFromInnerJoin) {
   // Create relationships that will result in empty results due to inner join
   db->connect(0, "friend", 1).ValueOrDie();    // alex -> bob (friend)
   db->connect(1, "friend", 2).ValueOrDie();    // bob -> jeff (friend)
-  db->connect(1, "works-at", 6).ValueOrDie();  // bob -> google
+  db->connect(1, "works-at", 1).ValueOrDie();  // bob -> google
   // But no connections for jeff to any company
 
   // Query that will return no results because jeff doesn't work anywhere
@@ -457,10 +457,10 @@ TEST(JoinTest, MultiPathToSameTarget) {
   // Create multiple paths to the same target
   db->connect(0, "friend", 1).ValueOrDie();    // alex -> bob
   db->connect(0, "friend", 2).ValueOrDie();    // alex -> jeff
-  db->connect(0, "works-at", 5).ValueOrDie();  // alex -> ibm
-  db->connect(1, "works-at", 5)
+  db->connect(0, "works-at", 0).ValueOrDie();  // alex -> ibm
+  db->connect(1, "works-at", 0)
       .ValueOrDie();  // bob -> ibm (same company as alex)
-  db->connect(2, "works-at", 6).ValueOrDie();  // jeff -> google
+  db->connect(2, "works-at", 1).ValueOrDie();  // jeff -> google
 
   // Query: Find all friends of alex who work at the same company as alex
   Query query =
@@ -469,9 +469,10 @@ TEST(JoinTest, MultiPathToSameTarget) {
           .traverse("u", "works-at", "c1:companies", TraverseType::Inner)
           .traverse("f", "works-at", "c2:companies", TraverseType::Inner)
           .where("c1.id", CompareOp::Eq,
-                 Value((int64_t)5))  // Filter for alex's company (IBM)
-          .where("c2.id", CompareOp::Eq,
-                 Value((int64_t)5))  // Filter for friend's company (also IBM)
+                 Value((int64_t)0))  // Filter for alex's company (IBM ID 0)
+          .where(
+              "c2.id", CompareOp::Eq,
+              Value((int64_t)0))  // Filter for friend's company (also IBM ID 0)
           .build();
 
   auto query_result = db->query(query);
@@ -498,11 +499,11 @@ TEST(JoinTest, MultiPathToSameTarget) {
   expected_row["f.name"] = arrow::MakeScalar("bob");
   expected_row["f.age"] = arrow::MakeScalar((int64_t)31);
   // c1 is IBM (alex's company)
-  expected_row["c1.id"] = arrow::MakeScalar((int64_t)5);
+  expected_row["c1.id"] = arrow::MakeScalar((int64_t)0);
   expected_row["c1.name"] = arrow::MakeScalar("ibm");
   expected_row["c1.size"] = arrow::MakeScalar((int64_t)1000);
   // c2 is also IBM (bob's company)
-  expected_row["c2.id"] = arrow::MakeScalar((int64_t)5);
+  expected_row["c2.id"] = arrow::MakeScalar((int64_t)0);
   expected_row["c2.name"] = arrow::MakeScalar("ibm");
   expected_row["c2.size"] = arrow::MakeScalar((int64_t)1000);
 
@@ -526,14 +527,14 @@ TEST(JoinTest, CartesianProductExplosion) {
   db->connect(0, "friend", 2).ValueOrDie();  // alex -> jeff
   db->connect(0, "friend", 3).ValueOrDie();  // alex -> sam
 
-  db->connect(1, "works-at", 5).ValueOrDie();  // bob -> ibm
-  db->connect(1, "works-at", 6).ValueOrDie();  // bob -> google
+  db->connect(1, "works-at", 0).ValueOrDie();  // bob -> ibm
+  db->connect(1, "works-at", 1).ValueOrDie();  // bob -> google
 
-  db->connect(2, "works-at", 6).ValueOrDie();  // jeff -> google
-  db->connect(2, "works-at", 7).ValueOrDie();  // jeff -> aws
+  db->connect(2, "works-at", 1).ValueOrDie();  // jeff -> google
+  db->connect(2, "works-at", 2).ValueOrDie();  // jeff -> aws
 
-  db->connect(3, "works-at", 5).ValueOrDie();  // sam -> ibm
-  db->connect(3, "works-at", 7).ValueOrDie();  // sam -> aws
+  db->connect(3, "works-at", 0).ValueOrDie();  // sam -> ibm
+  db->connect(3, "works-at", 2).ValueOrDie();  // sam -> aws
 
   // Query: Friends of alex and where they work
   // Results in 3 friends × ~2 companies each = ~6 rows total
@@ -581,7 +582,7 @@ TEST(JoinTest, LeftJoin) {
   // Create relationships where some nodes don't have target matches
   db->connect(0, "friend", 1).ValueOrDie();    // alex -> bob
   db->connect(0, "friend", 2).ValueOrDie();    // alex -> jeff
-  db->connect(1, "works-at", 6).ValueOrDie();  // bob -> google
+  db->connect(1, "works-at", 1).ValueOrDie();  // bob -> google
   // jeff has no company (will produce NULL in the results with LEFT JOIN)
 
   // LEFT JOIN: Keep all users even if they don't work at any company
@@ -613,7 +614,7 @@ TEST(JoinTest, LeftJoin) {
   bob_row["f.id"] = arrow::MakeScalar((int64_t)1);
   bob_row["f.name"] = arrow::MakeScalar("bob");
   bob_row["f.age"] = arrow::MakeScalar((int64_t)31);
-  bob_row["c.id"] = arrow::MakeScalar((int64_t)6);
+  bob_row["c.id"] = arrow::MakeScalar((int64_t)1);
   bob_row["c.name"] = arrow::MakeScalar("google");
   bob_row["c.size"] = arrow::MakeScalar((int64_t)3000);
 
@@ -691,10 +692,10 @@ TEST(JoinTest, RightJoin) {
   // Create relationships where some targets don't have matching sources
   db->connect(0, "friend", 1).ValueOrDie();    // alex -> bob
   db->connect(0, "friend", 2).ValueOrDie();    // alex -> jeff
-  db->connect(1, "works-at", 6).ValueOrDie();  // bob -> google
-  db->connect(2, "works-at", 7).ValueOrDie();  // jeff -> aws
+  db->connect(1, "works-at", 1).ValueOrDie();  // bob -> google
+  db->connect(2, "works-at", 2).ValueOrDie();  // jeff -> aws
   // Sam (id=3) has no friends but works at ibm
-  db->connect(3, "works-at", 5).ValueOrDie();  // sam -> ibm
+  db->connect(3, "works-at", 0).ValueOrDie();  // sam -> ibm
 
   // RIGHT JOIN: Keep all companies even if no users work there
   Query query =
@@ -741,11 +742,11 @@ TEST(JoinTest, CombinedJoinTypes) {
   auto db = setup_test_db();
   db->connect(0, "friend", 1).ValueOrDie();    // alex -> bob
   db->connect(0, "friend", 2).ValueOrDie();    // alex -> jeff
-  db->connect(1, "works-at", 6).ValueOrDie();  // bob -> google
+  db->connect(1, "works-at", 1).ValueOrDie();  // bob -> google
   // jeff has no company
 
   // Create a row for matt who has no friends
-  db->connect(4, "works-at", 5).ValueOrDie();  // matt -> ibm
+  db->connect(4, "works-at", 0).ValueOrDie();  // matt -> ibm
 
   // Query that combines INNER, LEFT and RIGHT joins
   Query query =
@@ -828,7 +829,7 @@ TEST(JoinTest, CombinedJoinTypes) {
                       c_id_col->GetScalar(i).ValueOrDie())
                       ->value;
 
-      if (u_id == 0 && f_id == 1 && c_id == 6) {
+      if (u_id == 0 && f_id == 1 && c_id == 1) {
         has_alex_bob_google = true;
         std::cout << "  ✓ Found alex->bob->google pattern" << std::endl;
       }
@@ -857,7 +858,7 @@ TEST(JoinTest, CombinedJoinTypes) {
                       c_id_col->GetScalar(i).ValueOrDie())
                       ->value;
 
-      if (c_id == 7) {
+      if (c_id == 2) {
         has_null_null_aws = true;
         std::cout << "  ✓ Found NULL->NULL->aws pattern" << std::endl;
       }
@@ -877,8 +878,8 @@ TEST(JoinTest, MultiLevelLeftJoin) {
   db->connect(0, "friend", 1).ValueOrDie();    // alex -> bob
   db->connect(0, "friend", 2).ValueOrDie();    // alex -> jeff
   db->connect(0, "friend", 3).ValueOrDie();    // alex -> sam
-  db->connect(1, "works-at", 6).ValueOrDie();  // bob -> google
-  db->connect(2, "likes", 5).ValueOrDie();     // jeff -> ibm
+  db->connect(1, "works-at", 1).ValueOrDie();  // bob -> google
+  db->connect(2, "likes", 0).ValueOrDie();     // jeff -> ibm (Company ID 0)
   // sam has no company and no likes
 
   // Multi-level LEFT JOINs: Keep all users at each level
@@ -942,7 +943,7 @@ TEST(JoinTest, MultiLevelLeftJoin) {
                       c_id_col->GetScalar(i).ValueOrDie())
                       ->value;
 
-      if (u_id == 0 && f_id == 1 && c_id == 6) {
+      if (u_id == 0 && f_id == 1 && c_id == 1) {
         found_alex_bob_google = true;
         break;
       }
@@ -970,7 +971,7 @@ TEST(JoinTest, MultiLevelLeftJoin) {
                       l_id_col->GetScalar(i).ValueOrDie())
                       ->value;
 
-      if (u_id == 0 && f_id == 2 && l_id == 5) {
+      if (u_id == 0 && f_id == 2 && l_id == 0) {  // l_id=0 (IBM per-schema)
         found_alex_jeff_ibm = true;
         break;
       }
@@ -1128,11 +1129,11 @@ TEST(JoinTest, FullOuterJoin) {
   // Create relationships for a FULL OUTER JOIN scenario
   db->connect(0, "friend", 1).ValueOrDie();    // alex -> bob
   db->connect(0, "friend", 2).ValueOrDie();    // alex -> jeff
-  db->connect(1, "works-at", 6).ValueOrDie();  // bob -> google
+  db->connect(1, "works-at", 1).ValueOrDie();  // bob -> google
   // jeff has no company
 
   // matt (id=4) has no friends but works at ibm
-  db->connect(4, "works-at", 5).ValueOrDie();  // matt -> ibm
+  db->connect(4, "works-at", 0).ValueOrDie();  // matt -> ibm
 
   // AWS (id=7) has no employee connected directly
 
@@ -1235,7 +1236,7 @@ TEST(JoinTest, FullOuterJoin) {
                       c_id_col->GetScalar(i).ValueOrDie())
                       ->value;
 
-      if (u_id == 0 && f_id == 1 && c_id == 6) {
+      if (u_id == 0 && f_id == 1 && c_id == 1) {
         has_alex_bob_google = true;
         std::cout << "  ✓ Found alex->bob->google pattern" << std::endl;
       }
@@ -1264,7 +1265,7 @@ TEST(JoinTest, FullOuterJoin) {
                       c_id_col->GetScalar(i).ValueOrDie())
                       ->value;
 
-      if (c_id == 7) {
+      if (c_id == 2) {
         has_null_null_aws = true;
         std::cout << "  ✓ Found NULL->NULL->aws pattern" << std::endl;
       }
@@ -1284,7 +1285,7 @@ TEST(JoinTest, SelectClauseFiltering) {
   // Create some connections for our test
   db->connect(0, "friend", 1).ValueOrDie();    // alex -> bob
   db->connect(0, "friend", 2).ValueOrDie();    // alex -> jeff
-  db->connect(1, "works-at", 6).ValueOrDie();  // bob -> google
+  db->connect(1, "works-at", 1).ValueOrDie();  // bob -> google
 
   // Query with SELECT - only get user (u) and friend (f) columns
   Query query =
@@ -1521,10 +1522,12 @@ TEST(JoinTest, MultiPatternPathThroughFriends) {
   }
 
   // Create relationships
-  db_custom->connect(0, "FRIEND", 1).ValueOrDie();    // Alex -> Bob
-  db_custom->connect(1, "FRIEND", 0).ValueOrDie();    // Bob -> Alex
-  db_custom->connect(0, "WORKS_AT", 4).ValueOrDie();  // Alex -> Google
-  db_custom->connect(1, "WORKS_AT", 5).ValueOrDie();  // Bob -> IBM
+  db_custom->connect(0, "FRIEND", 1).ValueOrDie();  // Alex -> Bob
+  db_custom->connect(1, "FRIEND", 0).ValueOrDie();  // Bob -> Alex
+  db_custom->connect(0, "WORKS_AT", 0)
+      .ValueOrDie();  // Alex -> Google (Company ID 0)
+  db_custom->connect(1, "WORKS_AT", 1)
+      .ValueOrDie();  // Bob -> IBM (Company ID 1)
 
   // Run the query: MATCH (u:User)-[:FRIEND INNER]->(f:User), (f)-[:WORKS_AT
   // INNER]->(c:Company)
@@ -1620,15 +1623,15 @@ TEST(JoinTest, MultiPatternPathThroughFriends) {
     std::cout << "Row " << i << ": u.id=" << u_id << ", f.id=" << f_id
               << ", c.id=" << c_id << std::endl;
 
-    if (u_id == 0 && f_id == 1 && c_id == 5) {
+    if (u_id == 0 && f_id == 1 && c_id == 1) {
       found_alex_bob_ibm = true;
-      std::cout << "  ✓ Found Alex(ID=0)->Bob(ID=1)->IBM(ID=5) pattern by ID"
+      std::cout << "  ✓ Found Alex(ID=0)->Bob(ID=1)->IBM(ID=1) pattern by ID"
                 << std::endl;
     }
 
-    if (u_id == 1 && f_id == 0 && c_id == 4) {
+    if (u_id == 1 && f_id == 0 && c_id == 0) {
       found_bob_alex_google = true;
-      std::cout << "  ✓ Found Bob(ID=1)->Alex(ID=0)->Google(ID=4) pattern by ID"
+      std::cout << "  ✓ Found Bob(ID=1)->Alex(ID=0)->Google(ID=0) pattern by ID"
                 << std::endl;
     }
   }
@@ -1645,9 +1648,9 @@ TEST(JoinTest, MultiPatternWithSharedVars) {
   auto db = setup_test_db();
   db->connect(0, "FRIEND", 1).ValueOrDie();    // Alex -> Bob
   db->connect(0, "FRIEND", 2).ValueOrDie();    // Alex -> Jeff
-  db->connect(0, "WORKS_AT", 6).ValueOrDie();  // Alex -> Google
-  db->connect(2, "WORKS_AT", 6).ValueOrDie();  // Jeff -> Google
-  db->connect(1, "WORKS_AT", 5).ValueOrDie();
+  db->connect(0, "WORKS_AT", 1).ValueOrDie();  // Alex -> Google (Company ID 1)
+  db->connect(2, "WORKS_AT", 1).ValueOrDie();  // Jeff -> Google (Company ID 1)
+  db->connect(1, "WORKS_AT", 0).ValueOrDie();  // Bob -> IBM (Company ID 0)
 
   Query query = Query::from("u:users")
                     .traverse("u", "FRIEND", "f:users")
@@ -1708,10 +1711,10 @@ TEST(JoinTest, MultiPatternWithSharedVars) {
       f_name_col->GetScalar(0).ValueOrDie());
   ASSERT_EQ(f_name_scalar->view(), "jeff");
 
-  // Check c.id (should be 6 - google)
+  // Check c.id (should be 1 - google)
   auto c_id_scalar = std::static_pointer_cast<arrow::Int64Scalar>(
       c_id_col->GetScalar(0).ValueOrDie());
-  ASSERT_EQ(c_id_scalar->value, 6);
+  ASSERT_EQ(c_id_scalar->value, 1);
 
   auto c_name_scalar = std::static_pointer_cast<arrow::StringScalar>(
       c_name_col->GetScalar(0).ValueOrDie());

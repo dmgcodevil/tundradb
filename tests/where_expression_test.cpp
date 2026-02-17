@@ -118,9 +118,9 @@ class WhereExpressionTest : public ::testing::Test {
     db_->connect(2, "FRIEND", 4).ValueOrDie();
 
     // Create work relationships
-    db_->connect(0, "WORKS_AT", 10).ValueOrDie();  // Alice -> TechCorp
-    db_->connect(1, "WORKS_AT", 10).ValueOrDie();  // Bob -> TechCorp
-    db_->connect(2, "WORKS_AT", 11).ValueOrDie();  // Charlie -> StartupInc
+    db_->connect(0, "WORKS_AT", 0).ValueOrDie();  // Alice -> TechCorp
+    db_->connect(1, "WORKS_AT", 0).ValueOrDie();  // Bob -> TechCorp
+    db_->connect(2, "WORKS_AT", 1).ValueOrDie();  // Charlie -> StartupInc
   }
 
   std::shared_ptr<arrow::Schema> user_schema_;

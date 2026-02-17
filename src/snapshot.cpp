@@ -51,7 +51,7 @@ arrow::Result<bool> SnapshotManager::initialize() {
       log_info(this->manifest_->toString());
 
       edge_store_->set_id_seq(manifest_->edge_id_seq);
-      node_manager_->set_id_counter(manifest_->node_id_seq);
+      node_manager_->set_all_id_counters(manifest_->node_id_seq_per_schema);
       shard_manager_->set_id_counter(manifest_->shard_id_seq);
 
       // Restore index counters for each schema
@@ -197,12 +197,24 @@ arrow::Result<Snapshot> SnapshotManager::commit() {
   Manifest new_manifest;
   new_manifest.id = generate_uuid();
   new_manifest.edge_id_seq = edge_store_->get_edge_id_counter();
-  new_manifest.node_id_seq = node_manager_->get_id_counter();
+  new_manifest.node_id_seq_per_schema = node_manager_->get_all_id_counters();
   new_manifest.shard_id_seq = shard_manager_->get_id_counter();
+
+  std::stringstream node_counters_str;
+  node_counters_str << "{";
+  size_t idx = 0;
+  for (const auto &[schema_name, counter] :
+       new_manifest.node_id_seq_per_schema) {
+    node_counters_str << schema_name << ":" << counter;
+    if (idx++ < new_manifest.node_id_seq_per_schema.size() - 1) {
+      node_counters_str << ", ";
+    }
+  }
+  node_counters_str << "}";
 
   log_info("Saving counters: edge_id_seq=" +
            std::to_string(new_manifest.edge_id_seq) +
-           ", node_id_seq=" + std::to_string(new_manifest.node_id_seq) +
+           ", node_id_seq_per_schema=" + node_counters_str.str() +
            ", shard_id_seq=" + std::to_string(new_manifest.shard_id_seq));
 
   for (const auto &edge_type : edge_store_->get_edge_types()) {

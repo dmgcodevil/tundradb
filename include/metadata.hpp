@@ -312,12 +312,14 @@ struct Manifest {
   std::string id;
   std::vector<ShardMetadata> shards;
   std::vector<EdgeMetadata> edges;
-  int64_t node_id_seq = 0;
+  std::unordered_map<std::string, int64_t>
+      node_id_seq_per_schema;  // Per-schema ID counters
   int64_t edge_id_seq = 0;
   int64_t shard_id_seq = 0;
 
-  NLOHMANN_DEFINE_TYPE_INTRUSIVE(Manifest, id, shards, edges, node_id_seq,
-                                 edge_id_seq, shard_id_seq);
+  NLOHMANN_DEFINE_TYPE_INTRUSIVE(Manifest, id, shards, edges,
+                                 node_id_seq_per_schema, edge_id_seq,
+                                 shard_id_seq);
 
   std::string toString() const {
     std::stringstream ss;
@@ -333,8 +335,14 @@ struct Manifest {
          << "}";
       if (i < edges.size() - 1) ss << ", ";
     }
-    ss << "], node_id_seq=" << node_id_seq << ", edge_id_seq=" << edge_id_seq
-       << ", shard_id_seq=" << shard_id_seq << "}";
+    ss << "], node_id_seq_per_schema={";
+    size_t idx = 0;
+    for (const auto &[schema_name, counter] : node_id_seq_per_schema) {
+      ss << "'" << schema_name << "':" << counter;
+      if (idx++ < node_id_seq_per_schema.size() - 1) ss << ", ";
+    }
+    ss << "}, edge_id_seq=" << edge_id_seq << ", shard_id_seq=" << shard_id_seq
+       << "}";
     return ss.str();
   }
 

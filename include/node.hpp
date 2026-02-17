@@ -167,11 +167,28 @@ class NodeManager {
 
   ~NodeManager() { node_arena_->clear(); }
 
-  arrow::Result<std::shared_ptr<Node>> get_node(const int64_t id) {
-    return nodes[id];
+  arrow::Result<std::shared_ptr<Node>> get_node(const std::string &schema_name,
+                                                const int64_t id) {
+    auto schema_it = nodes_.find(schema_name);
+    if (schema_it == nodes_.end()) {
+      return arrow::Status::KeyError("Schema not found: ", schema_name);
+    }
+
+    auto node_it = schema_it->second.find(id);
+    if (node_it == schema_it->second.end()) {
+      return arrow::Status::KeyError("Node not found: ", schema_name, ":", id);
+    }
+
+    return node_it->second;
   }
 
-  bool remove_node(const int64_t id) { return nodes.erase(id) > 0; }
+  bool remove_node(const std::string &schema_name, const int64_t id) {
+    auto schema_it = nodes_.find(schema_name);
+    if (schema_it == nodes_.end()) {
+      return false;
+    }
+    return schema_it->second.erase(id) > 0;
+  }
 
   arrow::Result<std::shared_ptr<Node>> create_node(
       const std::string &schema_name,
@@ -216,7 +233,11 @@ class NodeManager {
 
     int64_t id = 0;
     if (!add) {
-      id = id_counter.fetch_add(1);
+      // Get or create per-schema ID counter
+      if (id_counters_.find(schema_name) == id_counters_.end()) {
+        id_counters_[schema_name].store(0);
+      }
+      id = id_counters_[schema_name].fetch_add(1);
     } else {
       id = data.at("id").as_int64();
     }
@@ -249,7 +270,7 @@ class NodeManager {
           id, schema_name, EMPTY_DATA,
           std::make_unique<NodeHandle>(std::move(node_handle)), node_arena_,
           schema_, layout_);
-      nodes[id] = node;
+      nodes_[schema_name][id] = node;
       return node;
     } else {
       std::unordered_map<std::string, Value> normalized_data;
@@ -270,17 +291,49 @@ class NodeManager {
       auto node = std::make_shared<Node>(id, schema_name, normalized_data,
                                          std::unique_ptr<NodeHandle>{}, nullptr,
                                          schema_);
-      nodes[id] = node;
+      nodes_[schema_name][id] = node;
       return node;
     }
   }
 
-  void set_id_counter(const int64_t value) { id_counter.store(value); }
-  int64_t get_id_counter() const { return id_counter.load(); }
+  void set_id_counter(const std::string &schema_name, const int64_t value) {
+    id_counters_[schema_name].store(value);
+  }
+
+  int64_t get_id_counter(const std::string &schema_name) const {
+    auto it = id_counters_.find(schema_name);
+    if (it == id_counters_.end()) {
+      return 0;
+    }
+    return it->second.load();
+  }
+
+  // Get all schema ID counters (for snapshot/manifest)
+  std::unordered_map<std::string, int64_t> get_all_id_counters() const {
+    std::unordered_map<std::string, int64_t> result;
+    for (const auto &[schema_name, counter] : id_counters_) {
+      result[schema_name] = counter.load();
+    }
+    return result;
+  }
+
+  // Set all schema ID counters (for snapshot/manifest restore)
+  void set_all_id_counters(
+      const std::unordered_map<std::string, int64_t> &counters) {
+    for (const auto &[schema_name, value] : counters) {
+      id_counters_[schema_name].store(value);
+    }
+  }
 
  private:
-  std::atomic<int64_t> id_counter{0};
-  std::unordered_map<int64_t, std::shared_ptr<Node>> nodes;
+  // Per-schema ID counters (schema_name -> counter)
+  std::unordered_map<std::string, std::atomic<int64_t>> id_counters_;
+
+  // Per-schema node storage (schema_name -> (node_id -> Node))
+  std::unordered_map<std::string,
+                     std::unordered_map<int64_t, std::shared_ptr<Node>>>
+      nodes_;
+
   std::shared_ptr<SchemaRegistry> schema_registry_;
   std::shared_ptr<LayoutRegistry> layout_registry_;
   std::shared_ptr<NodeArena> node_arena_;

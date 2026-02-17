@@ -541,7 +541,6 @@ struct QueryState {
     for (const auto& f : schema->fields()) {
       std::string fq_name = alias + "." + f->name();
       int field_id = next_field_id.fetch_add(1);
-
       names.emplace_back(fq_name);
       indices.emplace_back(field_id);
       field_id_to_name[field_id] = fq_name;
@@ -1312,7 +1311,11 @@ populate_rows_bfs(int64_t node_id, const SchemaRef& start_schema,
     while (size-- > 0) {
       auto item = queue.front();
       queue.pop();
-      auto node = query_state.node_manager->get_node(item.node_id).ValueOrDie();
+      auto item_schema = item.schema_ref.is_declaration()
+                             ? item.schema_ref.schema()
+                             : query_state.aliases.at(item.schema_ref.value());
+      auto node = query_state.node_manager->get_node(item_schema, item.node_id)
+                      .ValueOrDie();
       const auto& it_fq =
           query_state.schema_field_indices.find(item.schema_ref.value());
       if (it_fq == query_state.schema_field_indices.end()) {
@@ -2170,7 +2173,8 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
                      .contains(target_id)) {
               continue;
             }
-            auto node_result = node_manager_->get_node(target_id);
+            auto node_result =
+                node_manager_->get_node(target_schema, target_id);
             if (node_result.ok()) {
               const auto target_node = node_result.ValueOrDie();
               if (target_node->schema_name == target_schema) {
@@ -2275,27 +2279,52 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
         } else if (traverse->traverse_type() == TraverseType::Left) {
           query_state.ids[traverse->target().value()].insert(
               matched_target_ids.begin(), matched_target_ids.end());
-        } else {  // Right, Full remove nodes with incoming connections
+        } else {  // Right, Full: matched targets + unmatched targets
           auto target_ids =
               get_ids_from_table(
                   get_table(target_schema, query_state.temporal_context.get())
                       .ValueOrDie())
                   .ValueOrDie();
-          IF_DEBUG_ENABLED {
-            log_debug(
-                "traverse type: '{}', matched_source_ids=[{}], "
-                "target_ids=[{}]",
-                traverse->target().value(), join_container(matched_source_ids),
-                join_container(target_ids));
-          }
+
           llvm::DenseSet<int64_t> result;
-          dense_difference(target_ids, matched_source_ids, result);
+
+          // Check if this is a self-join (same schema for source and target)
+          if (source_schema == target_schema) {
+            // Self-join: Exclude nodes that were sources with matches
+            // (prevents same node appearing as both source and unmatched
+            // target)
+            dense_difference(target_ids, matched_source_ids, result);
+            IF_DEBUG_ENABLED {
+              log_debug(
+                  "traverse type: '{}' (Right/Full, self-join), "
+                  "matched_source_ids=[{}], unmatched_targets=[{}], total={}",
+                  traverse->target().value(),
+                  join_container(matched_source_ids), join_container(result),
+                  result.size());
+            }
+          } else {
+            // Cross-schema join: Include matched targets + unmatched targets
+            // (compare IDs within same schema to avoid ID collision)
+            result = matched_target_ids;
+            llvm::DenseSet<int64_t> unmatched_targets;
+            dense_difference(target_ids, matched_target_ids, unmatched_targets);
+            result.insert(unmatched_targets.begin(), unmatched_targets.end());
+            IF_DEBUG_ENABLED {
+              log_debug(
+                  "traverse type: '{}' (Right/Full, cross-schema), "
+                  "matched_targets=[{}], unmatched_targets=[{}], total={}",
+                  traverse->target().value(),
+                  join_container(matched_target_ids),
+                  join_container(unmatched_targets), result.size());
+            }
+          }
+
           query_state.ids[traverse->target().value()] = result;
         }
 
         std::vector<std::shared_ptr<Node>> neighbors;
         for (auto id : query_state.ids[traverse->target().value()]) {
-          auto node_res = node_manager_->get_node(id);
+          auto node_res = node_manager_->get_node(target_schema, id);
           if (node_res.ok()) {
             neighbors.push_back(node_res.ValueOrDie());
           }

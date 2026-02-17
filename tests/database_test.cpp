@@ -233,7 +233,10 @@ TEST_F(DatabaseTest, CreateDbAndSnapshot) {
   auto manifest_json =
       read_json_file<nlohmann::json>(manifest_path).ValueOrDie();
   EXPECT_EQ(manifest_json["edge_id_seq"], 0);
-  EXPECT_EQ(manifest_json["node_id_seq"], 0);
+  // node_id_seq is now per-schema (a map)
+  EXPECT_TRUE(manifest_json["node_id_seq_per_schema"].is_object());
+  EXPECT_TRUE(
+      manifest_json["node_id_seq_per_schema"].empty());  // No schemas yet
   EXPECT_EQ(manifest_json["shard_id_seq"], 0);
   EXPECT_TRUE(manifest_json["edges"].empty());
   EXPECT_TRUE(manifest_json["shards"].empty());
@@ -603,7 +606,7 @@ TEST_F(DatabaseTest, VerifyUpdatedFlag) {
   EXPECT_TRUE(is_clean) << "Shard should be marked as clean after snapshot";
 
   // Update a node
-  db->update_node(0, "age", int64_t(30), SET).ValueOrDie();
+  db->update_node("users", 0, "age", int64_t(30), SET).ValueOrDie();
 
   // Verify shard is marked as updated again
   is_clean = shard_manager->is_shard_clean("users", 0).ValueOrDie();
