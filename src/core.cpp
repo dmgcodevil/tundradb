@@ -2285,22 +2285,38 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
                       .ValueOrDie())
                   .ValueOrDie();
           
-          // Include matched targets
-          llvm::DenseSet<int64_t> result = matched_target_ids;
+          llvm::DenseSet<int64_t> result;
           
-          // Add unmatched targets (compare within same schema to avoid ID collision)
-          llvm::DenseSet<int64_t> unmatched_targets;
-          dense_difference(target_ids, matched_target_ids, unmatched_targets);
-          result.insert(unmatched_targets.begin(), unmatched_targets.end());
-          
-          IF_DEBUG_ENABLED {
-            log_debug(
-                "traverse type: '{}' (Right/Full), matched_targets=[{}], "
-                "unmatched_targets=[{}], total={}",
-                traverse->target().value(),
-                join_container(matched_target_ids),
-                join_container(unmatched_targets),
-                result.size());
+          // Check if this is a self-join (same schema for source and target)
+          if (source_schema == target_schema) {
+            // Self-join: Exclude nodes that were sources with matches
+            // (prevents same node appearing as both source and unmatched target)
+            dense_difference(target_ids, matched_source_ids, result);
+            IF_DEBUG_ENABLED {
+              log_debug(
+                  "traverse type: '{}' (Right/Full, self-join), "
+                  "matched_source_ids=[{}], unmatched_targets=[{}], total={}",
+                  traverse->target().value(),
+                  join_container(matched_source_ids),
+                  join_container(result),
+                  result.size());
+            }
+          } else {
+            // Cross-schema join: Include matched targets + unmatched targets
+            // (compare IDs within same schema to avoid ID collision)
+            result = matched_target_ids;
+            llvm::DenseSet<int64_t> unmatched_targets;
+            dense_difference(target_ids, matched_target_ids, unmatched_targets);
+            result.insert(unmatched_targets.begin(), unmatched_targets.end());
+            IF_DEBUG_ENABLED {
+              log_debug(
+                  "traverse type: '{}' (Right/Full, cross-schema), "
+                  "matched_targets=[{}], unmatched_targets=[{}], total={}",
+                  traverse->target().value(),
+                  join_container(matched_target_ids),
+                  join_container(unmatched_targets),
+                  result.size());
+            }
           }
           
           query_state.ids[traverse->target().value()] = result;

@@ -1719,6 +1719,7 @@ TEST(JoinTest, MultiPatternWithSharedVars) {
 }
 
 TEST(JoinTest, FullJoinFriendRelationship) {
+  Logger::get_instance().set_level(LogLevel::DEBUG);
   auto db = setup_test_db();
 
   // Create friend relationships
