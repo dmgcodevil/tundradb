@@ -105,13 +105,13 @@ TEST_F(TemporalQueryTest, NodeUpdateAtDifferentTimes) {
   // Update age to 26 at t1
   mock_clock_.set_time(t1_);
   auto update_result1 =
-      db_->update_node(user_id, "age", Value(26), UpdateType::SET);
+      db_->update_node("User", user_id, "age", Value(26), UpdateType::SET);
   ASSERT_TRUE(update_result1.ok()) << update_result1.status();
 
   // Update age to 27 at t2
   mock_clock_.set_time(t2_);
   auto update_result2 =
-      db_->update_node(user_id, "age", Value(27), UpdateType::SET);
+      db_->update_node("User", user_id, "age", Value(27), UpdateType::SET);
   ASSERT_TRUE(update_result2.ok()) << update_result2.status();
 
   // Query current version (at t2): should see age=27
@@ -187,11 +187,11 @@ TEST_F(TemporalQueryTest, MultipleFieldUpdateAtSameTime) {
 
   // Update both age and active at t1
   mock_clock_.set_time(t1_);
-  auto update1 = db_->update_node(user_id, "age", Value(31), UpdateType::SET);
+  auto update1 = db_->update_node("User", user_id, "age", Value(31), UpdateType::SET);
   ASSERT_TRUE(update1.ok());
 
   auto update2 =
-      db_->update_node(user_id, "active", Value(false), UpdateType::SET);
+      db_->update_node("User", user_id, "active", Value(false), UpdateType::SET);
   ASSERT_TRUE(update2.ok());
 
   // Query at current time: should see age=31, active=false
@@ -224,13 +224,13 @@ TEST_F(TemporalQueryTest, ClockAdvanceAndQuery) {
   // Advance time and update
   mock_clock_.advance_seconds(1);  // 1 second after t0
   uint64_t update1_time = mock_clock_.now_nanos();
-  auto update1 = db_->update_node(user_id, "age", Value(36), UpdateType::SET);
+  auto update1 = db_->update_node("User", user_id, "age", Value(36), UpdateType::SET);
   ASSERT_TRUE(update1.ok());
 
   // Advance time and update again
   mock_clock_.advance_seconds(1);  // 2 seconds after t0
   uint64_t update2_time = mock_clock_.now_nanos();
-  auto update2 = db_->update_node(user_id, "age", Value(37), UpdateType::SET);
+  auto update2 = db_->update_node("User", user_id, "age", Value(37), UpdateType::SET);
   ASSERT_TRUE(update2.ok());
 
   // Query current: should see age=37
@@ -299,12 +299,12 @@ TEST_F(TemporalQueryTest, BitemporalQueryWithUpdates) {
 
   // Update at t1
   mock_clock_.set_time(t1_);
-  auto update1 = db_->update_node(user_id, "age", Value(41), UpdateType::SET);
+  auto update1 = db_->update_node("User", user_id, "age", Value(41), UpdateType::SET);
   ASSERT_TRUE(update1.ok());
 
   // Update at t2
   mock_clock_.set_time(t2_);
-  auto update2 = db_->update_node(user_id, "age", Value(42), UpdateType::SET);
+  auto update2 = db_->update_node("User", user_id, "age", Value(42), UpdateType::SET);
   ASSERT_TRUE(update2.ok());
 
   // ========================================================================
@@ -369,7 +369,7 @@ TEST_F(TemporalQueryTest, TemporalQueryBetweenUpdateTimes) {
 
   // Update at t1
   mock_clock_.set_time(t1_);
-  auto update1 = db_->update_node(user_id, "age", Value(51), UpdateType::SET);
+  auto update1 = db_->update_node("User", user_id, "age", Value(51), UpdateType::SET);
   ASSERT_TRUE(update1.ok());
 
   // Calculate midpoint between t0 and t1
@@ -583,12 +583,12 @@ TEST_F(TemporalQueryTest, NullFieldInVersionChain) {
 
   // Update age to 30 at t1
   mock_clock_.set_time(t1_);
-  auto update1 = db_->update_node(user_id, "age", Value(30), UpdateType::SET);
+  auto update1 = db_->update_node("User", user_id, "age", Value(30), UpdateType::SET);
   ASSERT_TRUE(update1.ok());
 
   // Update age to NULL at t2
   mock_clock_.set_time(t2_);
-  auto update2 = db_->update_node(user_id, "age", Value(), UpdateType::SET);
+  auto update2 = db_->update_node("User", user_id, "age", Value(), UpdateType::SET);
   ASSERT_TRUE(update2.ok());
 
   // Query at t0: should see age=25
@@ -689,7 +689,7 @@ TEST_F(TemporalQueryTest, MultipleNodesIndependentVersions) {
 
   mock_clock_.set_time(t1_);
   auto alice_update =
-      db_->update_node(alice_id, "age", Value(26), UpdateType::SET);
+      db_->update_node("User", alice_id, "age", Value(26), UpdateType::SET);
   ASSERT_TRUE(alice_update.ok());
 
   // Bob: created at t1 with age=30, updated to 31 at t2
@@ -697,7 +697,7 @@ TEST_F(TemporalQueryTest, MultipleNodesIndependentVersions) {
   int64_t bob_id = create_simple_user("Bob", 30);
 
   mock_clock_.set_time(t2_);
-  auto bob_update = db_->update_node(bob_id, "age", Value(31), UpdateType::SET);
+  auto bob_update = db_->update_node("User", bob_id, "age", Value(31), UpdateType::SET);
   ASSERT_TRUE(bob_update.ok());
 
   // Query at t0: should see only Alice (age=25)
@@ -775,7 +775,7 @@ TEST_F(TemporalQueryTest, VersioningDisabledFallback) {
   // Update to age=26
   mock_clock_.set_time(t1_);
   auto update_result =
-      db_no_version->update_node(user_id, "age", Value(26), UpdateType::SET);
+      db_no_version->update_node("User", user_id, "age", Value(26), UpdateType::SET);
   ASSERT_TRUE(update_result.ok());
 
   // Temporal query at t0 (should return CURRENT version, not historical)
@@ -817,7 +817,7 @@ TEST_F(TemporalQueryTest, NoOpUpdateDoesNotCreateNewVersion) {
   int64_t user_id = create_simple_user("Alice", 25);
 
   // Get the node and count initial versions
-  auto node_result = db_->get_node_manager()->get_node(user_id);
+  auto node_result = db_->get_node_manager()->get_node("User", user_id);
   ASSERT_TRUE(node_result.ok());
   auto node = node_result.ValueOrDie();
   auto handle = node->get_handle();
@@ -838,11 +838,11 @@ TEST_F(TemporalQueryTest, NoOpUpdateDoesNotCreateNewVersion) {
   // Update to SAME value at t1 (no-op update)
   mock_clock_.set_time(t1_);
   auto update_result =
-      db_->update_node(user_id, "age", Value(25), UpdateType::SET);
+      db_->update_node("User", user_id, "age", Value(25), UpdateType::SET);
   ASSERT_TRUE(update_result.ok());
 
   // Get updated node and count versions again
-  node_result = db_->get_node_manager()->get_node(user_id);
+  node_result = db_->get_node_manager()->get_node("User", user_id);
   ASSERT_TRUE(node_result.ok());
   node = node_result.ValueOrDie();
   handle = node->get_handle();

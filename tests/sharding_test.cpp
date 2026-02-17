@@ -91,7 +91,7 @@ TEST_F(ShardingTest, AddAndRetrieveNodes) {
 TEST_F(ShardingTest, UpdateNodes) {
   // Create a node
   auto node = create_test_node("Original", 0);
-  auto update_result = db->update_node(node->id, "name", Value{"Updated"}, SET);
+  auto update_result = db->update_node("test-schema", node->id, "name", Value{"Updated"}, SET);
   ASSERT_TRUE(update_result.ok())
       << "Failed to update node: " << update_result.status().ToString();
 
@@ -115,7 +115,7 @@ TEST_F(ShardingTest, Compaction) {
   }
 
   // Now remove some nodes to create gaps
-  auto update_result = db->update_node(1, "name", Value{"Removed"}, SET);
+  auto update_result = db->update_node("test-schema", 1, "name", Value{"Removed"}, SET);
   ASSERT_TRUE(update_result.ok());
 
   // Compact the schema

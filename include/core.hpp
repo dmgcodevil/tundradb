@@ -528,39 +528,48 @@ class ShardManager {
                                    " not found in schema '", schema_name, "'");
   }
 
-  arrow::Result<bool> update_node(const int64_t id,
+  arrow::Result<bool> update_node(const std::string& schema_name,
+                                  const int64_t id,
                                   const std::shared_ptr<Field> &field,
                                   const Value &value,
                                   const UpdateType update_type) {
-    for (auto &schema_shards : shards_ | std::views::values) {
-      for (const auto &shard : schema_shards) {
-        if (id >= shard->min_id && id <= shard->max_id) {
-          return shard->update(id, field, value, update_type);
-        }
+    auto schema_it = shards_.find(schema_name);
+    if (schema_it == shards_.end()) {
+      return arrow::Status::KeyError("Schema not found: ", schema_name);
+    }
+    
+    for (const auto &shard : schema_it->second) {
+      if (id >= shard->min_id && id <= shard->max_id) {
+        return shard->update(id, field, value, update_type);
       }
     }
-
+    
     return arrow::Status::KeyError("Node with id ", id,
-                                   " not found in any schema");
+                                   " not found in schema ", schema_name);
   }
 
-  arrow::Result<bool> update_node(const int64_t id,
+  arrow::Result<bool> update_node(const std::string& schema_name,
+                                  const int64_t id,
                                   const std::string &field_name,
                                   const Value &value,
                                   const UpdateType update_type) {
-    for (auto &schema_shards : shards_ | std::views::values) {
-      for (const auto &shard : schema_shards) {
-        auto field = schema_registry_->get(shard->schema_name)
-                         .ValueOrDie()
-                         ->get_field(field_name);
-        if (id >= shard->min_id && id <= shard->max_id) {
-          return shard->update(id, field, value, update_type);
-        }
+    auto schema_it = shards_.find(schema_name);
+    if (schema_it == shards_.end()) {
+      return arrow::Status::KeyError("Schema not found: ", schema_name, " in shards");
+    }
+    
+    auto field = schema_registry_->get(schema_name)
+                     .ValueOrDie()
+                     ->get_field(field_name);
+    
+    for (const auto &shard : schema_it->second) {
+      if (id >= shard->min_id && id <= shard->max_id) {
+        return shard->update(id, field, value, update_type);
       }
     }
 
     return arrow::Status::KeyError("Node with id ", id,
-                                   " not found in any schema");
+                                   " not found in schema ", schema_name);
   }
 
   arrow::Result<std::vector<std::shared_ptr<Node>>> get_nodes(
@@ -758,24 +767,26 @@ class Database {
     return node;
   }
 
-  arrow::Result<bool> update_node(const int64_t id,
+  arrow::Result<bool> update_node(const std::string& schema_name,
+                                  const int64_t id,
                                   const std::shared_ptr<Field> &field,
                                   const Value &value,
                                   const UpdateType update_type) {
-    return shard_manager_->update_node(id, field, value, update_type);
+    return shard_manager_->update_node(schema_name, id, field, value, update_type);
   }
 
-  arrow::Result<bool> update_node(const int64_t id,
+  arrow::Result<bool> update_node(const std::string& schema_name,
+                                  const int64_t id,
                                   const std::string &field_name,
                                   const Value &value,
                                   const UpdateType update_type) {
-    return shard_manager_->update_node(id, field_name, value, update_type);
+    return shard_manager_->update_node(schema_name, id, field_name, value, update_type);
   }
 
   arrow::Result<bool> remove_node(const std::string &schema_name,
                                   int64_t node_id) {
-    if (auto res = node_manager_->remove_node(node_id); !res) {
-      return arrow::Status::Invalid("Failed to remove node: {}", node_id);
+    if (auto res = node_manager_->remove_node(schema_name, node_id); !res) {
+      return arrow::Status::Invalid("Failed to remove node: ", schema_name, ":", node_id);
     }
     return shard_manager_->remove_node(schema_name, node_id);
   }
@@ -810,7 +821,7 @@ class Database {
       const std::string &schema_name,
       TemporalContext *temporal_context = nullptr,
       size_t chunk_size = 10000) const {
-    ARROW_ASSIGN_OR_RAISE(auto schema, schema_registry_->get(schema_name));
+    ARROW_ASSIGN_OR_RAISE(const auto schema, schema_registry_->get(schema_name));
     auto arrow_schema = schema->arrow();
     ARROW_ASSIGN_OR_RAISE(auto all_nodes,
                           shard_manager_->get_nodes(schema_name));

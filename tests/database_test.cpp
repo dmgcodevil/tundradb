@@ -603,7 +603,7 @@ TEST_F(DatabaseTest, VerifyUpdatedFlag) {
   EXPECT_TRUE(is_clean) << "Shard should be marked as clean after snapshot";
 
   // Update a node
-  db->update_node(0, "age", int64_t(30), SET).ValueOrDie();
+  db->update_node("users", 0, "age", int64_t(30), SET).ValueOrDie();
 
   // Verify shard is marked as updated again
   is_clean = shard_manager->is_shard_clean("users", 0).ValueOrDie();
