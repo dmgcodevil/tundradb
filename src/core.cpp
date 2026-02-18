@@ -493,12 +493,11 @@ struct QueryState {
     field_id_to_name.reserve(estimated_schemas * 8);  // ~8 fields per schema
   }
 
-  arrow::Result<std::string> resolve_schema(const SchemaRef& schema_ref) {
-    // todo we need to separate functions: assign alias , resolve
+  arrow::Result<std::string> register_schema(const SchemaRef& schema_ref) {
     if (aliases.contains(schema_ref.value()) && schema_ref.is_declaration()) {
       IF_DEBUG_ENABLED {
         log_debug("duplicated schema alias '" + schema_ref.value() +
-                  "' already assigned to '" + aliases[schema_ref.value()] +
+                  "' already assigned to '" + aliases.at(schema_ref.value()) +
                   "'");
       }
       return aliases[schema_ref.value()];
@@ -508,6 +507,17 @@ struct QueryState {
       return schema_ref.schema();
     }
     return aliases[schema_ref.value()];
+  }
+
+  arrow::Result<std::string> resolve_schema(const SchemaRef& schema_ref) const {
+    if (schema_ref.is_declaration()) {
+      return schema_ref.schema();
+    }
+
+    if (!aliases.contains(schema_ref.value())) {
+      return arrow::Status::KeyError("not alias for '{}'", schema_ref.value());
+    }
+    return aliases.at(schema_ref.value());
   }
 
   // Precompute fully-qualified field names for source and target aliases
@@ -1311,9 +1321,9 @@ populate_rows_bfs(int64_t node_id, const SchemaRef& start_schema,
     while (size-- > 0) {
       auto item = queue.front();
       queue.pop();
-      auto item_schema = item.schema_ref.is_declaration()
-                             ? item.schema_ref.schema()
-                             : query_state.aliases.at(item.schema_ref.value());
+      ARROW_ASSIGN_OR_RAISE(const auto item_schema,
+                            query_state.resolve_schema(item.schema_ref));
+
       auto node = query_state.node_manager->get_node(item_schema, item.node_id)
                       .ValueOrDie();
       const auto& it_fq =
@@ -1888,7 +1898,7 @@ arrow::Status prepare_query(Query& query, QueryState& query_state) {
   // Phase 1: Process FROM clause to populate aliases
   {
     ARROW_ASSIGN_OR_RAISE(auto from_schema,
-                          query_state.resolve_schema(query.from()));
+                          query_state.register_schema(query.from()));
     // FROM clause already processed in main query() function
   }
 
@@ -1899,9 +1909,9 @@ arrow::Status prepare_query(Query& query, QueryState& query_state) {
 
       // Resolve schemas and populate aliases
       ARROW_ASSIGN_OR_RAISE(auto source_schema,
-                            query_state.resolve_schema(traverse->source()));
+                            query_state.register_schema(traverse->source()));
       ARROW_ASSIGN_OR_RAISE(auto target_schema,
-                            query_state.resolve_schema(traverse->target()));
+                            query_state.register_schema(traverse->target()));
 
       if (!traverse->source().is_declaration()) {
         traverse->mutable_source().set_schema(source_schema);
@@ -1995,7 +2005,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
     query_state.from = query.from();
     query_state.from.set_tag(compute_tag(query_state.from));
     ARROW_ASSIGN_OR_RAISE(auto source_schema,
-                          query_state.resolve_schema(query.from()));
+                          query_state.register_schema(query.from()));
     if (!this->schema_registry_->exists(source_schema)) {
       log_error("schema '{}' doesn't exist", source_schema);
       return arrow::Status::KeyError("schema doesn't exit: {}", source_schema);
@@ -2100,27 +2110,16 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
         // Tags and schemas are already set during preparation phase
 
         // Get resolved schemas using const resolve_schema (read-only)
-        auto source_schema =
-            traverse->source().is_declaration()
-                ? traverse->source().schema()
-                : query_state.aliases.at(traverse->source().value());
-        auto target_schema =
-            traverse->target().is_declaration()
-                ? traverse->target().schema()
-                : query_state.aliases.at(traverse->target().value());
-
+        ARROW_ASSIGN_OR_RAISE(const auto source_schema,
+                              query_state.resolve_schema(traverse->source()));
+        ARROW_ASSIGN_OR_RAISE(const auto target_schema,
+                              query_state.resolve_schema(traverse->target()));
         // Fully-qualified field names should also be precomputed during
         // preparation
-        if (auto res = query_state.compute_fully_qualified_names(
-                traverse->source(), source_schema);
-            !res.ok()) {
-          return res.status();
-        }
-        if (auto res = query_state.compute_fully_qualified_names(
-                traverse->target(), target_schema);
-            !res.ok()) {
-          return res.status();
-        }
+        ARROW_RETURN_NOT_OK(query_state.compute_fully_qualified_names(
+            traverse->source(), source_schema));
+        ARROW_RETURN_NOT_OK(query_state.compute_fully_qualified_names(
+            traverse->target(), target_schema));
 
         std::vector<std::shared_ptr<WhereExpr>> where_clauses;
         if (query.inline_where()) {
@@ -2239,7 +2238,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           }
           IF_DEBUG_ENABLED {
             log_debug("rebuild table for schema {}:{}", source.value(),
-                      query_state.aliases[source.value()]);
+                      query_state.resolve_schema(source));
           }
           auto table_result =
               filter_table_by_id(query_state.tables[source.value()],
