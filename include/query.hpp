@@ -4,12 +4,18 @@
 #include <arrow/api.h>
 #include <arrow/compute/api.h>
 #include <arrow/result.h>
+#include <llvm/ADT/DenseMap.h>
+#include <llvm/ADT/DenseSet.h>
+#include <llvm/ADT/SmallVector.h>
+#include <llvm/ADT/StringMap.h>
 
+#include <atomic>
 #include <memory>
 #include <optional>
 #include <set>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "node.hpp"
@@ -1010,6 +1016,114 @@ class QueryResult {
  private:
   std::shared_ptr<arrow::Table> table_;
   QueryExecutionStats stats_;
+};
+
+// Forward declarations
+class NodeManager;
+class SchemaRegistry;
+
+/**
+ * @brief Query execution state container
+ *
+ * Holds all state needed during query execution including tables, node IDs,
+ * schema mappings, and graph connections. Optimized for performance with
+ * LLVM containers and object pooling.
+ */
+struct QueryState {
+  SchemaRef from;
+  std::unordered_map<std::string, std::shared_ptr<arrow::Table>> tables;
+  llvm::StringMap<llvm::DenseSet<int64_t>> ids;
+  std::unordered_map<std::string, std::string> aliases;
+
+  // Precomputed fully-qualified field names per alias (SchemaRef::value())
+  llvm::StringMap<std::vector<std::string>> fq_field_names;
+
+  // Field index optimization: replace string-based field lookups with integer
+  // indices
+  llvm::StringMap<std::vector<int>>
+      schema_field_indices;  // "User" -> [0, 1, 2]
+  llvm::SmallDenseMap<int, std::string, 64>
+      field_id_to_name;                      // 0 -> "user.name"
+  llvm::StringMap<int> field_name_to_index;  // "user.name" -> 0
+  std::atomic<int> next_field_id{0};         // Global field ID counter
+
+  llvm::StringMap<
+      llvm::DenseMap<int64_t, llvm::SmallVector<GraphConnection, 4>>>
+      connections;  // outgoing
+  llvm::DenseMap<int64_t, llvm::SmallVector<GraphConnection, 4>> incoming;
+
+  std::shared_ptr<NodeManager> node_manager;
+  std::shared_ptr<SchemaRegistry> schema_registry;
+  std::vector<Traverse> traversals;
+
+  // Temporal context for time-travel queries (nullptr = current version)
+  std::unique_ptr<TemporalContext> temporal_context;
+
+  // Connection object pooling to avoid repeated allocations
+  class ConnectionPool {
+   private:
+    std::vector<GraphConnection> pool_;
+    size_t next_index_ = 0;
+
+   public:
+    explicit ConnectionPool(size_t initial_size = 1000) : pool_(initial_size) {}
+
+    GraphConnection& get() {
+      if (next_index_ >= pool_.size()) {
+        pool_.resize(pool_.size() * 2);  // Grow pool if needed
+      }
+      return pool_[next_index_++];
+    }
+
+    void reset() { next_index_ = 0; }
+    size_t size() const { return next_index_; }
+  };
+
+  mutable ConnectionPool connection_pool_;
+
+  // Simple inline methods
+  [[nodiscard]] llvm::DenseSet<int64_t>& get_ids(const SchemaRef& schema_ref) {
+    return ids[schema_ref.value()];
+  }
+
+  [[nodiscard]] const llvm::DenseSet<int64_t>& get_ids(
+      const SchemaRef& schema_ref) const {
+    // For const access, use find() to avoid returning temporary from lookup()
+    auto it = ids.find(schema_ref.value());
+    if (it != ids.end()) {
+      return it->second;
+    }
+    // Return reference to static empty set for non-existent keys
+    static const llvm::DenseSet<int64_t> empty_set;
+    return empty_set;
+  }
+
+  [[nodiscard]] bool has_outgoing(const SchemaRef& schema_ref,
+                                  int64_t node_id) const {
+    return connections.contains(schema_ref.value()) &&
+           connections.at(schema_ref.value()).contains(node_id) &&
+           !connections.at(schema_ref.value()).at(node_id).empty();
+  }
+
+  // Complex methods - implemented in query.cpp
+  void reserve_capacity(const Query& query);
+
+  arrow::Result<std::string> register_schema(const SchemaRef& schema_ref);
+
+  arrow::Result<std::string> resolve_schema(const SchemaRef& schema_ref) const;
+
+  arrow::Result<bool> compute_fully_qualified_names(
+      const SchemaRef& schema_ref);
+
+  arrow::Result<bool> compute_fully_qualified_names(
+      const SchemaRef& schema_ref, const std::string& resolved_schema);
+
+  void remove_node(int64_t node_id, const SchemaRef& schema_ref);
+
+  arrow::Result<bool> update_table(const std::shared_ptr<arrow::Table>& table,
+                                   const SchemaRef& schema_ref);
+
+  std::string ToString() const;
 };
 
 }  // namespace tundradb
