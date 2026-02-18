@@ -2,10 +2,13 @@
 #define ARROW_UTILS_HPP
 
 #include <arrow/api.h>
-#include <arrow/compute/api.h>
-#include <arrow/compute/registry.h>
+#include <llvm/ADT/DenseSet.h>
+#include <llvm/ADT/SmallVector.h>
 
 namespace tundradb {
+
+arrow::Result<llvm::DenseSet<int64_t>> get_ids_from_table(
+    const std::shared_ptr<arrow::Table>& table);
 
 // Initialize Arrow Compute module - should be called once at startup
 bool initialize_arrow_compute();
