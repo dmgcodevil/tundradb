@@ -436,7 +436,7 @@ arrow::Result<std::shared_ptr<arrow::Schema>> build_denormalized_schema(
   }
 
   auto schema_result =
-      query_state.schema_registry->get(query_state.aliases.at(from_schema));
+      query_state.schema_registry()->get(query_state.aliases().at(from_schema));
   if (!schema_result.ok()) {
     return schema_result.status();
   }
@@ -465,8 +465,8 @@ arrow::Result<std::shared_ptr<arrow::Schema>> build_denormalized_schema(
       log_debug("Adding fields from schema '{}'", schema_ref.value());
     }
 
-    schema_result = query_state.schema_registry->get(
-        query_state.aliases.at(schema_ref.value()));
+    schema_result = query_state.schema_registry()->get(
+        query_state.aliases().at(schema_ref.value()));
     if (!schema_result.ok()) {
       return schema_result.status();
     }
@@ -1080,8 +1080,8 @@ populate_rows_bfs(int64_t node_id, const SchemaRef& start_schema,
       auto node = query_state.node_manager->get_node(item_schema, item.node_id)
                       .ValueOrDie();
       const auto& it_fq =
-          query_state.schema_field_indices.find(item.schema_ref.value());
-      if (it_fq == query_state.schema_field_indices.end()) {
+          query_state.schema_field_indices().find(item.schema_ref.value());
+      if (it_fq == query_state.schema_field_indices().end()) {
         log_error("No fully-qualified field names for schema '{}'",
                   item.schema_ref.value());
         return arrow::Status::KeyError(
@@ -1101,12 +1101,13 @@ populate_rows_bfs(int64_t node_id, const SchemaRef& start_schema,
 
       bool skip = false;
       if (query_state.has_outgoing(item.schema_ref, item.node_id)) {
-        for (const auto& conn :
-             query_state.connections.at(item.schema_ref.value())
-                 .at(item.node_id)) {
+        for (const auto& conn : query_state.connections()
+                                    .at(item.schema_ref.value())
+                                    .at(item.node_id)) {
           const uint64_t tgt_packed = hash_code_(conn.target, conn.target_id);
           if (!item.path_visited_nodes.contains(tgt_packed)) {
-            if (query_state.ids.at(conn.target.value())
+            if (query_state.ids()
+                    .at(conn.target.value())
                     .contains(conn.target_id)) {
               grouped_connections[conn.target.value()].push_back(conn);
             } else {
@@ -1174,7 +1175,7 @@ populate_rows_bfs(int64_t node_id, const SchemaRef& start_schema,
     tree.insert_row(r_copy);
   }
   IF_DEBUG_ENABLED { tree.print(); }
-  auto merged = tree.merge_rows(query_state.field_id_to_name);
+  auto merged = tree.merge_rows(query_state.field_id_to_name());
   IF_DEBUG_ENABLED {
     for (const auto& row : merged) {
       log_debug("merge result: {}", row->ToString());
@@ -1309,13 +1310,13 @@ arrow::Result<std::shared_ptr<std::vector<std::shared_ptr<Row>>>> populate_rows(
                 static_cast<int>(join_type));
     }
 
-    if (!query_state.ids.contains(schema_ref.value())) {
+    if (!query_state.ids().contains(schema_ref.value())) {
       log_warn("Schema '{}' not found in query state IDs", schema_ref.value());
       continue;
     }
 
     // Get all nodes for this schema
-    const auto& schema_nodes = query_state.ids.at(schema_ref.value());
+    const auto& schema_nodes = query_state.ids().at(schema_ref.value());
     std::vector<std::vector<int64_t>> batch_ids;
     if (execution_config.parallel_enabled) {
       size_t batch_size = 0;
@@ -1689,7 +1690,7 @@ arrow::Status prepare_query(Query& query, QueryState& query_state) {
     if (clause->type() == Clause::Type::WHERE) {
       auto where_expr = std::dynamic_pointer_cast<WhereExpr>(clause);
       auto res = where_expr->resolve_field_ref(
-          query_state.aliases, query_state.schema_registry.get());
+          query_state.aliases(), query_state.schema_registry().get());
       if (!res.ok()) {
         return res.status();
       }
@@ -1725,7 +1726,7 @@ void dense_difference(const SetA& a, const SetB& b, OutSet& out) {
 
 arrow::Result<std::shared_ptr<QueryResult>> Database::query(
     const Query& query) const {
-  QueryState query_state;
+  QueryState query_state(this->schema_registry_);
   auto result = std::make_shared<QueryResult>();
 
   // Initialize temporal context if AS OF clause is present
@@ -1747,7 +1748,6 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
               query.from().toString());
   }
   query_state.node_manager = this->node_manager_;
-  query_state.schema_registry = this->schema_registry_;
   query_state.from = query.from();
 
   {
@@ -1903,12 +1903,12 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
 
         IF_DEBUG_ENABLED {
           log_debug("Traversing from {} source nodes",
-                    query_state.ids[source.value()].size());
+                    query_state.ids()[source.value()].size());
         }
         llvm::DenseSet<int64_t> matched_source_ids;
         llvm::DenseSet<int64_t> matched_target_ids;
         llvm::DenseSet<int64_t> unmatched_source_ids;
-        for (auto source_id : query_state.ids[source.value()]) {
+        for (auto source_id : query_state.ids()[source.value()]) {
           auto outgoing_edges =
               edge_store_->get_outgoing_edges(source_id, traverse->edge_type())
                   .ValueOrDie();  // todo check result
@@ -1920,8 +1920,9 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           bool source_had_match = false;
           for (const auto& edge : outgoing_edges) {
             auto target_id = edge->get_target_id();
-            if (query_state.ids.contains(traverse->target().value()) &&
-                !query_state.ids.at(traverse->target().value())
+            if (query_state.ids().contains(traverse->target().value()) &&
+                !query_state.ids()
+                     .at(traverse->target().value())
                      .contains(target_id)) {
               continue;
             }
@@ -1955,7 +1956,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
                   }
                   matched_target_ids.insert(target_node->id);
                   // Use connection pool to avoid allocation
-                  auto& conn = query_state.connection_pool_.get();
+                  auto& conn = query_state.connection_pool().get();
                   conn.source = traverse->source();
                   conn.source_id = source_id;
                   conn.edge_type = traverse->edge_type();
@@ -1963,9 +1964,10 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
                   conn.target = traverse->target();
                   conn.target_id = target_node->id;
 
-                  query_state.connections[traverse->source().value()][source_id]
+                  query_state
+                      .connections()[traverse->source().value()][source_id]
                       .push_back(conn);
-                  query_state.incoming[target_node->id].push_back(conn);
+                  query_state.incoming()[target_node->id].push_back(conn);
                 }
               }
             } else {
@@ -1990,12 +1992,15 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
             query_state.remove_node(id, source);
           }
           IF_DEBUG_ENABLED {
-            log_debug("rebuild table for schema {}:{}", source.value(),
-                      query_state.resolve_schema(source));
+            auto resolved = query_state.resolve_schema(source);
+            if (resolved.ok()) {
+              log_debug("rebuild table for schema {}:{}", source.value(),
+                        resolved.ValueOrDie());
+            }
           }
           auto table_result =
               filter_table_by_id(query_state.tables[source.value()],
-                                 query_state.ids[source.value()]);
+                                 query_state.ids()[source.value()]);
           if (!table_result.ok()) {
             return table_result.status();
           }
@@ -2021,7 +2026,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
             dense_intersection(target_ids, matched_target_ids, intersect_ids);
           }
 
-          query_state.ids[traverse->target().value()] = intersect_ids;
+          query_state.ids()[traverse->target().value()] = intersect_ids;
           IF_DEBUG_ENABLED {
             log_debug("intersect_ids count: {}", intersect_ids.size());
             log_debug("{} intersect_ids: {}", traverse->target().toString(),
@@ -2029,7 +2034,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           }
 
         } else if (traverse->traverse_type() == TraverseType::Left) {
-          query_state.ids[traverse->target().value()].insert(
+          query_state.ids()[traverse->target().value()].insert(
               matched_target_ids.begin(), matched_target_ids.end());
         } else {  // Right, Full: matched targets + unmatched targets
           auto target_ids =
@@ -2071,11 +2076,11 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
             }
           }
 
-          query_state.ids[traverse->target().value()] = result;
+          query_state.ids()[traverse->target().value()] = result;
         }
 
         std::vector<std::shared_ptr<Node>> neighbors;
-        for (auto id : query_state.ids[traverse->target().value()]) {
+        for (auto id : query_state.ids()[traverse->target().value()]) {
           auto node_res = node_manager_->get_node(target_schema, id);
           if (node_res.ok()) {
             neighbors.push_back(node_res.ValueOrDie());
