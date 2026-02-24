@@ -1,10 +1,46 @@
 #include "../include/arrow_utils.hpp"
 
+#include <arrow/compute/api.h>
+#include <arrow/dataset/dataset.h>
+#include <arrow/dataset/scanner.h>
+#include <arrow/datum.h>
+#include <arrow/table.h>
+#include <llvm/ADT/DenseSet.h>
+#include <llvm/ADT/SmallVector.h>
+#include <llvm/ADT/StringMap.h>
+
 #include <algorithm>
 
 #include "../include/logger.hpp"
 
 namespace tundradb {
+
+arrow::Result<llvm::DenseSet<int64_t>> get_ids_from_table(
+    const std::shared_ptr<arrow::Table>& table) {
+  log_debug("Extracting IDs from table with {} rows", table->num_rows());
+
+  const auto id_idx = table->schema()->GetFieldIndex("id");
+  if (id_idx == -1) {
+    log_error("Table does not have an 'id' column");
+    return arrow::Status::Invalid("table does not have an 'id' column");
+  }
+
+  const auto id_column = table->column(id_idx);
+  llvm::DenseSet<int64_t> result_ids;
+  result_ids.reserve(table->num_rows());
+
+  for (int chunk_idx = 0; chunk_idx < id_column->num_chunks(); chunk_idx++) {
+    const auto chunk = std::static_pointer_cast<arrow::Int64Array>(
+        id_column->chunk(chunk_idx));
+    log_debug("Processing chunk {} with {} rows", chunk_idx, chunk->length());
+    for (int i = 0; i < chunk->length(); i++) {
+      result_ids.insert(chunk->Value(i));
+    }
+  }
+
+  log_debug("Extracted {} unique IDs from table", result_ids.size());
+  return result_ids;
+}
 
 // Initialize Arrow Compute module - should be called once at startup
 bool initialize_arrow_compute() {

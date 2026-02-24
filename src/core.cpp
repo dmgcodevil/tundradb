@@ -420,243 +420,6 @@ std::set<int64_t> get_roots(
   return roots;
 }
 
-struct QueryState {
-  SchemaRef from;
-  std::unordered_map<std::string, std::shared_ptr<arrow::Table>> tables;
-  llvm::StringMap<llvm::DenseSet<int64_t>> ids;
-  std::unordered_map<std::string, std::string> aliases;
-  // Precomputed fully-qualified field names per alias (SchemaRef::value())
-  llvm::StringMap<std::vector<std::string>> fq_field_names;
-
-  // Field index optimization: replace string-based field lookups with integer
-  // indices
-  llvm::StringMap<std::vector<int>>
-      schema_field_indices;  // "User" -> [0, 1, 2], "Company -> [3,4,5]"
-  llvm::SmallDenseMap<int, std::string, 64>
-      field_id_to_name;                      // 0 -> "user.name"
-  llvm::StringMap<int> field_name_to_index;  // "user.name" -> 0
-  std::atomic<int> next_field_id{0};         // Global field ID counter
-
-  llvm::StringMap<
-      llvm::DenseMap<int64_t, llvm::SmallVector<GraphConnection, 4>>>
-      connections;  // outgoing
-  llvm::DenseMap<int64_t, llvm::SmallVector<GraphConnection, 4>> incoming;
-
-  std::shared_ptr<NodeManager> node_manager;
-  std::shared_ptr<SchemaRegistry> schema_registry;
-  std::vector<Traverse> traversals;
-
-  // Temporal context for time-travel queries (nullptr = current version)
-  std::unique_ptr<TemporalContext> temporal_context;
-
-  // Connection object pooling to avoid repeated allocations
-  class ConnectionPool {
-   private:
-    std::vector<GraphConnection> pool_;
-    size_t next_index_ = 0;
-
-   public:
-    explicit ConnectionPool(size_t initial_size = 1000) : pool_(initial_size) {}
-
-    GraphConnection& get() {
-      if (next_index_ >= pool_.size()) {
-        pool_.resize(pool_.size() * 2);  // Grow pool if needed
-      }
-      return pool_[next_index_++];
-    }
-
-    void reset() { next_index_ = 0; }  // Reset for reuse
-    size_t size() const { return next_index_; }
-  };
-
-  mutable ConnectionPool connection_pool_;  // Mutable for const methods
-
-  // Pre-size hash maps to avoid expensive resizing during query execution
-  void reserve_capacity(const Query& query) {
-    // Estimate schema count from FROM + TRAVERSE clauses
-    size_t estimated_schemas = 1;  // FROM clause
-    for (const auto& clause : query.clauses()) {
-      if (clause->type() == Clause::Type::TRAVERSE) {
-        estimated_schemas += 2;  // source + target schemas
-      }
-    }
-
-    // Pre-size standard containers (LLVM containers don't support reserve)
-    tables.reserve(estimated_schemas);
-    aliases.reserve(estimated_schemas);
-
-    // Estimate nodes per schema (conservative estimate)
-    size_t estimated_nodes_per_schema = 1000;
-    incoming.reserve(estimated_nodes_per_schema);
-
-    // Pre-size field mappings
-    field_id_to_name.reserve(estimated_schemas * 8);  // ~8 fields per schema
-  }
-
-  arrow::Result<std::string> resolve_schema(const SchemaRef& schema_ref) {
-    // todo we need to separate functions: assign alias , resolve
-    if (aliases.contains(schema_ref.value()) && schema_ref.is_declaration()) {
-      IF_DEBUG_ENABLED {
-        log_debug("duplicated schema alias '" + schema_ref.value() +
-                  "' already assigned to '" + aliases[schema_ref.value()] +
-                  "'");
-      }
-      return aliases[schema_ref.value()];
-    }
-    if (schema_ref.is_declaration()) {
-      aliases[schema_ref.value()] = schema_ref.schema();
-      return schema_ref.schema();
-    }
-    return aliases[schema_ref.value()];
-  }
-
-  // Precompute fully-qualified field names for source and target aliases
-  arrow::Result<bool> compute_fully_qualified_names(
-      const SchemaRef& schema_ref) {
-    const auto it = aliases.find(schema_ref.value());
-    if (it == aliases.end()) {
-      return arrow::Status::KeyError("keyset does not contain alias '{}'",
-                                     schema_ref.value());
-    }
-    return compute_fully_qualified_names(schema_ref, it->second);
-  }
-
-  // Precompute fully-qualified field names for source and target aliases
-  arrow::Result<bool> compute_fully_qualified_names(
-      const SchemaRef& schema_ref, const std::string& resolved_schema) {
-    const std::string& alias = schema_ref.value();
-    if (fq_field_names.contains(alias)) {
-      return false;
-    }
-    auto schema_res = schema_registry->get(resolved_schema);
-    if (!schema_res.ok()) {
-      return schema_res.status();
-    }
-    const auto& schema = schema_res.ValueOrDie();
-    std::vector<std::string> names;
-    std::vector<int> indices;
-    names.reserve(schema->num_fields());
-    indices.reserve(schema->num_fields());
-
-    for (const auto& f : schema->fields()) {
-      std::string fq_name = alias + "." + f->name();
-      int field_id = next_field_id.fetch_add(1);
-      names.emplace_back(fq_name);
-      indices.emplace_back(field_id);
-      field_id_to_name[field_id] = fq_name;
-      field_name_to_index[fq_name] = field_id;
-    }
-
-    fq_field_names[alias] = std::move(names);
-    schema_field_indices[alias] = std::move(indices);
-    return true;
-  }
-
-  const llvm::DenseSet<int64_t>& get_ids(const SchemaRef& schema_ref) {
-    return ids[schema_ref.value()];
-  }
-
-  // removes node_id and updates all connections and ids
-  void remove_node(int64_t node_id, const SchemaRef& schema_ref) {
-    ids[schema_ref.value()].erase(node_id);
-  }
-
-  arrow::Result<bool> update_table(const std::shared_ptr<arrow::Table>& table,
-                                   const SchemaRef& schema_ref) {
-    this->tables[schema_ref.value()] = table;
-    auto ids_result = get_ids_from_table(table);
-    if (!ids_result.ok()) {
-      log_error("Failed to get IDs from table: {}", schema_ref.value());
-      return ids_result.status();
-    }
-    ids[schema_ref.value()] = ids_result.ValueOrDie();
-    return true;
-  }
-
-  bool has_outgoing(const SchemaRef& schema_ref, int64_t node_id) const {
-    return connections.contains(schema_ref.value()) &&
-           connections.at(schema_ref.value()).contains(node_id) &&
-           !connections.at(schema_ref.value()).at(node_id).empty();
-  }
-
-  std::string ToString() const {
-    std::stringstream ss;
-    ss << "QueryState {\n";
-    ss << "  From: " << from.toString() << "\n";
-
-    ss << "  Tables (" << tables.size() << "):\n";
-    for (const auto& [alias, table_ptr] : tables) {
-      if (table_ptr) {
-        ss << "    - " << alias << ": " << table_ptr->num_rows() << " rows, "
-           << table_ptr->num_columns() << " columns\n";
-      } else {
-        ss << "    - " << alias << ": (nullptr)\n";
-      }
-    }
-
-    ss << "  IDs (" << ids.size() << "):\n";
-    for (const auto& [alias, id_set] : ids) {
-      ss << "    - " << alias.str() << ": " << id_set.size() << " IDs\n";
-    }
-
-    ss << "  Aliases (" << aliases.size() << "):\n";
-    for (const auto& [alias, schema_name] : aliases) {
-      ss << "    - " << alias << " -> " << schema_name << "\n";
-    }
-
-    ss << "  Connections (Outgoing) (" << connections.size()
-       << " source nodes):";
-    for (const auto& [from, conns] : connections) {
-      for (const auto& [from_id, conn_vec] : conns) {
-        ss << "from " << from.str() << ":" << from_id << ":\n";
-        for (const auto& conn : conn_vec) {
-          ss << "    - " << conn.target.value() << ":" << conn.target_id
-             << "\n";
-        }
-      }
-    }
-
-    ss << "  Connections (Incoming) (" << incoming.size() << " target nodes):";
-    int target_nodes_printed = 0;
-    for (const auto& [target_id, conns_vec] : incoming) {
-      if (target_nodes_printed >= 3 &&
-          incoming.size() > 5) {  // Limit nodes printed
-        ss << "      ... and " << (incoming.size() - target_nodes_printed)
-           << " more target nodes ...\n";
-        break;
-      }
-      ss << "    - Target ID " << target_id << " (" << conns_vec.size()
-         << " incoming):";
-      int conns_printed_for_target = 0;
-      for (const auto& conn : conns_vec) {
-        if (conns_printed_for_target >= 3 &&
-            conns_vec.size() > 5) {  // Limit connections per node
-          ss << "        ... and "
-             << (conns_vec.size() - conns_printed_for_target)
-             << " more connections ...\n";
-          break;
-        }
-        ss << "        <- " << conn.source.value() << ":" << conn.source_id
-           << " (via '" << conn.edge_type << "')\n";
-        conns_printed_for_target++;
-      }
-      target_nodes_printed++;
-    }
-
-    ss << "  Traversals (" << traversals.size() << "):\n";
-    for (size_t i = 0; i < traversals.size(); ++i) {
-      const auto& trav = traversals[i];
-      ss << "    - [" << i << "]: " << trav.source().value() << " -["
-         << trav.edge_type() << "]-> " << trav.target().value() << " (Type: "
-         << (trav.traverse_type() == TraverseType::Inner ? "Inner" : "Other")
-         << ")\n";
-    }
-
-    ss << "}";
-    return ss.str();
-  }
-};
-
 arrow::Result<std::shared_ptr<arrow::Schema>> build_denormalized_schema(
     const QueryState& query_state) {
   IF_DEBUG_ENABLED { log_debug("Building schema for denormalized table"); }
@@ -673,7 +436,7 @@ arrow::Result<std::shared_ptr<arrow::Schema>> build_denormalized_schema(
   }
 
   auto schema_result =
-      query_state.schema_registry->get(query_state.aliases.at(from_schema));
+      query_state.schema_registry()->get(query_state.aliases().at(from_schema));
   if (!schema_result.ok()) {
     return schema_result.status();
   }
@@ -702,8 +465,8 @@ arrow::Result<std::shared_ptr<arrow::Schema>> build_denormalized_schema(
       log_debug("Adding fields from schema '{}'", schema_ref.value());
     }
 
-    schema_result = query_state.schema_registry->get(
-        query_state.aliases.at(schema_ref.value()));
+    schema_result = query_state.schema_registry()->get(
+        query_state.aliases().at(schema_ref.value()));
     if (!schema_result.ok()) {
       return schema_result.status();
     }
@@ -1311,14 +1074,14 @@ populate_rows_bfs(int64_t node_id, const SchemaRef& start_schema,
     while (size-- > 0) {
       auto item = queue.front();
       queue.pop();
-      auto item_schema = item.schema_ref.is_declaration()
-                             ? item.schema_ref.schema()
-                             : query_state.aliases.at(item.schema_ref.value());
+      ARROW_ASSIGN_OR_RAISE(const auto item_schema,
+                            query_state.resolve_schema(item.schema_ref));
+
       auto node = query_state.node_manager->get_node(item_schema, item.node_id)
                       .ValueOrDie();
       const auto& it_fq =
-          query_state.schema_field_indices.find(item.schema_ref.value());
-      if (it_fq == query_state.schema_field_indices.end()) {
+          query_state.schema_field_indices().find(item.schema_ref.value());
+      if (it_fq == query_state.schema_field_indices().end()) {
         log_error("No fully-qualified field names for schema '{}'",
                   item.schema_ref.value());
         return arrow::Status::KeyError(
@@ -1338,12 +1101,13 @@ populate_rows_bfs(int64_t node_id, const SchemaRef& start_schema,
 
       bool skip = false;
       if (query_state.has_outgoing(item.schema_ref, item.node_id)) {
-        for (const auto& conn :
-             query_state.connections.at(item.schema_ref.value())
-                 .at(item.node_id)) {
+        for (const auto& conn : query_state.connections()
+                                    .at(item.schema_ref.value())
+                                    .at(item.node_id)) {
           const uint64_t tgt_packed = hash_code_(conn.target, conn.target_id);
           if (!item.path_visited_nodes.contains(tgt_packed)) {
-            if (query_state.ids.at(conn.target.value())
+            if (query_state.ids()
+                    .at(conn.target.value())
                     .contains(conn.target_id)) {
               grouped_connections[conn.target.value()].push_back(conn);
             } else {
@@ -1411,7 +1175,7 @@ populate_rows_bfs(int64_t node_id, const SchemaRef& start_schema,
     tree.insert_row(r_copy);
   }
   IF_DEBUG_ENABLED { tree.print(); }
-  auto merged = tree.merge_rows(query_state.field_id_to_name);
+  auto merged = tree.merge_rows(query_state.field_id_to_name());
   IF_DEBUG_ENABLED {
     for (const auto& row : merged) {
       log_debug("merge result: {}", row->ToString());
@@ -1546,13 +1310,13 @@ arrow::Result<std::shared_ptr<std::vector<std::shared_ptr<Row>>>> populate_rows(
                 static_cast<int>(join_type));
     }
 
-    if (!query_state.ids.contains(schema_ref.value())) {
+    if (!query_state.ids().contains(schema_ref.value())) {
       log_warn("Schema '{}' not found in query state IDs", schema_ref.value());
       continue;
     }
 
     // Get all nodes for this schema
-    const auto& schema_nodes = query_state.ids.at(schema_ref.value());
+    const auto& schema_nodes = query_state.ids().at(schema_ref.value());
     std::vector<std::vector<int64_t>> batch_ids;
     if (execution_config.parallel_enabled) {
       size_t batch_size = 0;
@@ -1888,7 +1652,7 @@ arrow::Status prepare_query(Query& query, QueryState& query_state) {
   // Phase 1: Process FROM clause to populate aliases
   {
     ARROW_ASSIGN_OR_RAISE(auto from_schema,
-                          query_state.resolve_schema(query.from()));
+                          query_state.register_schema(query.from()));
     // FROM clause already processed in main query() function
   }
 
@@ -1899,9 +1663,9 @@ arrow::Status prepare_query(Query& query, QueryState& query_state) {
 
       // Resolve schemas and populate aliases
       ARROW_ASSIGN_OR_RAISE(auto source_schema,
-                            query_state.resolve_schema(traverse->source()));
+                            query_state.register_schema(traverse->source()));
       ARROW_ASSIGN_OR_RAISE(auto target_schema,
-                            query_state.resolve_schema(traverse->target()));
+                            query_state.register_schema(traverse->target()));
 
       if (!traverse->source().is_declaration()) {
         traverse->mutable_source().set_schema(source_schema);
@@ -1926,7 +1690,7 @@ arrow::Status prepare_query(Query& query, QueryState& query_state) {
     if (clause->type() == Clause::Type::WHERE) {
       auto where_expr = std::dynamic_pointer_cast<WhereExpr>(clause);
       auto res = where_expr->resolve_field_ref(
-          query_state.aliases, query_state.schema_registry.get());
+          query_state.aliases(), query_state.schema_registry().get());
       if (!res.ok()) {
         return res.status();
       }
@@ -1962,7 +1726,7 @@ void dense_difference(const SetA& a, const SetB& b, OutSet& out) {
 
 arrow::Result<std::shared_ptr<QueryResult>> Database::query(
     const Query& query) const {
-  QueryState query_state;
+  QueryState query_state(this->schema_registry_);
   auto result = std::make_shared<QueryResult>();
 
   // Initialize temporal context if AS OF clause is present
@@ -1984,7 +1748,6 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
               query.from().toString());
   }
   query_state.node_manager = this->node_manager_;
-  query_state.schema_registry = this->schema_registry_;
   query_state.from = query.from();
 
   {
@@ -1995,7 +1758,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
     query_state.from = query.from();
     query_state.from.set_tag(compute_tag(query_state.from));
     ARROW_ASSIGN_OR_RAISE(auto source_schema,
-                          query_state.resolve_schema(query.from()));
+                          query_state.register_schema(query.from()));
     if (!this->schema_registry_->exists(source_schema)) {
       log_error("schema '{}' doesn't exist", source_schema);
       return arrow::Status::KeyError("schema doesn't exit: {}", source_schema);
@@ -2100,27 +1863,16 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
         // Tags and schemas are already set during preparation phase
 
         // Get resolved schemas using const resolve_schema (read-only)
-        auto source_schema =
-            traverse->source().is_declaration()
-                ? traverse->source().schema()
-                : query_state.aliases.at(traverse->source().value());
-        auto target_schema =
-            traverse->target().is_declaration()
-                ? traverse->target().schema()
-                : query_state.aliases.at(traverse->target().value());
-
+        ARROW_ASSIGN_OR_RAISE(const auto source_schema,
+                              query_state.resolve_schema(traverse->source()));
+        ARROW_ASSIGN_OR_RAISE(const auto target_schema,
+                              query_state.resolve_schema(traverse->target()));
         // Fully-qualified field names should also be precomputed during
         // preparation
-        if (auto res = query_state.compute_fully_qualified_names(
-                traverse->source(), source_schema);
-            !res.ok()) {
-          return res.status();
-        }
-        if (auto res = query_state.compute_fully_qualified_names(
-                traverse->target(), target_schema);
-            !res.ok()) {
-          return res.status();
-        }
+        ARROW_RETURN_NOT_OK(query_state.compute_fully_qualified_names(
+            traverse->source(), source_schema));
+        ARROW_RETURN_NOT_OK(query_state.compute_fully_qualified_names(
+            traverse->target(), target_schema));
 
         std::vector<std::shared_ptr<WhereExpr>> where_clauses;
         if (query.inline_where()) {
@@ -2151,12 +1903,12 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
 
         IF_DEBUG_ENABLED {
           log_debug("Traversing from {} source nodes",
-                    query_state.ids[source.value()].size());
+                    query_state.ids()[source.value()].size());
         }
         llvm::DenseSet<int64_t> matched_source_ids;
         llvm::DenseSet<int64_t> matched_target_ids;
         llvm::DenseSet<int64_t> unmatched_source_ids;
-        for (auto source_id : query_state.ids[source.value()]) {
+        for (auto source_id : query_state.ids()[source.value()]) {
           auto outgoing_edges =
               edge_store_->get_outgoing_edges(source_id, traverse->edge_type())
                   .ValueOrDie();  // todo check result
@@ -2168,8 +1920,9 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           bool source_had_match = false;
           for (const auto& edge : outgoing_edges) {
             auto target_id = edge->get_target_id();
-            if (query_state.ids.contains(traverse->target().value()) &&
-                !query_state.ids.at(traverse->target().value())
+            if (query_state.ids().contains(traverse->target().value()) &&
+                !query_state.ids()
+                     .at(traverse->target().value())
                      .contains(target_id)) {
               continue;
             }
@@ -2203,7 +1956,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
                   }
                   matched_target_ids.insert(target_node->id);
                   // Use connection pool to avoid allocation
-                  auto& conn = query_state.connection_pool_.get();
+                  auto& conn = query_state.connection_pool().get();
                   conn.source = traverse->source();
                   conn.source_id = source_id;
                   conn.edge_type = traverse->edge_type();
@@ -2211,9 +1964,10 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
                   conn.target = traverse->target();
                   conn.target_id = target_node->id;
 
-                  query_state.connections[traverse->source().value()][source_id]
+                  query_state
+                      .connections()[traverse->source().value()][source_id]
                       .push_back(conn);
-                  query_state.incoming[target_node->id].push_back(conn);
+                  query_state.incoming()[target_node->id].push_back(conn);
                 }
               }
             } else {
@@ -2238,12 +1992,15 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
             query_state.remove_node(id, source);
           }
           IF_DEBUG_ENABLED {
-            log_debug("rebuild table for schema {}:{}", source.value(),
-                      query_state.aliases[source.value()]);
+            auto resolved = query_state.resolve_schema(source);
+            if (resolved.ok()) {
+              log_debug("rebuild table for schema {}:{}", source.value(),
+                        resolved.ValueOrDie());
+            }
           }
           auto table_result =
               filter_table_by_id(query_state.tables[source.value()],
-                                 query_state.ids[source.value()]);
+                                 query_state.ids()[source.value()]);
           if (!table_result.ok()) {
             return table_result.status();
           }
@@ -2269,7 +2026,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
             dense_intersection(target_ids, matched_target_ids, intersect_ids);
           }
 
-          query_state.ids[traverse->target().value()] = intersect_ids;
+          query_state.ids()[traverse->target().value()] = intersect_ids;
           IF_DEBUG_ENABLED {
             log_debug("intersect_ids count: {}", intersect_ids.size());
             log_debug("{} intersect_ids: {}", traverse->target().toString(),
@@ -2277,7 +2034,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           }
 
         } else if (traverse->traverse_type() == TraverseType::Left) {
-          query_state.ids[traverse->target().value()].insert(
+          query_state.ids()[traverse->target().value()].insert(
               matched_target_ids.begin(), matched_target_ids.end());
         } else {  // Right, Full: matched targets + unmatched targets
           auto target_ids =
@@ -2319,11 +2076,11 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
             }
           }
 
-          query_state.ids[traverse->target().value()] = result;
+          query_state.ids()[traverse->target().value()] = result;
         }
 
         std::vector<std::shared_ptr<Node>> neighbors;
-        for (auto id : query_state.ids[traverse->target().value()]) {
+        for (auto id : query_state.ids()[traverse->target().value()]) {
           auto node_res = node_manager_->get_node(target_schema, id);
           if (node_res.ok()) {
             neighbors.push_back(node_res.ValueOrDie());

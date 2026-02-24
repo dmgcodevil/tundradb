@@ -11,7 +11,6 @@
 #include <tbb/concurrent_vector.h>
 
 #include <atomic>
-#include <iostream>
 #include <memory>
 #include <memory_resource>
 #include <shared_mutex>
@@ -28,6 +27,7 @@
 #include "metadata.hpp"
 #include "node.hpp"
 #include "query.hpp"
+#include "query_execution.hpp"
 #include "schema.hpp"
 #include "storage.hpp"
 #include "utils.hpp"
