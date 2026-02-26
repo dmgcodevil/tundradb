@@ -1,5 +1,6 @@
 #include "../include/core.hpp"
 
+#include "../include/join.hpp"
 #include "../include/temporal_context.hpp"
 
 using namespace tundradb;
@@ -1700,30 +1701,6 @@ arrow::Status prepare_query(Query& query, QueryState& query_state) {
   return arrow::Status::OK();
 }
 
-template <class SetA, class SetB, class OutSet>
-void dense_intersection(const SetA& a, const SetB& b, OutSet& out) {
-  const auto& small = a.size() < b.size() ? a : b;
-  const auto& large = a.size() < b.size() ? b : a;
-  out.clear();
-  out.reserve(std::min(a.size(), b.size()));
-  for (const auto& x : small) {
-    if (large.contains(x)) {
-      out.insert(x);
-    }
-  }
-}
-
-template <class SetA, class SetB, class OutSet>
-void dense_difference(const SetA& a, const SetB& b, OutSet& out) {
-  out.clear();
-  out.reserve(a.size());
-  for (const auto& x : a) {
-    if (!b.contains(x)) {
-      out.insert(x);
-    }
-  }
-}
-
 arrow::Result<std::shared_ptr<QueryResult>> Database::query(
     const Query& query) const {
   QueryState query_state(this->schema_registry_);
@@ -1983,20 +1960,53 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
             unmatched_source_ids.insert(source_id);
           }
         }
-        if (traverse->traverse_type() == TraverseType::Inner &&
-            !unmatched_source_ids.empty()) {
-          for (auto id : unmatched_source_ids) {
+        IF_DEBUG_ENABLED {
+          log_debug("found {} neighbors for {}", matched_target_ids.size(),
+                    traverse->target().toString());
+        }
+
+        // For RIGHT/FULL joins we need all target IDs from the table
+        llvm::DenseSet<int64_t> all_target_ids;
+        if (traverse->traverse_type() == TraverseType::Right ||
+            traverse->traverse_type() == TraverseType::Full) {
+          all_target_ids =
+              get_ids_from_table(
+                  get_table(target_schema, query_state.temporal_context.get())
+                      .ValueOrDie())
+                  .ValueOrDie();
+        }
+
+        const bool is_self_join = source_schema == target_schema;
+        auto strategy = JoinStrategyFactory::create(traverse->traverse_type(),
+                                                    is_self_join);
+
+        IF_DEBUG_ENABLED {
+          log_debug("Using {} join strategy (self_join={})", strategy->name(),
+                    is_self_join);
+        }
+
+        JoinInput join_input{
+            .source_ids = query_state.ids()[source.value()],
+            .all_target_ids = all_target_ids,
+            .matched_source_ids = matched_source_ids,
+            .matched_target_ids = matched_target_ids,
+            .existing_target_ids = query_state.get_ids(traverse->target()),
+            .unmatched_source_ids = unmatched_source_ids,
+            .is_self_join = is_self_join,
+        };
+
+        auto join_output = strategy->compute(join_input);
+
+        // Apply target IDs
+        query_state.ids()[traverse->target().value()] = join_output.target_ids;
+
+        // Apply source pruning (INNER join removes unmatched sources)
+        if (join_output.rebuild_source_table) {
+          for (auto id : join_output.source_ids_to_remove) {
             IF_DEBUG_ENABLED {
               log_debug("remove unmatched node={}:{}", source.value(), id);
             }
             query_state.remove_node(id, source);
-          }
-          IF_DEBUG_ENABLED {
-            auto resolved = query_state.resolve_schema(source);
-            if (resolved.ok()) {
-              log_debug("rebuild table for schema {}:{}", source.value(),
-                        resolved.ValueOrDie());
-            }
           }
           auto table_result =
               filter_table_by_id(query_state.tables[source.value()],
@@ -2006,83 +2016,11 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           }
           query_state.tables[source.value()] = table_result.ValueOrDie();
         }
-        IF_DEBUG_ENABLED {
-          log_debug("found {} neighbors for {}", matched_target_ids.size(),
-                    traverse->target().toString());
-        }
-
-        if (traverse->traverse_type() == TraverseType::Inner) {
-          // intersect
-          // a:0 -> c:0
-          // b:0 -> c:1
-          // after a:0 -> c:0 => ids[c] = {0}
-          // after b:0 -> c:1 we need to intersect it with ids[c] =
-          // intersect({0}, {1}) => {}
-          auto target_ids = query_state.get_ids(traverse->target());
-          llvm::DenseSet<int64_t> intersect_ids;
-          if (target_ids.empty()) {
-            intersect_ids = matched_target_ids;
-          } else {
-            dense_intersection(target_ids, matched_target_ids, intersect_ids);
-          }
-
-          query_state.ids()[traverse->target().value()] = intersect_ids;
-          IF_DEBUG_ENABLED {
-            log_debug("intersect_ids count: {}", intersect_ids.size());
-            log_debug("{} intersect_ids: {}", traverse->target().toString(),
-                      join_container(intersect_ids));
-          }
-
-        } else if (traverse->traverse_type() == TraverseType::Left) {
-          query_state.ids()[traverse->target().value()].insert(
-              matched_target_ids.begin(), matched_target_ids.end());
-        } else {  // Right, Full: matched targets + unmatched targets
-          auto target_ids =
-              get_ids_from_table(
-                  get_table(target_schema, query_state.temporal_context.get())
-                      .ValueOrDie())
-                  .ValueOrDie();
-
-          llvm::DenseSet<int64_t> result;
-
-          // Check if this is a self-join (same schema for source and target)
-          if (source_schema == target_schema) {
-            // Self-join: Exclude nodes that were sources with matches
-            // (prevents same node appearing as both source and unmatched
-            // target)
-            dense_difference(target_ids, matched_source_ids, result);
-            IF_DEBUG_ENABLED {
-              log_debug(
-                  "traverse type: '{}' (Right/Full, self-join), "
-                  "matched_source_ids=[{}], unmatched_targets=[{}], total={}",
-                  traverse->target().value(),
-                  join_container(matched_source_ids), join_container(result),
-                  result.size());
-            }
-          } else {
-            // Cross-schema join: Include matched targets + unmatched targets
-            // (compare IDs within same schema to avoid ID collision)
-            result = matched_target_ids;
-            llvm::DenseSet<int64_t> unmatched_targets;
-            dense_difference(target_ids, matched_target_ids, unmatched_targets);
-            result.insert(unmatched_targets.begin(), unmatched_targets.end());
-            IF_DEBUG_ENABLED {
-              log_debug(
-                  "traverse type: '{}' (Right/Full, cross-schema), "
-                  "matched_targets=[{}], unmatched_targets=[{}], total={}",
-                  traverse->target().value(),
-                  join_container(matched_target_ids),
-                  join_container(unmatched_targets), result.size());
-            }
-          }
-
-          query_state.ids()[traverse->target().value()] = result;
-        }
 
         std::vector<std::shared_ptr<Node>> neighbors;
         for (auto id : query_state.ids()[traverse->target().value()]) {
-          auto node_res = node_manager_->get_node(target_schema, id);
-          if (node_res.ok()) {
+          if (auto node_res = node_manager_->get_node(target_schema, id);
+              node_res.ok()) {
             neighbors.push_back(node_res.ValueOrDie());
           }
         }
