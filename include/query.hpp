@@ -27,13 +27,18 @@ namespace tundradb {
 class WhereExpr;
 class ComparisonExpr;
 
+/**
+ * @brief A reference to a schema, optionally aliased (e.g. "u:User" or just
+ * "User").
+ *
+ * Carries a cached 16-bit tag for fast hash packing during BFS traversal.
+ */
 struct SchemaRef {
  private:
   std::string schema_;
   std::string value_;
   bool declaration_;
-  // Cached 16-bit tag for fast path operations (e.g., BFS packing)
-  uint16_t schema_tag_ = 0;
+  uint16_t schema_tag_ = 0;  ///< Cached 16-bit FNV-1a tag.
 
  public:
   [[nodiscard]] std::string schema() const { return schema_; }
@@ -43,11 +48,17 @@ struct SchemaRef {
   void set_schema(const std::string& schema) { schema_ = schema; }
   void set_tag(uint16_t t) { schema_tag_ = t; }
 
-  // Parse a schema reference from a string format "alias:schema"
-  // If the string does not contain a colon, the value is assigned to the alias
-  // and schema
+  /**
+   * @brief Parses a schema reference from "alias:schema" format.
+   *
+   * If no colon is present, the entire string is used as both alias and schema.
+   *
+   * @param s The input string.
+   * @return The parsed SchemaRef.
+   */
   static SchemaRef parse(const std::string& s);
 
+  /** @brief Returns a human-readable "alias:schema" string. */
   [[nodiscard]] std::string toString() const;
 
   friend std::ostream& operator<<(std::ostream& os, const SchemaRef& obj) {
@@ -56,6 +67,7 @@ struct SchemaRef {
   }
 };
 
+/** @brief Comparison operators supported in WHERE expressions. */
 enum class CompareOp {
   Eq,
   NotEq,
@@ -116,47 +128,85 @@ struct FieldRef {
   friend class ComparisonExpr;
 };
 
+/** @brief Base class for all query clauses (WHERE, TRAVERSE, SELECT, etc.). */
 class Clause {
  public:
   virtual ~Clause() = default;
 
   enum class Type { WHERE, TRAVERSE, PROJECT, ORDER_BY, LIMIT, SELECT };
+
+  /** @brief Returns the clause's discriminator. */
   [[nodiscard]] virtual Type type() const = 0;
 };
 
+/** @brief Wraps a Value as an Arrow compute literal expression. */
 arrow::compute::Expression value_to_expression(const Value& value);
+
+/**
+ * @brief Builds an Arrow compute comparison expression.
+ *
+ * @param field The field reference expression.
+ * @param value The literal value expression.
+ * @param op The comparison operator.
+ * @return The composed comparison expression.
+ */
 arrow::compute::Expression apply_comparison_op(
     const arrow::compute::Expression& field,
     const arrow::compute::Expression& value, CompareOp op);
 
+/** @brief Logical operators for combining WHERE expressions. */
 enum class LogicalOp { AND, OR };
 
+/**
+ * @brief Abstract base for WHERE expression nodes (comparisons and logical
+ * operators).
+ */
 class WhereExpr {
  public:
   virtual ~WhereExpr() = default;
+
+  /** @brief Resolves symbolic field references against the schema registry. */
   virtual arrow::Result<bool> resolve_field_ref(
       const std::unordered_map<std::string, std::string>& aliases,
       const SchemaRegistry* schema_registry) = 0;
+  /** @brief Evaluates this expression against a node. */
   virtual arrow::Result<bool> matches(
       const std::shared_ptr<Node>& node) const = 0;
+
+  /** @brief Returns a debug string of the expression. */
   virtual std::string toString() const = 0;
+
+  /** @brief Marks this expression as already inlined into a traversal. */
   virtual void set_inlined(bool inlined) = 0;
+
+  /** @brief Returns true if this expression has been inlined. */
   virtual bool inlined() const = 0;
+
+  /** @brief Converts this expression to an Arrow compute expression. */
   virtual arrow::compute::Expression to_arrow_expression(
       bool strip_var) const = 0;
 
+  /** @brief Extracts sub-conditions that reference a specific variable. */
   virtual std::vector<std::shared_ptr<ComparisonExpr>>
   get_conditions_for_variable(const std::string& variable) const = 0;
 
+  /** @brief Returns the set of all variables referenced in this expression. */
   virtual std::set<std::string> get_all_variables() const = 0;
 
+  /** @brief Returns the first variable name found (useful for single-var
+   * conditions). */
   virtual std::string extract_first_variable() const = 0;
 
+  /** @brief Returns true if this expression can be inlined for the given
+   * variable. */
   virtual bool can_inline(const std::string& variable) const = 0;
 };
 
+/** @brief The type of graph traversal / join to perform. */
 enum class TraverseType { Inner, Left, Right, Full };
 
+/** @brief A TRAVERSE clause specifying an edge traversal between two schemas.
+ */
 class Traverse final : public Clause {
  private:
   SchemaRef source_;
@@ -184,6 +234,7 @@ class Traverse final : public Clause {
   SchemaRef& mutable_target() { return target_; }
 };
 
+/** @brief A SELECT clause listing the fields to include in the output. */
 struct Select final : Clause {
   std::vector<std::string> fields_;
 
@@ -198,6 +249,9 @@ struct Select final : Clause {
   }
 };
 
+/**
+ * @brief A leaf WHERE expression: field op value (e.g. "u.age > 30").
+ */
 class ComparisonExpr : public Clause, public WhereExpr {
  private:
   FieldRef field_ref_;
@@ -255,6 +309,9 @@ class ComparisonExpr : public Clause, public WhereExpr {
       const SchemaRegistry* schema_registry) override;
 };
 
+/**
+ * @brief A composite WHERE expression: left AND/OR right.
+ */
 class LogicalExpr : public Clause, public WhereExpr {
  private:
   std::shared_ptr<WhereExpr> left_;
@@ -307,6 +364,7 @@ class LogicalExpr : public Clause, public WhereExpr {
   bool can_inline(const std::string& variable) const override;
 };
 
+/** @brief Configuration knobs for parallel query execution. */
 struct ExecutionConfig {
  private:
   static size_t get_default_thread_count() {
@@ -339,6 +397,12 @@ struct ExecutionConfig {
   }
 };
 
+/**
+ * @brief Immutable query descriptor built via Query::Builder.
+ *
+ * Contains the FROM schema, a list of clauses (TRAVERSE, WHERE, SELECT),
+ * execution configuration, and optional temporal snapshot.
+ */
 class Query {
  private:
   SchemaRef from_;
@@ -381,6 +445,7 @@ class Query {
 
   static Builder from(const std::string& schema) { return Builder(schema); }
 
+  /** @brief Fluent builder for constructing Query objects. */
   class Builder {
    private:
     SchemaRef from_;
@@ -394,12 +459,14 @@ class Query {
     explicit Builder(const std::string& schema)
         : from_(SchemaRef::parse(schema)) {}
 
+    /** @brief Adds a simple comparison WHERE clause. */
     Builder& where(std::string field, CompareOp op, Value value) {
       clauses_.push_back(std::make_shared<ComparisonExpr>(std::move(field), op,
                                                           std::move(value)));
       return *this;
     }
 
+    /** @brief Adds a TRAVERSE clause (edge traversal between two schemas). */
     Builder& traverse(const std::string& source, std::string edge_type,
                       const std::string& target,
                       TraverseType traverse_type = TraverseType::Inner) {
@@ -409,36 +476,43 @@ class Query {
       return *this;
     }
 
+    /** @brief Sets the SELECT clause. Empty means "all fields". */
     Builder& select(std::vector<std::string> names = {}) {
       select_ = std::make_shared<Select>(std::move(names));
       return *this;
     }
 
+    /** @brief Enables WHERE-clause inlining into traversal steps. */
     Builder& inline_where() {
       inline_where_ = true;
       return *this;
     }
 
+    /** @brief Overrides the automatic parallel batch size. */
     Builder& parallel_batch_size(size_t size) {
       execution_config_.parallel_batch_size = size;
       return *this;
     }
 
+    /** @brief Enables or disables parallel execution. */
     Builder& parallel(bool enabled = true) {
       execution_config_.parallel_enabled = enabled;
       return *this;
     }
 
+    /** @brief Sets the thread count for parallel execution. */
     Builder& parallel_thread_count(size_t count) {
       execution_config_.parallel_thread_count = count;
       return *this;
     }
 
+    /** @brief Adds a pre-built logical expression as a WHERE clause. */
     Builder& where_logical_expr(std::shared_ptr<LogicalExpr> expr) {
       clauses_.push_back(expr);
       return *this;
     }
 
+    /** @brief Appends an AND condition to the most recent WHERE clause. */
     Builder& and_where(const std::string& field, CompareOp op,
                        const Value& value) {
       if (clauses_.empty() || clauses_.back()->type() != Clause::Type::WHERE) {
@@ -455,6 +529,7 @@ class Query {
       return *this;
     }
 
+    /** @brief Appends an OR condition to the most recent WHERE clause. */
     Builder& or_where(const std::string& field, CompareOp op,
                       const Value& value) {
       if (clauses_.empty() || clauses_.back()->type() != Clause::Type::WHERE) {
@@ -468,6 +543,7 @@ class Query {
       return *this;
     }
 
+    /** @brief Adds a standalone AND expression from two sub-expressions. */
     Builder& where_and(std::shared_ptr<WhereExpr> left,
                        std::shared_ptr<WhereExpr> right) {
       clauses_.push_back(
@@ -475,6 +551,7 @@ class Query {
       return *this;
     }
 
+    /** @brief Adds a standalone OR expression from two sub-expressions. */
     Builder& where_or(std::shared_ptr<WhereExpr> left,
                       std::shared_ptr<WhereExpr> right) {
       clauses_.push_back(
@@ -518,6 +595,8 @@ class Query {
       return *this;
     }
 
+    /** @brief Constructs an immutable Query from the accumulated builder state.
+     */
     Query build() {
       return {
           from_,         std::move(clauses_), std::move(select_),
@@ -526,6 +605,7 @@ class Query {
   };
 };
 
+/** @brief Counters collected during query execution for diagnostics. */
 struct QueryExecutionStats {
   int num_nodes_processed = 0;
   int num_edges_traversed = 0;
@@ -535,6 +615,8 @@ struct QueryExecutionStats {
   std::vector<std::string> post_processed_conditions;  // For debugging
 };
 
+/** @brief Holds the output Arrow table and execution statistics from a query.
+ */
 class QueryResult {
  public:
   [[nodiscard]] std::shared_ptr<arrow::Table> table() const { return table_; }

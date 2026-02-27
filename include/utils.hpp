@@ -22,6 +22,72 @@
 
 namespace tundradb {
 
+/** @brief Bitmask for extracting the 48-bit node ID from a packed hash. */
+constexpr uint64_t NODE_MASK = (1ULL << 48) - 1;
+
+/**
+ * @brief Computes a deterministic 16-bit tag from a schema alias.
+ *
+ * Uses FNV-1a 32-bit, folded to 16 bits.
+ *
+ * @param ref The schema reference whose value() is hashed.
+ * @return A 16-bit tag suitable for packing into hash codes.
+ */
+inline uint16_t compute_tag(const SchemaRef& ref) {
+  const std::string& s = ref.value();
+  uint32_t h = 2166136261u;
+  for (unsigned char c : s) {
+    h ^= c;
+    h *= 16777619u;
+  }
+  h ^= (h >> 16);
+  return static_cast<uint16_t>(h & 0xFFFFu);
+}
+
+/**
+ * @brief Packs a schema tag and node ID into a single 64-bit hash.
+ *
+ * Layout: [schema_tag (16 bits) | node_id (48 bits)].
+ *
+ * @param schema The schema reference (its precomputed tag is used).
+ * @param node_id The node identifier.
+ * @return A 64-bit value that is unique per (schema, node_id) pair.
+ */
+inline uint64_t hash_code_(const SchemaRef& schema, int64_t node_id) {
+  const uint16_t schema_id16 = schema.tag();
+  return (static_cast<uint64_t>(schema_id16) << 48) |
+         (static_cast<uint64_t>(node_id) & NODE_MASK);
+}
+
+/**
+ * @brief Joins all elements of a container into a delimited string.
+ *
+ * @tparam Container An iterable whose elements support operator<<.
+ * @param container The elements to join.
+ * @param delimiter Separator inserted between elements (default ", ").
+ * @return The concatenated string.
+ */
+template <typename Container>
+std::string join_container(const Container& container,
+                           std::string_view delimiter = ", ") {
+  std::ostringstream oss;
+  for (auto it = container.begin(); it != container.end(); ++it) {
+    oss << (it != container.begin() ? delimiter : "") << *it;
+  }
+  return oss.str();
+}
+
+/**
+ * @brief Computes the intersection of two sets into @p out.
+ *
+ * Iterates the smaller set and probes the larger one.
+ *
+ * @tparam SetA,SetB Set types supporting size(), contains(), begin/end.
+ * @tparam OutSet Output set type supporting clear(), reserve(), insert().
+ * @param a First input set.
+ * @param b Second input set.
+ * @param[out] out Cleared and filled with elements in both @p a and @p b.
+ */
 template <class SetA, class SetB, class OutSet>
 void dense_intersection(const SetA& a, const SetB& b, OutSet& out) {
   const auto& small = a.size() < b.size() ? a : b;
@@ -35,6 +101,15 @@ void dense_intersection(const SetA& a, const SetB& b, OutSet& out) {
   }
 }
 
+/**
+ * @brief Computes the set difference (a − b) into @p out.
+ *
+ * @tparam SetA,SetB Set types supporting size(), contains(), begin/end.
+ * @tparam OutSet Output set type supporting clear(), reserve(), insert().
+ * @param a The minuend set.
+ * @param b The subtrahend set.
+ * @param[out] out Cleared and filled with elements in @p a but not in @p b.
+ */
 template <class SetA, class SetB, class OutSet>
 void dense_difference(const SetA& a, const SetB& b, OutSet& out) {
   out.clear();
@@ -46,6 +121,7 @@ void dense_difference(const SetA& a, const SetB& b, OutSet& out) {
   }
 }
 
+/** @brief Generates a lowercase RFC-4122 UUID string. */
 static std::string generate_uuid() {
   uuid_t uuid;
   uuid_generate(uuid);
@@ -54,6 +130,13 @@ static std::string generate_uuid() {
   return uuid_str;
 }
 
+/**
+ * @brief Generates a monotonically increasing 64-bit snapshot ID.
+ *
+ * Upper 32 bits: millisecond timestamp. Lower 32 bits: atomic counter.
+ *
+ * @return A unique snapshot identifier.
+ */
 static int64_t generate_unique_snapshot_id() {
   static std::atomic<int32_t> counter{0};
   auto now = std::chrono::system_clock::now();
@@ -67,6 +150,7 @@ static int64_t generate_unique_snapshot_id() {
   return (timestamp_ms << 32) | (count & 0xFFFFFFFF);
 }
 
+/** @brief Returns the current wall-clock time in milliseconds since epoch. */
 static int64_t now_millis() {
   auto now = std::chrono::system_clock::now();
   return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -74,6 +158,15 @@ static int64_t now_millis() {
       .count();
 }
 
+/**
+ * @brief Filters an Arrow table, keeping only rows whose "id" column is in @p
+ * filter_ids.
+ *
+ * @tparam SetType A set-like type supporting count().
+ * @param table The input table (must contain an "id" column of type Int64).
+ * @param filter_ids The set of IDs to retain.
+ * @return The filtered table, or an error if the "id" column is missing.
+ */
 template <typename SetType>
 static arrow::Result<std::shared_ptr<arrow::Table>> filter_table_by_id(
     const std::shared_ptr<arrow::Table>& table, const SetType& filter_ids) {
@@ -110,6 +203,19 @@ static arrow::Result<std::shared_ptr<arrow::Table>> filter_table_by_id(
   return filtered_table.table();
 }
 
+/**
+ * @brief Builds an Arrow table from a collection of nodes using chunked
+ * encoding.
+ *
+ * Nodes invisible at the given temporal snapshot are skipped.
+ *
+ * @param schema The database schema describing the node fields.
+ * @param nodes  The nodes to materialise into table rows.
+ * @param chunk_size Number of nodes per Arrow chunk.
+ * @param temporal_context Temporal snapshot for versioned reads (may be
+ * nullptr).
+ * @return The constructed table, or an error on unsupported column types.
+ */
 static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
     const std::shared_ptr<Schema>& schema,
     const std::vector<std::shared_ptr<Node>>& nodes, size_t chunk_size,
@@ -269,6 +375,12 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
   return arrow::Table::Make(arrow_schema, chunked_arrays);
 }
 
+/**
+ * @brief Prints a single row of an Arrow table to stdout (tab-separated).
+ *
+ * @param table The table to read from.
+ * @param row_index Zero-based row index to print.
+ */
 static void print_row(const std::shared_ptr<arrow::Table>& table,
                       const int64_t row_index) {
   for (int j = 0; j < table->num_columns(); ++j) {
@@ -344,6 +456,15 @@ static void print_row(const std::shared_ptr<arrow::Table>& table,
   std::cout << std::endl;
 }
 
+/**
+ * @brief Prints an Arrow table to stdout (schema, chunk info, and data).
+ *
+ * If the table has more than @p max_rows rows, the first and last halves
+ * are printed with an ellipsis in between.
+ *
+ * @param table The table to print.
+ * @param max_rows Maximum rows to display (0 = unlimited).
+ */
 static void print_table(const std::shared_ptr<arrow::Table>& table,
                         int64_t max_rows = 100) {
   if (!table) {
@@ -396,6 +517,16 @@ static void print_table(const std::shared_ptr<arrow::Table>& table,
   }
 }
 
+/**
+ * @brief Extracts the value from an Arrow Result, logging context on failure.
+ *
+ * @tparam T The result value type.
+ * @param result The Arrow Result to unwrap.
+ * @param context A human-readable label for the operation (used in the error
+ * log).
+ * @param location Source location (auto-captured).
+ * @return The contained value.
+ */
 template <typename T>
 T ValueOrDieWithContext(
     const arrow::Result<T>& result, const std::string& context,
@@ -419,9 +550,26 @@ T ValueOrDieWithContext(
 #define VALUE_OR_DIE_CTX(result, context) \
   ValueOrDieWithContext((result), (context))
 
+/**
+ * @brief Converts a scalar value in a ChunkedArray to its string
+ * representation.
+ *
+ * @param column The chunked array to read from.
+ * @param row_idx The global row index.
+ * @return A human-readable string of the scalar value.
+ */
 std::string stringify_arrow_scalar(
     const std::shared_ptr<arrow::ChunkedArray>& column, int64_t row_idx);
 
+/**
+ * @brief Extracts all non-null values from a typed column into a vector.
+ *
+ * @tparam T One of int32_t, int64_t, double, bool, or std::string.
+ * @param table The table to read from.
+ * @param column_name Name of the column.
+ * @return A vector of the column's non-null values, or an error if the column
+ * is missing.
+ */
 template <typename T>
 arrow::Result<std::vector<T>> get_column_values(
     const std::shared_ptr<arrow::Table>& table,
@@ -483,6 +631,14 @@ arrow::Result<std::vector<T>> get_column_values(
   return values;
 }
 
+/**
+ * @brief Concatenates all chunks of a column into a single contiguous Arrow
+ * Array.
+ *
+ * @param table The table containing the column.
+ * @param column_name Name of the column.
+ * @return The concatenated array, or an error if the column is missing.
+ */
 inline arrow::Result<std::shared_ptr<arrow::Array>> get_column_as_array(
     const std::shared_ptr<arrow::Table>& table,
     const std::string& column_name) {
@@ -497,6 +653,13 @@ inline arrow::Result<std::shared_ptr<arrow::Array>> get_column_as_array(
   return combined_array;
 }
 
+/**
+ * @brief Returns the first non-null value from a typed Arrow Array.
+ *
+ * @tparam T One of int64_t, double, bool, or std::string.
+ * @param array The array to read.
+ * @return The first element, or an error if the array is empty/null/wrong type.
+ */
 template <typename T>
 arrow::Result<T> get_first_value_from_array(
     const std::shared_ptr<arrow::Array>& array) {
@@ -543,16 +706,25 @@ arrow::Result<T> get_first_value_from_array(
   }
 }
 
+/** @brief Convenience wrapper: extracts the first int64 from an array. */
 inline arrow::Result<int64_t> get_first_int64(
     const std::shared_ptr<arrow::Array>& array) {
   return get_first_value_from_array<int64_t>(array);
 }
 
+/** @brief Convenience wrapper: extracts the first string from an array. */
 inline arrow::Result<std::string> get_first_string(
     const std::shared_ptr<arrow::Array>& array) {
   return get_first_value_from_array<std::string>(array);
 }
 
+/**
+ * @brief Evaluates a WHERE expression against a single node.
+ *
+ * @param where_expr The condition to test.
+ * @param node The node to evaluate.
+ * @return True if the node satisfies the expression.
+ */
 inline arrow::Result<bool> apply_where_to_node(
     const std::shared_ptr<WhereExpr>& where_expr,
     const std::shared_ptr<Node>& node) {
@@ -563,6 +735,13 @@ inline arrow::Result<bool> apply_where_to_node(
   return where_expr->matches(node);
 }
 
+/**
+ * @brief Filters a vector of nodes by a WHERE expression.
+ *
+ * @param nodes The candidate nodes.
+ * @param where_expr The predicate to apply.
+ * @return A vector of nodes that satisfy the expression.
+ */
 inline arrow::Result<std::vector<std::shared_ptr<Node>>> filter_nodes_by_where(
     const std::vector<std::shared_ptr<Node>>& nodes,
     const std::shared_ptr<WhereExpr>& where_expr) {

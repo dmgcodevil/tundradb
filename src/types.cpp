@@ -1,6 +1,6 @@
-#include "../include/types.hpp"
+#include "types.hpp"
 
-#include "../include/string_arena.hpp"
+#include "string_arena.hpp"
 
 namespace tundradb {
 
