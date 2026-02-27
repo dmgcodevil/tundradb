@@ -213,6 +213,7 @@ add_library(core
         src/core.cpp
         src/query.cpp
         src/query_execution.cpp
+        src/join.cpp
         src/storage.cpp
         src/metadata.cpp
         src/file_utils.cpp

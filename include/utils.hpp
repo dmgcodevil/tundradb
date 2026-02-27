@@ -21,6 +21,31 @@
 #include "types.hpp"
 
 namespace tundradb {
+
+template <class SetA, class SetB, class OutSet>
+void dense_intersection(const SetA& a, const SetB& b, OutSet& out) {
+  const auto& small = a.size() < b.size() ? a : b;
+  const auto& large = a.size() < b.size() ? b : a;
+  out.clear();
+  out.reserve(std::min(a.size(), b.size()));
+  for (const auto& x : small) {
+    if (large.contains(x)) {
+      out.insert(x);
+    }
+  }
+}
+
+template <class SetA, class SetB, class OutSet>
+void dense_difference(const SetA& a, const SetB& b, OutSet& out) {
+  out.clear();
+  out.reserve(a.size());
+  for (const auto& x : a) {
+    if (!b.contains(x)) {
+      out.insert(x);
+    }
+  }
+}
+
 static std::string generate_uuid() {
   uuid_t uuid;
   uuid_generate(uuid);
