@@ -16,42 +16,30 @@ namespace tundradb {
  * a JoinStrategy can decide which target (and source) IDs survive.
  */
 struct JoinInput {
-  // All node IDs currently in the source schema within query state
-  const llvm::DenseSet<int64_t>& source_ids;
-
-  // All node IDs that exist in the target table (full scan of target schema)
-  const llvm::DenseSet<int64_t>& all_target_ids;
-
-  // Source nodes that had at least one matching edge
-  const llvm::DenseSet<int64_t>& matched_source_ids;
-
-  // Target nodes that were reached via matching edges
-  const llvm::DenseSet<int64_t>& matched_target_ids;
-
-  // Target IDs already accumulated from a previous traversal that shares
-  // the same target alias (e.g. multi-pattern queries). Empty on the first
-  // pass.
-  const llvm::DenseSet<int64_t>& existing_target_ids;
-
-  // Source nodes that had NO matching edge
-  const llvm::DenseSet<int64_t>& unmatched_source_ids;
-
-  // Whether source and target resolve to the same concrete schema
-  bool is_self_join;
+  const llvm::DenseSet<int64_t>&
+      source_ids;  ///< All source IDs in query state.
+  const llvm::DenseSet<int64_t>&
+      all_target_ids;  ///< All IDs in the target table.
+  const llvm::DenseSet<int64_t>&
+      matched_source_ids;  ///< Sources with ≥ 1 matching edge.
+  const llvm::DenseSet<int64_t>&
+      matched_target_ids;  ///< Targets reached via edges.
+  const llvm::DenseSet<int64_t>&
+      existing_target_ids;  ///< Targets from a prior traversal pass.
+  const llvm::DenseSet<int64_t>&
+      unmatched_source_ids;  ///< Sources with no matching edge.
+  bool is_self_join;         ///< True when source == target schema.
 };
 
 /**
  * @brief Output of join ID computation
  */
 struct JoinOutput {
-  // Final set of target node IDs to store in query_state.ids[target]
-  llvm::DenseSet<int64_t> target_ids;
-
-  // Source IDs that should be removed from query_state (INNER join pruning)
-  llvm::DenseSet<int64_t> source_ids_to_remove;
-
-  // Whether the source table needs to be rebuilt after pruning
-  bool rebuild_source_table = false;
+  llvm::DenseSet<int64_t> target_ids;  ///< Final target IDs for query_state.
+  llvm::DenseSet<int64_t>
+      source_ids_to_remove;  ///< Source IDs to prune (INNER join).
+  bool rebuild_source_table =
+      false;  ///< True if the source table must be rebuilt.
 };
 
 /**
@@ -68,12 +56,15 @@ class JoinStrategy {
   virtual ~JoinStrategy() = default;
 
   /**
-   * Compute which target/source IDs survive this join.
+   * @brief Computes which target and source IDs survive this join.
+   *
+   * @param input The accumulated traversal state.
+   * @return The join output describing surviving IDs and pruning actions.
    */
   [[nodiscard]] virtual JoinOutput compute(const JoinInput& input) const = 0;
 
   /**
-   * Human-readable name for logging / debugging.
+   * @brief Returns a human-readable name for logging / debugging.
    */
   [[nodiscard]] virtual const char* name() const noexcept = 0;
 };
@@ -158,11 +149,18 @@ class FullJoinStrategy final : public JoinStrategy {
 };
 
 /**
- * @brief Creates the appropriate JoinStrategy for a given TraverseType
- *        and join context (self-join vs. cross-schema).
+ * @brief Factory that selects the correct JoinStrategy for a given traverse
+ * type.
  */
 class JoinStrategyFactory {
  public:
+  /**
+   * @brief Creates a strategy instance.
+   *
+   * @param type The join/traverse type (Inner, Left, Right, Full).
+   * @param is_self_join True when source and target resolve to the same schema.
+   * @return A unique_ptr to the selected strategy.
+   */
   static std::unique_ptr<JoinStrategy> create(TraverseType type,
                                               bool is_self_join);
 };

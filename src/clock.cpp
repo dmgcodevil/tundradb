@@ -1,4 +1,4 @@
-#include "../include/clock.hpp"
+#include "clock.hpp"
 
 namespace tundradb {
 
