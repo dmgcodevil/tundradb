@@ -1,0 +1,191 @@
+# ---------------------------------------------------------------------------
+# TundraDB — Linux Release Builder
+#
+# Multi-stage Dockerfile that builds tundra_shell in Release mode and
+# produces a self-contained distributable tarball.
+#
+# Usage (from project root):
+#   docker build --platform linux/amd64 \
+#       -f docker/Dockerfile.linux-release \
+#       -t tundradb-linux-release .
+#
+#   docker run --rm -v "$(pwd)/dist:/output" tundradb-linux-release
+#
+# The tarball will appear in dist/
+# ---------------------------------------------------------------------------
+
+ARG TARGETPLATFORM=linux/amd64
+FROM --platform=${TARGETPLATFORM} ubuntu:24.04 AS builder
+
+ARG TUNDRADB_VERSION=1.0.0
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TUNDRADB_VERSION=${TUNDRADB_VERSION}
+
+# --- 1. Install system packages ---
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    gcc-13 \
+    g++-13 \
+    git \
+    pkg-config \
+    python3 \
+    wget \
+    curl \
+    lsb-release \
+    gnupg \
+    ca-certificates \
+    uuid-dev \
+    libboost-all-dev \
+    libtbb-dev \
+    libgtest-dev \
+    libcds-dev \
+    openjdk-11-jdk \
+    patchelf \
+    llvm clang lldb \
+    file \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set GCC 13 as default
+RUN update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100 \
+    && update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 100
+
+# --- 2. Install CMake 3.30 ---
+RUN wget -q https://github.com/Kitware/CMake/releases/download/v3.30.0/cmake-3.30.0-linux-x86_64.sh \
+        -O /tmp/cmake-install.sh \
+    && chmod u+x /tmp/cmake-install.sh \
+    && mkdir -p /opt/cmake \
+    && /tmp/cmake-install.sh --skip-license --prefix=/opt/cmake \
+    && ln -sf /opt/cmake/bin/* /usr/local/bin/ \
+    && rm /tmp/cmake-install.sh
+
+# --- 3. Install Apache Arrow + Parquet ---
+RUN wget https://packages.apache.org/artifactory/arrow/$(lsb_release --id --short | tr 'A-Z' 'a-z')/apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb \
+    && apt-get install -y -V ./apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb \
+    && apt-get update \
+    && apt-get install -y -V libarrow-dev libarrow-dataset-dev libparquet-dev \
+    && (apt-get install -y libarrow-compute-dev 2>/dev/null || true) \
+    && rm -f ./apache-arrow-apt-source-latest-*.deb \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- 4. Install spdlog from source ---
+RUN cd /tmp \
+    && git clone --depth 1 --branch v1.12.0 https://github.com/gabime/spdlog.git \
+    && cd spdlog && mkdir build && cd build \
+    && cmake .. -DCMAKE_BUILD_TYPE=Release -DSPDLOG_BUILD_SHARED=ON \
+    && make -j$(nproc) && make install \
+    && ldconfig && cd / && rm -rf /tmp/spdlog
+
+# --- 5. Install fmt from source ---
+RUN cd /tmp \
+    && git clone --depth 1 --branch 10.2.1 https://github.com/fmtlib/fmt.git \
+    && cd fmt && mkdir build && cd build \
+    && cmake .. -DCMAKE_BUILD_TYPE=Release -DFMT_DOC=OFF -DFMT_TEST=OFF \
+    && make -j$(nproc) && make install \
+    && ldconfig && cd / && rm -rf /tmp/fmt
+
+# --- 6. Install Google Benchmark from source ---
+RUN cd /tmp \
+    && git clone --depth 1 https://github.com/google/benchmark.git \
+    && cd benchmark && mkdir build && cd build \
+    && cmake .. -DCMAKE_BUILD_TYPE=Release -DBENCHMARK_ENABLE_GTEST_TESTS=OFF \
+    && make -j$(nproc) && make install \
+    && ldconfig && cd / && rm -rf /tmp/benchmark
+
+# --- 7. Install ANTLR4 C++ runtime from source ---
+RUN cd /tmp \
+    && git clone https://github.com/antlr/antlr4.git \
+    && cd antlr4/runtime/Cpp && mkdir build && cd build \
+    && cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DCMAKE_CXX_STANDARD=17 \
+    && make -j$(nproc) && make install \
+    && ldconfig \
+    && cp -r /usr/local/include/antlr4-runtime/* /usr/local/include/ 2>/dev/null || \
+       cp -r /tmp/antlr4/runtime/Cpp/runtime/src/* /usr/local/include/ \
+    && cd / && rm -rf /tmp/antlr4
+
+# --- 8. Copy source and build ---
+WORKDIR /workspace
+COPY . .
+
+RUN cmake -B build_release -S . \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DTUNDRADB_BUILD_TESTS=OFF \
+        -DTUNDRADB_BUILD_BENCHMARKS=OFF \
+        -DTUNDRADB_BUILD_SHELL=ON \
+    && cmake --build build_release -j$(nproc)
+
+# --- 9. Bundle into self-contained distribution ---
+RUN set -e && \
+    APP_NAME="tundra_shell" && \
+    BUNDLE="TundraDB-${TUNDRADB_VERSION}-Linux-x86_64" && \
+    BUNDLE_DIR="/dist/${BUNDLE}" && \
+    \
+    mkdir -p "${BUNDLE_DIR}/bin" "${BUNDLE_DIR}/libs" && \
+    cp "build_release/${APP_NAME}" "${BUNDLE_DIR}/bin/" && \
+    \
+    echo "=== Collecting shared libraries ===" && \
+    # Collect all .so dependencies, skip system/kernel libs
+    ldd "${BUNDLE_DIR}/bin/${APP_NAME}" | \
+        awk '/=>/ && !/linux-vdso|ld-linux|libc\.so|libm\.so|libpthread|libdl\.so|librt\.so|libresolv|libnss|libnsl/ {print $3}' | \
+        sort -u | while read -r lib; do \
+            if [ -f "$lib" ]; then \
+                cp -L "$lib" "${BUNDLE_DIR}/libs/" ; \
+                echo "  bundled: $(basename "$lib")" ; \
+            fi ; \
+        done && \
+    \
+    # Also check for transitive deps of bundled libs
+    echo "=== Collecting transitive dependencies ===" && \
+    for attempt in 1 2 3; do \
+        FOUND_NEW=false ; \
+        for bundled_lib in "${BUNDLE_DIR}/libs/"*.so*; do \
+            ldd "$bundled_lib" 2>/dev/null | \
+                awk '/=>/ && !/linux-vdso|ld-linux|libc\.so|libm\.so|libpthread|libdl\.so|librt\.so|libresolv|libnss|libnsl/ {print $3}' | \
+                sort -u | while read -r lib; do \
+                    base=$(basename "$lib") ; \
+                    if [ -f "$lib" ] && [ ! -f "${BUNDLE_DIR}/libs/${base}" ]; then \
+                        cp -L "$lib" "${BUNDLE_DIR}/libs/" ; \
+                        echo "  bundled (transitive pass $attempt): ${base}" ; \
+                    fi ; \
+                done ; \
+        done ; \
+    done && \
+    \
+    echo "=== Setting RPATH ===" && \
+    # Set RPATH on the binary so it finds libs at ../libs/ relative to itself
+    patchelf --set-rpath '$ORIGIN/../libs' "${BUNDLE_DIR}/bin/${APP_NAME}" && \
+    \
+    # Set RPATH on all bundled libs so they find each other
+    for lib in "${BUNDLE_DIR}/libs/"*.so*; do \
+        patchelf --set-rpath '$ORIGIN' "$lib" 2>/dev/null || true ; \
+    done && \
+    \
+    echo "=== Stripping debug symbols ===" && \
+    strip --strip-unneeded "${BUNDLE_DIR}/bin/${APP_NAME}" 2>/dev/null || true && \
+    for lib in "${BUNDLE_DIR}/libs/"*.so*; do \
+        strip --strip-unneeded "$lib" 2>/dev/null || true ; \
+    done && \
+    \
+    # Create launcher script
+    printf '#!/bin/bash\nSCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"\nexec "${SCRIPT_DIR}/bin/tundra_shell" "$@"\n' \
+        > "${BUNDLE_DIR}/${APP_NAME}" && \
+    chmod +x "${BUNDLE_DIR}/${APP_NAME}" && \
+    \
+    # Version file
+    echo "${TUNDRADB_VERSION}" > "${BUNDLE_DIR}/VERSION" && \
+    \
+    echo "=== Verifying ===" && \
+    ldd "${BUNDLE_DIR}/bin/${APP_NAME}" && \
+    \
+    echo "=== Creating archive ===" && \
+    cd /dist && \
+    tar -czf "${BUNDLE}.tar.gz" "${BUNDLE}" && \
+    echo "" && \
+    echo "=== Bundle complete ===" && \
+    echo "Libraries bundled: $(ls -1 "${BUNDLE_DIR}/libs/" | wc -l)" && \
+    echo "Archive size: $(du -sh "${BUNDLE}.tar.gz" | awk '{print $1}')" && \
+    echo "Archive: /dist/${BUNDLE}.tar.gz"
+
+# --- 10. Default: copy tarball to /output volume ---
+CMD ["sh", "-c", "cp /dist/TundraDB-*.tar.gz /output/ && echo 'Copied to /output/' && ls -lh /output/TundraDB-*.tar.gz"]
+
