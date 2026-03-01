@@ -1,0 +1,35 @@
+@PACKAGE_INIT@
+
+# TundraDB CMake package configuration
+#
+# Usage:
+#   find_package(TundraDB REQUIRED)
+#   target_link_libraries(myapp PRIVATE TundraDB::tundradb)
+#
+# This will automatically set up include paths and link the library.
+
+include(CMakeFindDependencyMacro)
+
+# TundraDB's public API depends on these packages.
+# They must be available on the consumer's machine.
+find_dependency(Arrow REQUIRED)
+find_dependency(Parquet REQUIRED)
+find_dependency(TBB REQUIRED)
+find_dependency(spdlog REQUIRED)
+
+# Try to find optional Arrow components
+find_dependency(ArrowCompute QUIET)
+find_dependency(ArrowDataset QUIET)
+
+# Find LLVM (needed for DenseSet/DenseMap in public headers)
+if(APPLE)
+    find_dependency(LLVM REQUIRED CONFIG PATHS /opt/homebrew/opt/llvm/lib/cmake/llvm)
+else()
+    find_dependency(LLVM REQUIRED)
+endif()
+
+# Import the exported targets
+include("${CMAKE_CURRENT_LIST_DIR}/TundraDBTargets.cmake")
+
+check_required_components(TundraDB)
+

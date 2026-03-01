@@ -7,7 +7,7 @@
 #include <fstream>
 #include <string>
 
-#include "../libs/json/json.hpp"
+#include "json.hpp"
 
 namespace tundradb {
 

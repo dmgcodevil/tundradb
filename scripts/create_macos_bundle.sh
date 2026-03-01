@@ -1,138 +1,157 @@
 #!/bin/bash
+set -euo pipefail
 
+# ---------------------------------------------------------------------------
 # TundraDB macOS Bundle Creator
-# Uses environment variables for library loading (no binary modification)
-set -e
+#
+# Produces a self-contained distributable archive for macOS.
+# Uses dylibbundler to collect and rewrite all dynamic library references.
+#
+# Prerequisites:
+#   brew install dylibbundler
+#
+# Usage:
+#   ./scripts/create_macos_bundle.sh              # defaults
+#   ./scripts/create_macos_bundle.sh --skip-build  # reuse existing build
+# ---------------------------------------------------------------------------
 
-# Configuration
-BUNDLE_NAME="TundraDB"
 VERSION="1.0.0"
-BUILD_DIR="build"
-BUNDLE_DIR="dist/${BUNDLE_NAME}-${VERSION}-macOS"
+BUNDLE_NAME="TundraDB"
 APP_NAME="tundra_shell"
 
-echo "Creating TundraDB macOS bundle..."
+SKIP_BUILD=false
+for arg in "$@"; do
+    case "$arg" in
+        --skip-build) SKIP_BUILD=true ;;
+    esac
+done
 
-# Clean and create bundle directory
-rm -rf dist
-mkdir -p "${BUNDLE_DIR}/bin"
-mkdir -p "${BUNDLE_DIR}/lib"
+# Paths (all relative to project root)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+BUILD_DIR="${PROJECT_DIR}/build_release"
+DIST_DIR="${PROJECT_DIR}/dist"
+BUNDLE_DIR="${DIST_DIR}/${BUNDLE_NAME}-${VERSION}-macOS"
+ARCH="$(uname -m)"   # arm64 or x86_64
 
-# Build the project if not already built
-if [ ! -f "${BUILD_DIR}/${APP_NAME}" ]; then
-    echo "Building TundraDB..."
-    mkdir -p ${BUILD_DIR}
-    cd ${BUILD_DIR}
-    cmake .. -DCMAKE_BUILD_TYPE=Release
-    make -j$(sysctl -n hw.ncpu)
-    cd ..
+echo "=== TundraDB macOS Bundle Creator ==="
+echo "Version : ${VERSION}"
+echo "Arch    : ${ARCH}"
+echo "Build   : ${BUILD_DIR}"
+echo "Output  : ${BUNDLE_DIR}"
+echo ""
+
+# ---------------------------------------------------------------------------
+# 1. Check prerequisites
+# ---------------------------------------------------------------------------
+if ! command -v dylibbundler &>/dev/null; then
+    echo "❌ dylibbundler not found. Install it with:"
+    echo "   brew install dylibbundler"
+    exit 1
 fi
 
-# Copy the main executable without modification
+if ! command -v cmake &>/dev/null; then
+    echo "❌ cmake not found. Install it with:"
+    echo "   brew install cmake"
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# 2. Build (Release)
+# ---------------------------------------------------------------------------
+if [ "$SKIP_BUILD" = false ]; then
+    echo ">>> Configuring (Release)..."
+    cmake -B "${BUILD_DIR}" -S "${PROJECT_DIR}" \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DTUNDRADB_BUILD_TESTS=OFF \
+        -DTUNDRADB_BUILD_BENCHMARKS=OFF
+
+    echo ""
+    echo ">>> Building..."
+    cmake --build "${BUILD_DIR}" -j"$(sysctl -n hw.ncpu)"
+    echo ""
+fi
+
+if [ ! -f "${BUILD_DIR}/${APP_NAME}" ]; then
+    echo "❌ Binary not found at ${BUILD_DIR}/${APP_NAME}"
+    echo "   Run without --skip-build or build manually first."
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# 3. Prepare bundle directory
+# ---------------------------------------------------------------------------
+rm -rf "${BUNDLE_DIR}"
+mkdir -p "${BUNDLE_DIR}/bin"
+mkdir -p "${BUNDLE_DIR}/libs"
+
+# Copy the binary (we need a fresh copy; dylibbundler modifies it in place)
 cp "${BUILD_DIR}/${APP_NAME}" "${BUNDLE_DIR}/bin/"
+chmod +w "${BUNDLE_DIR}/bin/${APP_NAME}"
 
-# Copy all required libraries without modifying them
-echo "Copying dependencies..."
+echo ">>> Running dylibbundler..."
+dylibbundler -od -b \
+    -x "${BUNDLE_DIR}/bin/${APP_NAME}" \
+    -d "${BUNDLE_DIR}/libs/" \
+    -p @executable_path/../libs/ \
+    -s /usr/local/lib \
+    -s /opt/homebrew/lib \
+    -s /opt/homebrew/opt/llvm/lib
 
-# Function to copy libraries recursively
-copy_dependencies() {
-    local binary="$1"
-    local lib_dir="$2"
-    
-    # Get list of dynamic libraries
-    otool -L "$binary" | grep -E "(homebrew|local|@rpath)" | awk '{print $1}' | while read lib; do
-        # Handle @rpath libraries
-        if [[ "$lib" == @rpath/* ]]; then
-            lib_name=$(basename "$lib")
-            # Try to find the actual library in common locations
-            actual_lib=""
-            for search_path in /opt/homebrew/lib /usr/local/lib; do
-                if [ -f "${search_path}/${lib_name}" ]; then
-                    actual_lib="${search_path}/${lib_name}"
-                    break
-                fi
-            done
-            
-            if [ -n "$actual_lib" ] && [ -f "$actual_lib" ]; then
-                if [ ! -f "${lib_dir}/${lib_name}" ]; then
-                    echo "  Copying $lib_name (from @rpath)"
-                    cp "$actual_lib" "${lib_dir}/"
-                    chmod +w "${lib_dir}/${lib_name}"
-                    
-                    # Copy dependencies of this library recursively
-                    copy_dependencies "${lib_dir}/${lib_name}" "$lib_dir"
-                fi
-            fi
-        elif [ -f "$lib" ]; then
-            # Handle regular library paths
-            lib_name=$(basename "$lib")
-            if [ ! -f "${lib_dir}/${lib_name}" ]; then
-                echo "  Copying $lib_name"
-                cp "$lib" "${lib_dir}/"
-                chmod +w "${lib_dir}/${lib_name}"
-                
-                # Copy dependencies of this library recursively
-                copy_dependencies "${lib_dir}/${lib_name}" "$lib_dir"
-            fi
-        fi
-    done
-}
+echo ""
 
-# Copy dependencies for the main executable
-copy_dependencies "${BUNDLE_DIR}/bin/${APP_NAME}" "${BUNDLE_DIR}/lib"
-
-# Create a launcher script that sets up the environment
+# ---------------------------------------------------------------------------
+# 4. Create launcher script
+# ---------------------------------------------------------------------------
 cat > "${BUNDLE_DIR}/tundra_shell" << 'EOF'
 #!/bin/bash
-# TundraDB Launcher Script
-
-# Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-# Set up library paths for both Homebrew locations and our bundled libs
-export DYLD_LIBRARY_PATH="${SCRIPT_DIR}/lib:/opt/homebrew/lib:/usr/local/lib:${DYLD_LIBRARY_PATH}"
-export DYLD_FALLBACK_LIBRARY_PATH="${SCRIPT_DIR}/lib:/opt/homebrew/lib:/usr/local/lib"
-
-# Run the application
 exec "${SCRIPT_DIR}/bin/tundra_shell" "$@"
 EOF
-
 chmod +x "${BUNDLE_DIR}/tundra_shell"
 
-# Create README
-cat > "${BUNDLE_DIR}/README.md" << EOF
-# TundraDB v${VERSION} for macOS
-
-## Installation
-1. Extract this archive to any location
-2. Run \`./tundra_shell\` from the extracted directory
-
-## Usage
-\`\`\`bash
-./tundra_shell --help
-./tundra_shell --db-path /path/to/your/database
-\`\`\`
-
-## Requirements
-- macOS 10.15 or later
-- This bundle includes most dependencies, but may require Homebrew libraries to be installed
-
-## Support
-For issues and documentation, visit: https://github.com/yourusername/tundradb
-EOF
-
-# Create version info
+# ---------------------------------------------------------------------------
+# 5. Metadata
+# ---------------------------------------------------------------------------
 echo "${VERSION}" > "${BUNDLE_DIR}/VERSION"
 
-# Create the final archive
-cd dist
-tar -czf "${BUNDLE_NAME}-${VERSION}-macOS.tar.gz" "${BUNDLE_NAME}-${VERSION}-macOS"
-cd ..
+# ---------------------------------------------------------------------------
+# 6. Verify
+# ---------------------------------------------------------------------------
+echo ">>> Verifying binary..."
+UNRESOLVED=$(otool -L "${BUNDLE_DIR}/bin/${APP_NAME}" \
+    | tail -n +2 \
+    | awk '{print $1}' \
+    | grep -vE '^(/usr/lib/|/System/|@executable_path|@rpath)' || true)
 
-echo "✅ Bundle created successfully!"
-echo "📦 Location: dist/${BUNDLE_NAME}-${VERSION}-macOS.tar.gz"
-echo "📁 Directory: ${BUNDLE_DIR}"
+if [ -n "$UNRESOLVED" ]; then
+    echo "⚠️  Warning — these references are not bundled:"
+    echo "$UNRESOLVED"
+else
+    echo "✅ All non-system libraries are bundled"
+fi
+
+# Quick smoke test
+if "${BUNDLE_DIR}/tundra_shell" --help &>/dev/null; then
+    echo "✅ Smoke test passed (--help)"
+else
+    echo "⚠️  Smoke test failed — the binary may not run correctly"
+fi
+
+# ---------------------------------------------------------------------------
+# 7. Create archive
+# ---------------------------------------------------------------------------
+ARCHIVE_NAME="${BUNDLE_NAME}-${VERSION}-macOS-${ARCH}.tar.gz"
+cd "${DIST_DIR}"
+tar -czf "${ARCHIVE_NAME}" "$(basename "${BUNDLE_DIR}")"
+
+ARCHIVE_SIZE=$(du -sh "${ARCHIVE_NAME}" | awk '{print $1}')
+
 echo ""
-echo "To test the bundle:"
-echo "  cd ${BUNDLE_DIR}"
-echo "  ./tundra_shell --help" 
+echo "=== Done ==="
+echo "📦 Archive  : dist/${ARCHIVE_NAME}  (${ARCHIVE_SIZE})"
+echo "📁 Directory: dist/$(basename "${BUNDLE_DIR}")/"
+echo ""
+echo "To test:"
+echo "  cd dist/$(basename "${BUNDLE_DIR}")"
+echo "  ./tundra_shell --help"

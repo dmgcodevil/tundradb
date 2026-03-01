@@ -18,7 +18,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "../libs/json/json.hpp"
+#include "json.hpp"
 #include "arrow_utils.hpp"
 #include "config.hpp"
 #include "edge_store.hpp"

@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "../libs/json/json.hpp"
+#include "json.hpp"
 #include "file_utils.hpp"
 #include "llvm/ADT/SmallVector.h"
 #include "logger.hpp"
