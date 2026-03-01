@@ -6,7 +6,7 @@
 #include <fstream>
 #include <string>
 
-#include "../libs/json/json.hpp"
+#include "json.hpp"
 #include "logger.hpp"
 #include "utils.hpp"
 

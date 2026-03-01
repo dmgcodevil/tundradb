@@ -16,7 +16,7 @@
 #include <utility>
 #include <vector>
 
-#include "../libs/json/json.hpp"
+#include "json.hpp"
 #include "logger.hpp"
 #include "metadata.hpp"
 #include "table_info.hpp"

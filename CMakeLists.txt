@@ -1,8 +1,14 @@
 cmake_minimum_required(VERSION 3.30)
-project(tundradb)
+project(tundradb VERSION 1.0.0 LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Option: build shared or static library (default: static)
+option(BUILD_SHARED_LIBS "Build TundraDB as a shared library" OFF)
+option(TUNDRADB_BUILD_SHELL "Build the tundra_shell interactive CLI" ON)
+option(TUNDRADB_BUILD_TESTS "Build tests" ON)
+option(TUNDRADB_BUILD_BENCHMARKS "Build benchmarks" ON)
 
 # Configure compile-time logging levels
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
@@ -37,19 +43,21 @@ find_package(Parquet REQUIRED)
 find_package(ArrowCompute QUIET)
 find_package(ArrowAcero QUIET)
 
-add_executable(tundra_bench_runner bench/tundra_runner.cpp)
-target_link_libraries(tundra_bench_runner
-        PRIVATE
-        core
-        Arrow::arrow_shared
-        ${ARROW_DATASET_LIB}
-        Parquet::parquet_shared
-        ${UUID_LIBRARY}
-        ${ANTLR4_RUNTIME}
-        LLVMSupport
-        LLVMCore
-        TBB::tbb
-)
+if(TUNDRADB_BUILD_BENCHMARKS)
+    add_executable(tundra_bench_runner bench/tundra_runner.cpp)
+    target_link_libraries(tundra_bench_runner
+            PRIVATE
+            core
+            Arrow::arrow_shared
+            ${ARROW_DATASET_LIB}
+            Parquet::parquet_shared
+            ${UUID_LIBRARY}
+            ${ANTLR4_RUNTIME}
+            LLVMSupport
+            LLVMCore
+            TBB::tbb
+    )
+endif()
 
 
 # Find CDS library
@@ -230,7 +238,9 @@ add_library(core
 
 target_include_directories(core
     PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/libs/json>
+        $<INSTALL_INTERFACE:include/tundradb>
     PRIVATE
         ${ARROW_INCLUDE_DIR}
         /usr/local/include
@@ -263,151 +273,240 @@ endif()
 #        uuid  # Directly use the library name
 #)
 
-# Main executable
-add_executable(tundradb src/main.cpp)
-target_link_libraries(tundradb
-    PRIVATE
-        core
-        Arrow::arrow_shared
-        ${ARROW_DATASET_LIB}
-        Parquet::parquet_shared
-        ${UUID_LIBRARY}
-)
+# ---------------------------------------------------------------------------
+# ANTLR Integration (needed by shell)
+# ---------------------------------------------------------------------------
+if(TUNDRADB_BUILD_SHELL)
+    # Find Java for running ANTLR generator
+    find_package(Java REQUIRED)
 
-# Interactive shell executable
-add_executable(tundra_shell src/tundra_shell.cpp libs/linenoise/linenoise.c)
+    # Define ANTLR jar location
+    set(ANTLR_JAR_LOCATION "${CMAKE_CURRENT_SOURCE_DIR}/antlr/lib/antlr-4.13.2-complete.jar")
 
-# Add ANTLR generated include directory to tundra_shell
-target_include_directories(tundra_shell
-    PRIVATE
-        ${ANTLR_OUTPUT_DIR}
-)
+    # Set up the output directory
+    set(ANTLR_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/antlr_generated")
+    file(MAKE_DIRECTORY ${ANTLR_OUTPUT_DIR})
 
-# Make sure ANTLR files are generated before building tundra_shell
-add_dependencies(tundra_shell GenerateTundraQLParser)
-
-target_link_libraries(tundra_shell
-    PRIVATE
-        core
-        tundraql_parser
-        Arrow::arrow_shared
-        ${ARROW_DATASET_LIB}
-        Parquet::parquet_shared
-        ${UUID_LIBRARY}
-        ${ANTLR4_RUNTIME}
-        LLVMSupport
-        LLVMCore
-)
-
-# ANTLR Integration
-# Find Java for running ANTLR generator
-find_package(Java REQUIRED)
-
-# Define ANTLR jar location
-set(ANTLR_JAR_LOCATION "${CMAKE_CURRENT_SOURCE_DIR}/antlr/lib/antlr-4.13.2-complete.jar")
-
-# Set up the output directory
-set(ANTLR_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/antlr_generated")
-file(MAKE_DIRECTORY ${ANTLR_OUTPUT_DIR})
-
-# Define generated files
-set(TUNDRAQL_GENERATED_SRC
-    ${ANTLR_OUTPUT_DIR}/TundraQLLexer.cpp
-    ${ANTLR_OUTPUT_DIR}/TundraQLParser.cpp
-    ${ANTLR_OUTPUT_DIR}/TundraQLBaseListener.cpp
-    ${ANTLR_OUTPUT_DIR}/TundraQLListener.cpp
-    ${ANTLR_OUTPUT_DIR}/TundraQLBaseVisitor.cpp
-    ${ANTLR_OUTPUT_DIR}/TundraQLVisitor.cpp
-)
-
-# Mark files as generated
-foreach(src_file ${TUNDRAQL_GENERATED_SRC})
-    set_source_files_properties(
-        ${src_file}
-        PROPERTIES
-        GENERATED TRUE
+    # Define generated files
+    set(TUNDRAQL_GENERATED_SRC
+        ${ANTLR_OUTPUT_DIR}/TundraQLLexer.cpp
+        ${ANTLR_OUTPUT_DIR}/TundraQLParser.cpp
+        ${ANTLR_OUTPUT_DIR}/TundraQLBaseListener.cpp
+        ${ANTLR_OUTPUT_DIR}/TundraQLListener.cpp
+        ${ANTLR_OUTPUT_DIR}/TundraQLBaseVisitor.cpp
+        ${ANTLR_OUTPUT_DIR}/TundraQLVisitor.cpp
     )
-endforeach()
 
-# Custom target for ANTLR parser generation
-add_custom_target(GenerateTundraQLParser DEPENDS ${TUNDRAQL_GENERATED_SRC})
+    # Mark files as generated
+    foreach(src_file ${TUNDRAQL_GENERATED_SRC})
+        set_source_files_properties(
+            ${src_file}
+            PROPERTIES
+            GENERATED TRUE
+        )
+    endforeach()
 
-# Custom command to generate ANTLR files
-add_custom_command(
-    OUTPUT ${TUNDRAQL_GENERATED_SRC}
-    COMMAND
-    ${Java_JAVA_EXECUTABLE} -jar ${ANTLR_JAR_LOCATION} -Werror -Dlanguage=Cpp -listener -visitor -o ${ANTLR_OUTPUT_DIR} -package tundraql ${CMAKE_CURRENT_SOURCE_DIR}/antlr/TundraQL.g4
-    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/antlr/TundraQL.g4
-    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-    COMMENT "Generating ANTLR4 parser"
-)
+    # Custom target for ANTLR parser generation
+    add_custom_target(GenerateTundraQLParser DEPENDS ${TUNDRAQL_GENERATED_SRC})
 
-# Add ANTLR runtime library
-# On macOS with Homebrew, you may need to adjust these paths
-if(APPLE)
-    find_library(ANTLR4_RUNTIME antlr4-runtime PATHS /opt/homebrew/lib /usr/local/lib)
-    include_directories(/opt/homebrew/include/antlr4-runtime /usr/local/include/antlr4-runtime)
-else()
-    # Linux - look in standard locations and also check common install paths
-    find_library(ANTLR4_RUNTIME antlr4-runtime PATHS /usr/local/lib /usr/lib /usr/lib/x86_64-linux-gnu)
-    find_path(ANTLR4_INCLUDE_DIR antlr4-runtime.h PATHS 
-        /usr/local/include/antlr4-runtime 
-        /usr/include/antlr4-runtime
-        /usr/local/include
-        /usr/include
+    # Custom command to generate ANTLR files
+    add_custom_command(
+        OUTPUT ${TUNDRAQL_GENERATED_SRC}
+        COMMAND
+        ${Java_JAVA_EXECUTABLE} -jar ${ANTLR_JAR_LOCATION} -Werror -Dlanguage=Cpp -listener -visitor -o ${ANTLR_OUTPUT_DIR} -package tundraql ${CMAKE_CURRENT_SOURCE_DIR}/antlr/TundraQL.g4
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/antlr/TundraQL.g4
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+        COMMENT "Generating ANTLR4 parser"
     )
-    if(ANTLR4_INCLUDE_DIR)
-        include_directories(${ANTLR4_INCLUDE_DIR})
-        message(STATUS "Found ANTLR4 headers at: ${ANTLR4_INCLUDE_DIR}")
+
+    # Add ANTLR runtime library
+    if(APPLE)
+        find_library(ANTLR4_RUNTIME antlr4-runtime PATHS /opt/homebrew/lib /usr/local/lib)
+        include_directories(/opt/homebrew/include/antlr4-runtime /usr/local/include/antlr4-runtime)
     else()
-        # Fallback: try to use the installed headers directly
-        include_directories(/usr/local/include)
-        message(WARNING "ANTLR4 headers not found in expected paths, using /usr/local/include as fallback")
+        find_library(ANTLR4_RUNTIME antlr4-runtime PATHS /usr/local/lib /usr/lib /usr/lib/x86_64-linux-gnu)
+        find_path(ANTLR4_INCLUDE_DIR antlr4-runtime.h PATHS
+            /usr/local/include/antlr4-runtime
+            /usr/include/antlr4-runtime
+            /usr/local/include
+            /usr/include
+        )
+        if(ANTLR4_INCLUDE_DIR)
+            include_directories(${ANTLR4_INCLUDE_DIR})
+            message(STATUS "Found ANTLR4 headers at: ${ANTLR4_INCLUDE_DIR}")
+        else()
+            include_directories(/usr/local/include)
+            message(WARNING "ANTLR4 headers not found in expected paths, using /usr/local/include as fallback")
+        endif()
     endif()
-endif()
 
-if(NOT ANTLR4_RUNTIME)
-    message(WARNING "ANTLR4 runtime library not found. Please install it via Homebrew or from source.")
-else()
-    message(STATUS "Found ANTLR4 runtime library: ${ANTLR4_RUNTIME}")
-endif()
+    if(NOT ANTLR4_RUNTIME)
+        message(WARNING "ANTLR4 runtime library not found. Please install it via Homebrew or from source.")
+    else()
+        message(STATUS "Found ANTLR4 runtime library: ${ANTLR4_RUNTIME}")
+    endif()
 
-# Create a library for the ANTLR parser
-add_library(tundraql_parser
-    ${TUNDRAQL_GENERATED_SRC}
-)
+    # Create a library for the ANTLR parser
+    add_library(tundraql_parser ${TUNDRAQL_GENERATED_SRC})
+    add_dependencies(tundraql_parser GenerateTundraQLParser)
 
-# Make sure the parser is generated first
-add_dependencies(tundraql_parser GenerateTundraQLParser)
-
-# Include the generated header files and ANTLR runtime headers
-target_include_directories(tundraql_parser
-    PUBLIC
-        ${ANTLR_OUTPUT_DIR}
-    PRIVATE
-        /usr/local/include
-        /usr/local/include/antlr4-runtime
-        /usr/include
-        /usr/include/antlr4-runtime
-)
-
-# Link ANTLR runtime to the parser library
-if(ANTLR4_RUNTIME)
-    target_link_libraries(tundraql_parser
+    target_include_directories(tundraql_parser
+        PUBLIC
+            ${ANTLR_OUTPUT_DIR}
         PRIVATE
+            /usr/local/include
+            /usr/local/include/antlr4-runtime
+            /usr/include
+            /usr/include/antlr4-runtime
+    )
+
+    if(ANTLR4_RUNTIME)
+        target_link_libraries(tundraql_parser
+            PRIVATE
+                ${ANTLR4_RUNTIME}
+        )
+    endif()
+
+    # Interactive shell executable
+    add_executable(tundra_shell src/tundra_shell.cpp libs/linenoise/linenoise.c)
+
+    target_include_directories(tundra_shell
+        PRIVATE
+            ${ANTLR_OUTPUT_DIR}
+    )
+
+    add_dependencies(tundra_shell GenerateTundraQLParser)
+
+    target_link_libraries(tundra_shell
+        PRIVATE
+            core
+            tundraql_parser
+            Arrow::arrow_shared
+            ${ARROW_DATASET_LIB}
+            Parquet::parquet_shared
+            ${UUID_LIBRARY}
             ${ANTLR4_RUNTIME}
+            LLVMSupport
+            LLVMCore
     )
 endif()
 
-# Link the parser library to the main executable
-target_link_libraries(tundradb
-    PRIVATE
-        tundraql_parser
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+if(TUNDRADB_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
+
+# ---------------------------------------------------------------------------
+# Install rules  –  library + headers + shell + CMake package config
+# ---------------------------------------------------------------------------
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+
+# Install the core library
+install(TARGETS core
+    EXPORT TundraDBTargets
+    LIBRARY  DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE  DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME  DESTINATION ${CMAKE_INSTALL_BINDIR}
+    INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tundradb
 )
 
-# Enable testing
-enable_testing()
+# Install public headers
+install(DIRECTORY include/
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tundradb
+    FILES_MATCHING PATTERN "*.hpp"
+)
 
-# Add tests directory
-add_subdirectory(tests)
+# Install the bundled nlohmann json header
+install(FILES libs/json/json.hpp
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tundradb
+)
+
+# Install the shell executable
+if(TUNDRADB_BUILD_SHELL)
+    install(TARGETS tundra_shell
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    )
+endif()
+
+# Generate the version file
+write_basic_package_version_file(
+    "${CMAKE_CURRENT_BINARY_DIR}/TundraDBConfigVersion.cmake"
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion
+)
+
+# Export the targets
+install(EXPORT TundraDBTargets
+    FILE TundraDBTargets.cmake
+    NAMESPACE TundraDB::
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/TundraDB
+)
+
+# Generate and install the config file
+configure_package_config_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/TundraDBConfig.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/TundraDBConfig.cmake"
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/TundraDB
+)
+
+install(FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/TundraDBConfig.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/TundraDBConfigVersion.cmake"
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/TundraDB
+)
+
+# ---------------------------------------------------------------------------
+# CPack — generate distributable packages (.tar.gz, .deb, .rpm, .dmg)
+# ---------------------------------------------------------------------------
+set(CPACK_PACKAGE_NAME "TundraDB")
+set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
+set(CPACK_PACKAGE_VENDOR "TundraDB")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Graph database with temporal versioning, per-schema IDs, and Apache Arrow")
+set(CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/yourusername/tundradb")
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
+    set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
+endif()
+set(CPACK_PACKAGE_FILE_NAME "TundraDB-${PROJECT_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
+
+# Archive generators (works everywhere)
+set(CPACK_GENERATOR "TGZ")
+
+# macOS: also generate .dmg
+if(APPLE)
+    list(APPEND CPACK_GENERATOR "DragNDrop")
+endif()
+
+# Linux: generate .deb and .rpm
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # Debian/Ubuntu .deb
+    list(APPEND CPACK_GENERATOR "DEB")
+    set(CPACK_DEBIAN_PACKAGE_MAINTAINER "TundraDB Maintainers")
+    set(CPACK_DEBIAN_PACKAGE_DEPENDS "libarrow-dev, libparquet-dev, libtbb-dev, libspdlog-dev")
+    set(CPACK_DEBIAN_PACKAGE_SECTION "database")
+
+    # Fedora/RHEL .rpm
+    list(APPEND CPACK_GENERATOR "RPM")
+    set(CPACK_RPM_PACKAGE_LICENSE "MIT")
+    set(CPACK_RPM_PACKAGE_GROUP "Development/Libraries")
+    set(CPACK_RPM_PACKAGE_REQUIRES "arrow-devel, parquet-devel, tbb-devel, spdlog-devel")
+endif()
+
+# Source package
+set(CPACK_SOURCE_GENERATOR "TGZ")
+set(CPACK_SOURCE_IGNORE_FILES
+    "/build/"
+    "/build_release/"
+    "/build_tsan/"
+    "/dist/"
+    "/\\\\.git/"
+    "/test_db_"
+    "/tundra_profile"
+    "\\\\.trace/"
+)
+
+include(CPack)
 
