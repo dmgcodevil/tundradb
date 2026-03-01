@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TundraDB — Graph Database with Relational Joins & Temporal Versioning</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        body { margin: 0; padding: 0; overflow-x: hidden; }
+
+        /* ---- Top Nav ---- */
+        .topnav {
+            position: fixed; top: 0; left: 0; right: 0; z-index: 200;
+            background: rgba(15, 23, 42, 0.92); backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border);
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 0 3rem; height: 60px;
+        }
+        .topnav .brand { font-size: 1.25rem; font-weight: 700;
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .topnav nav { display: flex; gap: 0.25rem; }
+        .topnav nav a {
+            color: var(--text-dim); text-decoration: none; padding: 0.5rem 1rem;
+            border-radius: 6px; font-size: 0.9rem; transition: all 0.15s;
+        }
+        .topnav nav a:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+
+        /* ---- Hero ---- */
+        .hero-section {
+            min-height: 100vh; display: flex; flex-direction: column;
+            align-items: center; justify-content: center; text-align: center;
+            padding: 6rem 2rem 4rem; position: relative;
+            background: radial-gradient(ellipse at 50% 0%, rgba(37,99,235,0.12) 0%, transparent 70%);
+        }
+        .hero-section h1 {
+            font-size: clamp(2.5rem, 5vw, 4.5rem); font-weight: 800; line-height: 1.15;
+            background: linear-gradient(135deg, #2563eb 0%, #10b981 50%, #f59e0b 100%);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+            margin-bottom: 1.25rem; max-width: 900px;
+        }
+        .hero-section .tagline {
+            font-size: 1.25rem; color: var(--text-dim); max-width: 700px; margin-bottom: 2.5rem;
+        }
+        .hero-buttons { display: flex; gap: 1rem; flex-wrap: wrap; justify-content: center; }
+        .hero-buttons .btn-primary, .hero-buttons .btn-secondary { padding: 0.85rem 2rem; font-size: 1rem; border-radius: 10px; }
+
+        /* ---- Feature Cards ---- */
+        .features { padding: 5rem 3rem; max-width: 1200px; margin: 0 auto; }
+        .features h2 { text-align: center; font-size: 2rem; margin-bottom: 3rem;
+            background: linear-gradient(135deg, var(--text), var(--text-dim));
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .feature-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem; }
+        .feature-card {
+            background: var(--bg-light); border: 1px solid var(--border); border-radius: 12px;
+            padding: 2rem; transition: all 0.25s;
+        }
+        .feature-card:hover { transform: translateY(-4px); box-shadow: 0 12px 32px rgba(0,0,0,0.3); border-color: var(--primary); }
+        .feature-card .icon { font-size: 2.25rem; margin-bottom: 1rem; }
+        .feature-card h3 { font-size: 1.15rem; margin-bottom: 0.5rem; color: var(--text); }
+        .feature-card p { color: var(--text-dim); font-size: 0.95rem; line-height: 1.6; }
+
+        /* ---- Quick Start ---- */
+        .quickstart { padding: 5rem 3rem; max-width: 960px; margin: 0 auto; }
+        .quickstart h2 { text-align: center; font-size: 2rem; margin-bottom: 1rem; }
+        .quickstart .sub { text-align: center; color: var(--text-dim); margin-bottom: 2.5rem; font-size: 1.05rem; }
+        .qs-block {
+            background: var(--bg-light); border: 1px solid var(--border); border-radius: 12px;
+            overflow: hidden; margin-bottom: 1.5rem;
+        }
+        .qs-block .label {
+            background: var(--bg-lighter); padding: 0.6rem 1.25rem; font-size: 0.8rem;
+            color: var(--text-dim); border-bottom: 1px solid var(--border);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .qs-block .label .step {
+            background: var(--primary); color: #fff; padding: 0.15rem 0.5rem;
+            border-radius: 4px; font-size: 0.7rem; font-weight: 600;
+        }
+        .qs-block pre { margin: 0; padding: 1.25rem; overflow-x: auto; }
+        .qs-block code { font-size: 0.9rem; line-height: 1.7; color: #a5b4fc; }
+        .kw { color: #c084fc; font-weight: 600; }
+        .str { color: #86efac; }
+        .num { color: #fbbf24; }
+        .cmt { color: #64748b; font-style: italic; }
+
+        /* ---- Documentation Links ---- */
+        .docs-section { padding: 5rem 3rem; max-width: 1200px; margin: 0 auto; }
+        .docs-section h2 { text-align: center; font-size: 2rem; margin-bottom: 3rem; }
+        .docs-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.5rem; }
+        .doc-card {
+            background: var(--bg-light); border: 1px solid var(--border); border-radius: 12px;
+            padding: 2rem; text-decoration: none; color: inherit; transition: all 0.25s;
+            display: block;
+        }
+        .doc-card:hover { transform: translateY(-4px); box-shadow: 0 12px 32px rgba(0,0,0,0.3); border-color: var(--primary); }
+        .doc-card .doc-icon { font-size: 2rem; margin-bottom: 1rem; }
+        .doc-card h3 { font-size: 1.15rem; margin-bottom: 0.5rem; color: var(--text); }
+        .doc-card p { color: var(--text-dim); font-size: 0.9rem; line-height: 1.5; }
+        .doc-card .arrow { display: inline-block; margin-top: 0.75rem; color: var(--primary); font-weight: 600; font-size: 0.9rem; }
+
+        /* ---- Tech Stack ---- */
+        .tech-section { padding: 5rem 3rem; max-width: 1000px; margin: 0 auto; }
+        .tech-section h2 { text-align: center; font-size: 2rem; margin-bottom: 2.5rem; }
+        .tech-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; }
+        .tech-item {
+            background: var(--bg-light); border: 1px solid var(--border); border-radius: 10px;
+            padding: 1.25rem; text-align: center;
+        }
+        .tech-item .t-icon { font-size: 1.75rem; margin-bottom: 0.5rem; }
+        .tech-item h4 { font-size: 1rem; color: var(--text); margin-bottom: 0.25rem; }
+        .tech-item p { color: var(--text-dim); font-size: 0.8rem; }
+
+        /* ---- Footer ---- */
+        .footer {
+            border-top: 1px solid var(--border); padding: 2rem 3rem;
+            text-align: center; color: var(--text-dim); font-size: 0.85rem;
+        }
+
+        @media (max-width: 768px) {
+            .topnav { padding: 0 1rem; }
+            .topnav nav a { padding: 0.5rem; font-size: 0.8rem; }
+            .hero-section { padding: 5rem 1.5rem 3rem; }
+            .features, .quickstart, .docs-section, .tech-section { padding: 3rem 1.5rem; }
+        }
+    </style>
+</head>
+<body>
+    <!-- Top Navigation -->
+    <div class="topnav">
+        <div class="brand">TundraDB</div>
+        <nav>
+            <a href="architecture.html">Architecture</a>
+            <a href="tundraql.html">TundraQL</a>
+            <a href="query-execution.html">Query Engine</a>
+            <a href="algorithm-deep-dive.html">Algorithms</a>
+        </nav>
+    </div>
+
+    <!-- Hero -->
+    <section class="hero-section">
+        <h1>In-Memory Graph Database with Relational Joins</h1>
+        <p class="tagline">
+            TundraDB combines graph traversals with SQL-style join semantics,
+            bitemporal versioning, and Apache Arrow columnar output — built in C++23.
+        </p>
+        <div class="hero-buttons">
+            <a href="#quickstart" class="btn-primary">Get Started</a>
+            <a href="tundraql.html" class="btn-secondary">TundraQL Reference</a>
+            <a href="query-execution.html" class="btn-secondary">Live Demo</a>
+        </div>
+    </section>
+
+    <!-- Features -->
+    <section class="features">
+        <h2>Why TundraDB?</h2>
+        <div class="feature-grid">
+            <div class="feature-card">
+                <div class="icon">🔗</div>
+                <h3>Graph + Relational</h3>
+                <p>Traverse edges like a graph DB, but with INNER, LEFT, RIGHT, and FULL OUTER join semantics for precise control over results.</p>
+            </div>
+            <div class="feature-card">
+                <div class="icon">🕐</div>
+                <h3>Bitemporal Versioning</h3>
+                <p>Every node tracks VALIDTIME (real-world truth) and TXNTIME (database knowledge). Time-travel queries with zero overhead when disabled.</p>
+            </div>
+            <div class="feature-card">
+                <div class="icon">🏹</div>
+                <h3>Arrow-Native Output</h3>
+                <p>Query results are Apache Arrow tables — zero-copy interop with Pandas, Spark, DuckDB, and any Arrow-compatible tool.</p>
+            </div>
+            <div class="feature-card">
+                <div class="icon">⚡</div>
+                <h3>In-Memory Performance</h3>
+                <p>Arena-allocated nodes, LLVM DenseMap for hot paths, Intel TBB for parallel traversal. No disk I/O during queries.</p>
+            </div>
+            <div class="feature-card">
+                <div class="icon">📐</div>
+                <h3>Schema-First Design</h3>
+                <p>Typed schemas enable fixed-layout memory, compile-time field access, and schema validation on writes.</p>
+            </div>
+            <div class="feature-card">
+                <div class="icon">💾</div>
+                <h3>Parquet Persistence</h3>
+                <p>Snapshot-based COMMIT writes shards and edges to Parquet files with JSON metadata. Fast cold-start recovery.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Quick Start -->
+    <section class="quickstart" id="quickstart">
+        <h2>Quick Start</h2>
+        <p class="sub">A complete session in TundraQL — schema, data, edges, and query.</p>
+
+        <div class="qs-block">
+            <div class="label"><span>Define schemas</span> <span class="step">Step 1</span></div>
+            <pre><code><span class="kw">CREATE SCHEMA</span> User (name: STRING, age: INT64);
+<span class="kw">CREATE SCHEMA</span> Company (name: STRING, size: INT64);</code></pre>
+        </div>
+
+        <div class="qs-block">
+            <div class="label"><span>Create nodes</span> <span class="step">Step 2</span></div>
+            <pre><code><span class="kw">CREATE NODE</span> User (name = <span class="str">"Alice"</span>, age = <span class="num">30</span>) <span class="kw">RETURN id</span>;  <span class="cmt">// → id: 0</span>
+<span class="kw">CREATE NODE</span> User (name = <span class="str">"Bob"</span>,   age = <span class="num">25</span>) <span class="kw">RETURN id</span>;  <span class="cmt">// → id: 1</span>
+<span class="kw">CREATE NODE</span> Company (name = <span class="str">"Google"</span>, size = <span class="num">3000</span>);</code></pre>
+        </div>
+
+        <div class="qs-block">
+            <div class="label"><span>Create edges</span> <span class="step">Step 3</span></div>
+            <pre><code><span class="kw">CREATE EDGE</span> friend   <span class="kw">FROM</span> User(<span class="num">0</span>) <span class="kw">TO</span> User(<span class="num">1</span>);
+<span class="kw">CREATE EDGE</span> works_at <span class="kw">FROM</span> User(<span class="num">1</span>) <span class="kw">TO</span> Company(<span class="num">2</span>);</code></pre>
+        </div>
+
+        <div class="qs-block">
+            <div class="label"><span>Query — Alice's friends who work at Google</span> <span class="step">Step 4</span></div>
+            <pre><code><span class="kw">MATCH</span> (u:User)-[:friend <span class="kw">INNER</span>]->(f:User)
+              -[:works_at <span class="kw">INNER</span>]->(c:Company)
+    <span class="kw">WHERE</span> u.name = <span class="str">"Alice"</span> <span class="kw">AND</span> c.name = <span class="str">"Google"</span>
+    <span class="kw">SELECT</span> u.name, f.name, c.name;
+
+<span class="cmt">// ┌────────┬────────┬────────┐</span>
+<span class="cmt">// │ u.name │ f.name │ c.name │</span>
+<span class="cmt">// ├────────┼────────┼────────┤</span>
+<span class="cmt">// │ Alice  │ Bob    │ Google │</span>
+<span class="cmt">// └────────┴────────┴────────┘</span></code></pre>
+        </div>
+
+        <div class="qs-block">
+            <div class="label"><span>Persist to disk</span> <span class="step">Step 5</span></div>
+            <pre><code><span class="kw">COMMIT</span>;</code></pre>
+        </div>
+    </section>
+
+    <!-- Documentation -->
+    <section class="docs-section">
+        <h2>Documentation</h2>
+        <div class="docs-grid">
+            <a href="architecture.html" class="doc-card">
+                <div class="doc-icon">🏗️</div>
+                <h3>System Architecture</h3>
+                <p>Database layers, sharding, memory arenas, temporal versioning, and persistence internals.</p>
+                <span class="arrow">Explore →</span>
+            </a>
+            <a href="tundraql.html" class="doc-card">
+                <div class="doc-icon">📖</div>
+                <h3>TundraQL Reference</h3>
+                <p>Complete language reference — CREATE, MATCH, DELETE, WHERE, SELECT, JOIN types, data types.</p>
+                <span class="arrow">Read docs →</span>
+            </a>
+            <a href="query-execution.html" class="doc-card">
+                <div class="doc-icon">🎮</div>
+                <h3>Live Query Demo</h3>
+                <p>Interactive step-through of query execution with graph visualization. See how MATCH works in real-time.</p>
+                <span class="arrow">Try it →</span>
+            </a>
+            <a href="algorithm-deep-dive.html" class="doc-card">
+                <div class="doc-icon">🔬</div>
+                <h3>Algorithm Deep Dive</h3>
+                <p>Mathematical foundations — BFS row generation, join semantics, tree merging, complexity analysis.</p>
+                <span class="arrow">Deep dive →</span>
+            </a>
+        </div>
+    </section>
+
+    <!-- Tech Stack -->
+    <section class="tech-section">
+        <h2>Built With</h2>
+        <div class="tech-grid">
+            <div class="tech-item">
+                <div class="t-icon">🏹</div>
+                <h4>Apache Arrow</h4>
+                <p>Columnar output format</p>
+            </div>
+            <div class="tech-item">
+                <div class="t-icon">📦</div>
+                <h4>Apache Parquet</h4>
+                <p>On-disk persistence</p>
+            </div>
+            <div class="tech-item">
+                <div class="t-icon">⚡</div>
+                <h4>Intel TBB</h4>
+                <p>Parallel traversal</p>
+            </div>
+            <div class="tech-item">
+                <div class="t-icon">🔧</div>
+                <h4>LLVM</h4>
+                <p>DenseMap, SmallVector</p>
+            </div>
+            <div class="tech-item">
+                <div class="t-icon">📝</div>
+                <h4>ANTLR4</h4>
+                <p>Query parser</p>
+            </div>
+            <div class="tech-item">
+                <div class="t-icon">🧊</div>
+                <h4>C++23</h4>
+                <p>Core language</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <div class="footer">
+        <p>TundraDB v1.0.0 — A hybrid graph-relational database engine</p>
+    </div>
+
+    <script>
+        // Smooth scroll for anchor links
+        document.querySelectorAll('a[href^="#"]').forEach(a => {
+            a.addEventListener('click', e => {
+                e.preventDefault();
+                const target = document.querySelector(a.getAttribute('href'));
+                if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            });
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TundraDB - Architecture</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        body { margin: 0; padding: 0; }
+        .page-header {
+            background: var(--bg-light);
+            border-bottom: 1px solid var(--border);
+            padding: 2rem 3rem;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .page-header h1 {
+            font-size: 1.75rem;
+            background: linear-gradient(135deg, #8b5cf6, #ec4899);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        }
+        .page-body {
+            display: grid; grid-template-columns: 220px 1fr;
+            min-height: calc(100vh - 80px);
+        }
+        .toc {
+            background: var(--bg-light); border-right: 1px solid var(--border);
+            padding: 1.5rem 0; position: sticky; top: 0;
+            height: calc(100vh - 80px); overflow-y: auto;
+        }
+        .toc h4 { padding: 0 1.5rem; color: var(--text-dim); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 0.75rem; }
+        .toc a {
+            display: block; padding: 0.5rem 1.5rem; color: var(--text-dim);
+            text-decoration: none; font-size: 0.9rem; border-left: 3px solid transparent; transition: all 0.15s;
+        }
+        .toc a:hover { color: var(--primary); background: rgba(37,99,235,0.08); border-left-color: var(--primary); }
+        .main-content { padding: 3rem 4rem; max-width: 1100px; }
+        .main-content h2 { font-size: 1.75rem; margin-top: 3rem; margin-bottom: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+        .main-content h2:first-of-type { border-top: none; margin-top: 0; }
+        .main-content h3 { color: var(--primary); margin-top: 2rem; margin-bottom: 0.75rem; }
+        .main-content p, .main-content li { color: var(--text-dim); line-height: 1.7; }
+        .main-content ul { padding-left: 1.5rem; margin-bottom: 1rem; }
+
+        .arch-diagram { background: var(--bg-light); border: 1px solid var(--border); border-radius: 12px; padding: 2rem; margin: 1.5rem 0; }
+        #sys-arch-graph { width: 100%; height: 500px; background: var(--bg); border-radius: 8px; }
+
+        .layer-card {
+            background: var(--bg-light); border: 1px solid var(--border); border-radius: 10px;
+            padding: 1.5rem; margin: 1rem 0; transition: border-color 0.2s;
+        }
+        .layer-card:hover { border-color: var(--primary); }
+        .layer-card h4 { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem; }
+        .layer-card h4 .icon { font-size: 1.5rem; }
+        .layer-card h4 span { color: var(--text); font-size: 1.1rem; }
+        .layer-card p { color: var(--text-dim); font-size: 0.95rem; }
+
+        .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin: 1rem 0; }
+        .code-block {
+            background: var(--bg-light); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin: 1rem 0;
+        }
+        .code-block .label { background: var(--bg-lighter); padding: 0.5rem 1rem; font-size: 0.8rem; color: var(--text-dim); border-bottom: 1px solid var(--border); }
+        .code-block pre { margin: 0; padding: 1.25rem; overflow-x: auto; }
+        .code-block code { font-size: 0.88rem; line-height: 1.6; color: #a5b4fc; }
+
+        .metric { display: inline-block; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 0.4rem 0.8rem; margin: 0.25rem; font-family: 'Fira Code', monospace; font-size: 0.85rem; }
+        .metric .val { color: var(--accent); font-weight: 600; }
+        .metric .lbl { color: var(--text-dim); }
+
+        .timeline { position: relative; padding-left: 2rem; margin: 1.5rem 0; }
+        .timeline::before { content: ''; position: absolute; left: 0.5rem; top: 0; bottom: 0; width: 2px; background: var(--border); }
+        .timeline .event { position: relative; margin-bottom: 1.5rem; padding-left: 1.5rem; }
+        .timeline .event::before { content: ''; position: absolute; left: -1.85rem; top: 0.35rem; width: 12px; height: 12px; border-radius: 50%; background: var(--primary); border: 2px solid var(--bg); }
+        .timeline .event h4 { color: var(--text); font-size: 1rem; margin-bottom: 0.25rem; }
+        .timeline .event p { color: var(--text-dim); font-size: 0.9rem; }
+
+        .info-box { background: rgba(37,99,235,0.08); border: 1px solid rgba(37,99,235,0.25); border-radius: 8px; padding: 1rem 1.25rem; margin: 1rem 0; font-size: 0.9rem; }
+        .info-box strong { color: var(--primary); }
+
+        @media (max-width: 900px) {
+            .page-body { grid-template-columns: 1fr; }
+            .toc { display: none; }
+            .main-content { padding: 2rem 1.5rem; }
+            .two-col { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="page-header">
+        <h1>System Architecture</h1>
+        <div>
+            <a href="index.html" class="btn-secondary" style="margin-right:0.5rem;">← Home</a>
+            <a href="tundraql.html" class="btn-secondary">TundraQL Ref</a>
+        </div>
+    </div>
+
+    <div class="page-body">
+        <nav class="toc">
+            <h4>Layers</h4>
+            <a href="#overview">High-Level Overview</a>
+            <a href="#database">Database Layer</a>
+            <a href="#sharding">Sharding</a>
+            <a href="#nodes">Node Storage</a>
+            <a href="#edges">Edge Store</a>
+            <a href="#temporal">Temporal Versioning</a>
+            <a href="#memory">Memory Architecture</a>
+            <a href="#persistence">Persistence</a>
+            <a href="#tech">Technology Stack</a>
+        </nav>
+
+        <div class="main-content">
+            <!-- ========== OVERVIEW ========== -->
+            <h2 id="overview">High-Level Overview</h2>
+            <p>TundraDB is an in-memory graph database with relational join semantics, bitemporal versioning, and Apache Arrow-based columnar output.</p>
+
+            <div class="arch-diagram">
+                <div id="sys-arch-graph"></div>
+            </div>
+
+            <div class="two-col">
+                <div class="layer-card">
+                    <h4><span class="icon">🎯</span> <span>Query Layer</span></h4>
+                    <p>TundraQL parser (ANTLR4) → Query builder → Two-phase executor (traverse + BFS materialize) → Arrow Table output.</p>
+                </div>
+                <div class="layer-card">
+                    <h4><span class="icon">🗂️</span> <span>Storage Layer</span></h4>
+                    <p>In-memory node arenas + edge store. Parquet-based persistence with JSON metadata. Snapshot-based commit model.</p>
+                </div>
+                <div class="layer-card">
+                    <h4><span class="icon">🕐</span> <span>Temporal Layer</span></h4>
+                    <p>Bitemporal versioning with VALIDTIME and TXNTIME. Per-node version chains with field-level copy-on-write.</p>
+                </div>
+                <div class="layer-card">
+                    <h4><span class="icon">⚡</span> <span>Compute Layer</span></h4>
+                    <p>Intel TBB for parallel graph traversal. LLVM DenseMap for hot-path lookups. Arrow Compute for aggregations.</p>
+                </div>
+            </div>
+
+            <!-- ========== DATABASE ========== -->
+            <h2 id="database">Database Layer</h2>
+            <p>The <code>Database</code> class is the top-level entry point. It owns all managers and stores.</p>
+
+            <div class="code-block">
+                <div class="label">Core components</div>
+                <pre><code>Database
+├── SchemaRegistry        — schema name → Schema (fields, types, layout)
+├── ShardManager          — schema → vector&lt;Shard&gt;
+├── NodeManager           — global node registry (arena-based)
+├── EdgeStore             — edge_type → source_id → vector&lt;Edge&gt;
+├── Storage               — Parquet read/write
+├── MetadataManager       — JSON metadata persistence
+└── SnapshotManager       — orchestrates COMMIT</code></pre>
+            </div>
+
+            <div class="code-block">
+                <div class="label">Configuration (config.hpp)</div>
+                <pre><code>auto config = tundradb::make_config()
+    .with_db_path("./my-database")
+    .with_persistence_enabled(true)
+    .with_versioning_enabled(true)     // enable temporal
+    .with_shard_capacity(100000)       // nodes per shard
+    .with_chunk_size(10000)            // Arrow chunk size
+    .with_memory_scale_factor(2.0)     // double all pool sizes
+    .build();
+
+tundradb::Database db(config);</code></pre>
+            </div>
+
+            <div class="info-box">
+                <strong>Defaults:</strong>
+                <span class="metric"><span class="val">100K</span> <span class="lbl">nodes/shard</span></span>
+                <span class="metric"><span class="val">10MB</span> <span class="lbl">shard pool</span></span>
+                <span class="metric"><span class="val">100MB</span> <span class="lbl">manager pool</span></span>
+                <span class="metric"><span class="val">1GB</span> <span class="lbl">database pool</span></span>
+            </div>
+
+            <!-- ========== SHARDING ========== -->
+            <h2 id="sharding">Sharding</h2>
+            <p>Nodes are partitioned into <strong>shards</strong> by schema. Each shard holds up to <code>shard_capacity</code> nodes and maintains its own memory arena.</p>
+
+            <div class="code-block">
+                <div class="label">Shard structure</div>
+                <pre><code>ShardManager
+  └── "users" → [ Shard(0..99999), Shard(100000..199999), ... ]
+  └── "companies" → [ Shard(0..99999) ]
+
+Each Shard contains:
+  ├── NodeArena         — fixed-layout memory for node data
+  ├── id → NodeHandle   — DenseMap for O(1) node lookup
+  ├── min_id / max_id   — ID range this shard covers
+  └── Arrow Table       — columnar cache (lazy, built on query)</code></pre>
+            </div>
+
+            <p>When a shard reaches capacity, a new shard is created automatically. IDs are globally unique (atomic counter) while each schema also has a per-schema index counter.</p>
+
+            <!-- ========== NODES ========== -->
+            <h2 id="nodes">Node Storage</h2>
+            <p>Nodes are stored in arena-allocated memory with a fixed-layout <code>SchemaLayout</code> that maps field names to offsets.</p>
+
+            <div class="two-col">
+                <div class="layer-card">
+                    <h4><span class="icon">📐</span> <span>SchemaLayout</span></h4>
+                    <p>Pre-computed field offsets, sizes, and null bitmap position for each schema. Enables direct pointer arithmetic for field access — no hash map lookups in the hot path.</p>
+                </div>
+                <div class="layer-card">
+                    <h4><span class="icon">🧊</span> <span>NodeArena</span></h4>
+                    <p>Bulk memory allocator for node data. Each node is a contiguous byte region at a known offset. <code>NodeHandle</code> contains a pointer to the base + version chain.</p>
+                </div>
+            </div>
+
+            <div class="code-block">
+                <div class="label">Memory layout of a single node</div>
+                <pre><code>┌────────────┬───────────────────────────────────────────┐
+│ Null Bitmap│  Field Data (packed by SchemaLayout)      │
+│  (N bits)  │  [name: StringRef] [age: int64] [...]     │
+└────────────┴───────────────────────────────────────────┘
+     ↑                      ↑
+  1 bit per field       Direct memory, no indirection
+                        StringRef → StringArena pool</code></pre>
+            </div>
+
+            <!-- ========== EDGES ========== -->
+            <h2 id="edges">Edge Store</h2>
+            <p>Edges are stored in an <code>EdgeStore</code> keyed by <strong>edge type</strong>, then <strong>source ID</strong>. Each edge has a source ID, target ID, source schema, and target schema.</p>
+
+            <div class="code-block">
+                <div class="label">Edge lookup</div>
+                <pre><code>EdgeStore
+  └── "friend"   → { 0: [Edge(0→1), Edge(0→3)],
+                      2: [Edge(2→4)] }
+  └── "works_at" → { 1: [Edge(1→100)],
+                      3: [Edge(3→101)] }
+
+// O(1) lookup: edge_store.get_edges("friend", source_id=0)
+// Returns: [Edge(0→1), Edge(0→3)]</code></pre>
+            </div>
+
+            <p>During MATCH execution, the engine iterates over source IDs from the QueryState and for each source does an O(1) lookup into the EdgeStore to find outgoing edges.</p>
+
+            <!-- ========== TEMPORAL ========== -->
+            <h2 id="temporal">Temporal Versioning</h2>
+            <p>TundraDB supports <strong>bitemporal versioning</strong> — each piece of data has two independent time dimensions:</p>
+
+            <div class="two-col">
+                <div class="layer-card">
+                    <h4><span class="icon">📅</span> <span>VALIDTIME</span></h4>
+                    <p>When the fact was <em>true in the real world</em>. Example: "Alice's salary was $100K from Jan 2024 to Mar 2024."</p>
+                </div>
+                <div class="layer-card">
+                    <h4><span class="icon">🖥️</span> <span>TXNTIME</span></h4>
+                    <p>When the database <em>learned about</em> the fact. Automatically set on writes. Enables "what did we know on date X?" queries.</p>
+                </div>
+            </div>
+
+            <h3>Version Chain</h3>
+            <p>Each node has a linked list of <code>VersionInfo</code> records. Each version stores:</p>
+            <ul>
+                <li><strong>version_id</strong> — monotonically increasing</li>
+                <li><strong>valid_from / valid_to</strong> — VALIDTIME interval [from, to)</li>
+                <li><strong>tx_from / tx_to</strong> — TXNTIME interval [from, to)</li>
+                <li><strong>updated_fields</strong> — only the fields that changed (copy-on-write)</li>
+                <li><strong>prev</strong> — pointer to previous version</li>
+            </ul>
+
+            <div class="code-block">
+                <div class="label">Version visibility rule</div>
+                <pre><code>A version V is visible at snapshot (vt, tt) if:
+
+    V.valid_from ≤ vt  &lt;  V.valid_to
+        AND
+    V.tx_from    ≤ tt  &lt;  V.tx_to
+
+The resolver walks the version chain and returns the
+first version that satisfies both conditions.
+If no version matches → node is invisible at that time.</code></pre>
+            </div>
+
+            <div class="timeline">
+                <div class="event">
+                    <h4>v1: Alice created (age=25)</h4>
+                    <p>valid: [0, ∞), tx: [0, ∞)</p>
+                </div>
+                <div class="event">
+                    <h4>v2: Alice turns 26</h4>
+                    <p>valid: [T₁, ∞), tx: [T₁, ∞) — only <code>age</code> field stored in delta</p>
+                </div>
+                <div class="event">
+                    <h4>v3: Retroactive correction</h4>
+                    <p>valid: [T₀, T₁), tx: [T₂, ∞) — fix: Alice was actually 24 at creation</p>
+                </div>
+            </div>
+
+            <div class="info-box">
+                <strong>Field-level COW:</strong> Each version only stores the fields that changed via <code>updated_fields: SmallDenseMap&lt;uint16_t, char*&gt;</code>. Unchanged fields resolve to the previous version. A lazy field cache (<code>field_cache_</code>) avoids repeated chain traversals.
+            </div>
+
+            <!-- ========== MEMORY ========== -->
+            <h2 id="memory">Memory Architecture</h2>
+            <p>TundraDB uses a hierarchy of arena allocators to minimize allocation overhead and maximize cache locality.</p>
+
+            <div class="code-block">
+                <div class="label">Arena hierarchy</div>
+                <pre><code>Database (1 GB default pool)
+├── ShardManager (100 MB pool)
+│   └── pmr::unordered_map for shard lookups
+├── Per-Shard (10 MB each)
+│   ├── NodeArena          — bulk node data
+│   └── FreeListArena      — reusable node slots
+└── StringArena (per NodeManager)
+    ├── Pool 0: FIXED_STRING16  (16 bytes/slot)
+    ├── Pool 1: FIXED_STRING32  (32 bytes/slot)
+    ├── Pool 2: FIXED_STRING64  (64 bytes/slot)
+    └── Pool 3: Variable STRING (heap-allocated)</code></pre>
+            </div>
+
+            <p>String values use a <strong>tiered StringArena</strong>. Short strings (≤16, ≤32, ≤64 bytes) go into fixed-size pools, giving predictable allocation sizes. Longer strings fall back to heap allocation. All strings are stored as <code>StringRef</code> (pointer + length).</p>
+
+            <div class="info-box">
+                <strong>Why arenas?</strong> Graph databases create millions of small, long-lived objects. Traditional <code>new/delete</code> causes fragmentation and cache misses. Arenas allocate in large contiguous blocks, improving locality and enabling bulk deallocation.
+            </div>
+
+            <!-- ========== PERSISTENCE ========== -->
+            <h2 id="persistence">Persistence</h2>
+            <p>Data is persisted using <strong>Apache Parquet</strong> (columnar format) with JSON metadata. The <code>COMMIT</code> command triggers a full snapshot write.</p>
+
+            <div class="code-block">
+                <div class="label">On-disk layout</div>
+                <pre><code>my-database/
+├── metadata.json           — schemas, shard metadata, edge metadata
+└── data/
+    ├── users/
+    │   ├── shard_0.parquet
+    │   └── shard_1.parquet
+    ├── companies/
+    │   └── shard_0.parquet
+    └── edges/
+        ├── friend.parquet
+        └── works_at.parquet</code></pre>
+            </div>
+
+            <h3>Commit Flow</h3>
+            <div class="timeline">
+                <div class="event">
+                    <h4>1. SnapshotManager triggered</h4>
+                    <p>Collects all shards, edges, and schema metadata.</p>
+                </div>
+                <div class="event">
+                    <h4>2. Shard → Arrow Table → Parquet</h4>
+                    <p>Each shard is converted to an Arrow Table, then written as a Parquet file via <code>Storage::write_shard()</code>.</p>
+                </div>
+                <div class="event">
+                    <h4>3. Edges → Parquet</h4>
+                    <p>Edge data for each type is serialized to Parquet.</p>
+                </div>
+                <div class="event">
+                    <h4>4. Metadata → JSON</h4>
+                    <p>Schema definitions, shard ranges, and edge metadata written to <code>metadata.json</code>.</p>
+                </div>
+            </div>
+
+            <p>On startup, if persistence is enabled, the database reads <code>metadata.json</code> and restores all shards and edges from Parquet files.</p>
+
+            <!-- ========== TECH STACK ========== -->
+            <h2 id="tech">Technology Stack</h2>
+
+            <div class="two-col">
+                <div class="layer-card">
+                    <h4><span class="icon">🏹</span> <span>Apache Arrow</span></h4>
+                    <p>Columnar in-memory format for query result tables. Enables zero-copy interop with analytics tools. Arrow Compute for filtering and aggregation.</p>
+                </div>
+                <div class="layer-card">
+                    <h4><span class="icon">📦</span> <span>Apache Parquet</span></h4>
+                    <p>Columnar on-disk format for persistence. Efficient compression and encoding. Direct Arrow ↔ Parquet conversion.</p>
+                </div>
+                <div class="layer-card">
+                    <h4><span class="icon">⚡</span> <span>Intel TBB</span></h4>
+                    <p>Thread Building Blocks for parallel graph traversal. Batch processing of large ID sets across traversal phases.</p>
+                </div>
+                <div class="layer-card">
+                    <h4><span class="icon">🔧</span> <span>LLVM</span></h4>
+                    <p><code>DenseMap</code> and <code>SmallVector</code> for cache-efficient hot-path data structures. Lower overhead than <code>std::unordered_map</code>.</p>
+                </div>
+                <div class="layer-card">
+                    <h4><span class="icon">📝</span> <span>ANTLR4</span></h4>
+                    <p>Parser generator for TundraQL. Grammar → C++ lexer + parser. Powers the <code>tundra_shell</code> interactive console.</p>
+                </div>
+                <div class="layer-card">
+                    <h4><span class="icon">📊</span> <span>spdlog</span></h4>
+                    <p>Fast, header-only logging library. Structured logging throughout the database engine.</p>
+                </div>
+            </div>
+
+            <div style="text-align: center; margin: 3rem 0;">
+                <a href="index.html" class="btn-secondary" style="margin-right: 1rem;">← Home</a>
+                <a href="tundraql.html" class="btn-primary">TundraQL Reference →</a>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const cy = cytoscape({
+            container: document.getElementById('sys-arch-graph'),
+            elements: [
+                // Query layer
+                { data: { id: 'shell', label: 'TundraQL\nShell', layer: 'query' } },
+                { data: { id: 'parser', label: 'ANTLR4\nParser', layer: 'query' } },
+                { data: { id: 'executor', label: 'Query\nExecutor', layer: 'query' } },
+                // Core
+                { data: { id: 'database', label: 'Database', layer: 'core' } },
+                { data: { id: 'schema_reg', label: 'Schema\nRegistry', layer: 'core' } },
+                { data: { id: 'shard_mgr', label: 'Shard\nManager', layer: 'core' } },
+                { data: { id: 'node_mgr', label: 'Node\nManager', layer: 'core' } },
+                { data: { id: 'edge_store', label: 'Edge\nStore', layer: 'core' } },
+                // Storage
+                { data: { id: 'storage', label: 'Storage', layer: 'storage' } },
+                { data: { id: 'parquet', label: 'Parquet\nFiles', layer: 'storage' } },
+                { data: { id: 'metadata', label: 'Metadata\n(JSON)', layer: 'storage' } },
+                // Temporal
+                { data: { id: 'temporal', label: 'Temporal\nContext', layer: 'temporal' } },
+                { data: { id: 'versions', label: 'Version\nChains', layer: 'temporal' } },
+                // Output
+                { data: { id: 'arrow', label: 'Arrow\nTable', layer: 'output' } },
+
+                // Edges
+                { data: { source: 'shell', target: 'parser' } },
+                { data: { source: 'parser', target: 'executor' } },
+                { data: { source: 'executor', target: 'database' } },
+                { data: { source: 'database', target: 'schema_reg' } },
+                { data: { source: 'database', target: 'shard_mgr' } },
+                { data: { source: 'database', target: 'node_mgr' } },
+                { data: { source: 'database', target: 'edge_store' } },
+                { data: { source: 'shard_mgr', target: 'storage' } },
+                { data: { source: 'storage', target: 'parquet' } },
+                { data: { source: 'storage', target: 'metadata' } },
+                { data: { source: 'node_mgr', target: 'temporal' } },
+                { data: { source: 'temporal', target: 'versions' } },
+                { data: { source: 'executor', target: 'arrow' } },
+            ],
+            style: [
+                { selector: 'node', style: {
+                    'background-color': '#334155', 'label': 'data(label)',
+                    'text-valign': 'center', 'text-halign': 'center',
+                    'color': '#f1f5f9', 'font-size': '11px',
+                    'width': 75, 'height': 75, 'border-width': 3,
+                    'border-color': '#64748b', 'text-wrap': 'wrap', 'text-max-width': 65
+                }},
+                { selector: 'node[layer="query"]', style: { 'background-color': '#2563eb', 'border-color': '#3b82f6' }},
+                { selector: 'node[layer="core"]', style: { 'background-color': '#10b981', 'border-color': '#34d399' }},
+                { selector: 'node[layer="storage"]', style: { 'background-color': '#8b5cf6', 'border-color': '#a78bfa' }},
+                { selector: 'node[layer="temporal"]', style: { 'background-color': '#f59e0b', 'border-color': '#fbbf24' }},
+                { selector: 'node[layer="output"]', style: { 'background-color': '#ec4899', 'border-color': '#f472b6' }},
+                { selector: 'edge', style: {
+                    'width': 2, 'line-color': '#475569', 'target-arrow-color': '#475569',
+                    'target-arrow-shape': 'triangle', 'curve-style': 'bezier'
+                }}
+            ],
+            layout: {
+                name: 'breadthfirst', directed: true, padding: 30, spacingFactor: 1.3
+            }
+        });
+
+        cy.nodes().on('mouseover', function() {
+            this.animate({ style: { 'width': 85, 'height': 85 } }, { duration: 150 });
+        });
+        cy.nodes().on('mouseout', function() {
+            this.animate({ style: { 'width': 75, 'height': 75 } }, { duration: 150 });
+        });
+    });
+    </script>
+</body>
+</html>
+

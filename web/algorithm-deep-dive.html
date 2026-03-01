@@ -1,0 +1,908 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TundraDB - Algorithm Deep Dive</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        body { margin: 0; padding: 0; }
+        .deep-dive-header {
+            background: var(--bg-light);
+            border-bottom: 1px solid var(--border);
+            padding: 2rem;
+            text-align: center;
+        }
+        .deep-dive-header h1 {
+            font-size: 2.5rem;
+            background: linear-gradient(135deg, #2563eb, #10b981);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 0.5rem;
+        }
+        .deep-dive-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 3rem 2rem;
+        }
+        .phase-section {
+            margin: 4rem 0;
+            background: var(--bg-light);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 2rem;
+        }
+        .phase-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 2rem;
+            padding-bottom: 1rem;
+            border-bottom: 2px solid var(--primary);
+        }
+        .phase-number {
+            width: 60px;
+            height: 60px;
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: white;
+            margin-right: 1.5rem;
+        }
+        .phase-title h2 {
+            font-size: 1.75rem;
+            margin: 0;
+            color: var(--text);
+        }
+        .phase-title p {
+            margin: 0.5rem 0 0 0;
+            color: var(--text-dim);
+        }
+        .math-block {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin: 1.5rem 0;
+            overflow-x: auto;
+        }
+        .invariant {
+            background: rgba(16, 185, 129, 0.1);
+            border-left: 4px solid var(--secondary);
+            padding: 1rem 1.5rem;
+            margin: 1rem 0;
+            border-radius: 4px;
+        }
+        .invariant-title {
+            font-weight: 600;
+            color: var(--secondary);
+            margin-bottom: 0.5rem;
+        }
+        .state-viz {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin: 1.5rem 0;
+        }
+        .state-viz-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+        .state-box {
+            background: var(--bg-light);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+        }
+        .state-box-title {
+            font-weight: 600;
+            color: var(--primary);
+            margin-bottom: 0.75rem;
+            font-size: 0.95rem;
+        }
+        .state-content {
+            font-family: 'Fira Code', monospace;
+            font-size: 0.85rem;
+            color: var(--text-dim);
+        }
+        .example-box {
+            background: rgba(37, 99, 235, 0.05);
+            border: 1px solid rgba(37, 99, 235, 0.3);
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin: 1.5rem 0;
+        }
+        .example-title {
+            font-weight: 600;
+            color: var(--primary);
+            margin-bottom: 1rem;
+            font-size: 1.1rem;
+        }
+        .complexity-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1rem 0;
+            font-size: 0.9rem;
+        }
+        .complexity-table th,
+        .complexity-table td {
+            padding: 0.75rem;
+            border: 1px solid var(--border);
+            text-align: left;
+        }
+        .complexity-table th {
+            background: var(--bg);
+            font-weight: 600;
+            color: var(--primary);
+        }
+        .complexity-table code {
+            background: var(--bg);
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            color: var(--accent);
+        }
+        .interactive-state {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1rem;
+            margin: 1.5rem 0;
+        }
+        .state-controls {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+        }
+        #state-display {
+            font-family: 'Fira Code', monospace;
+            font-size: 0.85rem;
+            line-height: 1.6;
+        }
+        .queue-item {
+            background: var(--bg-lighter);
+            padding: 0.5rem;
+            margin: 0.25rem 0;
+            border-left: 3px solid var(--accent);
+            border-radius: 4px;
+        }
+        .tree-node {
+            background: var(--bg-lighter);
+            padding: 0.5rem;
+            margin: 0.25rem 0 0.25rem 1.5rem;
+            border-left: 3px solid var(--secondary);
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="deep-dive-header">
+        <h1>🔬 Algorithm Deep Dive</h1>
+        <p style="color: var(--text-dim); font-size: 1.1rem;">Mathematical Foundations & Implementation Details</p>
+        <div style="margin-top: 1rem;">
+            <a href="index.html" class="btn-secondary" style="margin-right: 0.5rem;">← Home</a>
+            <a href="architecture.html" class="btn-secondary" style="margin-right: 0.5rem;">Architecture</a>
+            <a href="tundraql.html" class="btn-secondary" style="margin-right: 0.5rem;">TundraQL</a>
+            <a href="query-execution.html" class="btn-primary">Live Demo →</a>
+        </div>
+    </div>
+
+    <div class="deep-dive-content">
+        <!-- Phase 1: Query State Initialization -->
+        <div class="phase-section">
+            <div class="phase-header">
+                <div class="phase-number">1</div>
+                <div class="phase-title">
+                    <h2>Query State Initialization</h2>
+                    <p>Building the foundation for query execution</p>
+                </div>
+            </div>
+
+            <h3>Mathematical Definition</h3>
+            <div class="math-block">
+                <p>Let \( Q = (F, T, W, S) \) be a query where:</p>
+                <ul style="list-style: none; padding-left: 1rem;">
+                    <li>\( F \) = FROM clause (starting schema)</li>
+                    <li>\( T = \{t_1, t_2, ..., t_n\} \) = Set of TRAVERSE clauses</li>
+                    <li>\( W = \{w_1, w_2, ..., w_m\} \) = Set of WHERE predicates</li>
+                    <li>\( S = \{s_1, s_2, ..., s_k\} \) = SELECT fields (optional)</li>
+                </ul>
+                <p style="margin-top: 1rem;">The initial QueryState \( \Sigma_0 \) is defined as:</p>
+                $$ \Sigma_0 = \{ \text{ids}: F \mapsto \mathcal{N}_F, \text{connections}: \emptyset, \text{tables}: F \mapsto \mathcal{T}_F \} $$
+                <p>where \( \mathcal{N}_F \) is the set of all node IDs in schema \( F \), and \( \mathcal{T}_F \) is the Arrow table for schema \( F \).</p>
+            </div>
+
+            <div class="invariant">
+                <div class="invariant-title">📌 Invariant 1.1: Initial ID Set</div>
+                $$ \forall v \in \Sigma_0.\text{ids}[F] : v \in \mathcal{N}_F \wedge \text{schema}(v) = F $$
+                <p style="margin-top: 0.5rem;">All IDs in the initial state must belong to the FROM schema.</p>
+            </div>
+
+            <h3>Pseudo-Code</h3>
+            <pre class="code-example" style="margin: 1rem 0;"><code>function initialize_query_state(query: Query) → QueryState:
+    Σ ← empty QueryState
+    
+    // Step 1: Resolve FROM schema
+    F ← resolve_schema(query.from_clause())
+    
+    // Step 2: Load table and extract IDs
+    T_F ← database.get_table(F)
+    N_F ← extract_ids(T_F)  // O(|T_F|)
+    
+    // Step 3: Initialize state
+    Σ.ids[F] ← N_F
+    Σ.tables[F] ← T_F
+    Σ.aliases[F.alias] ← F.schema
+    Σ.connections ← ∅
+    Σ.incoming ← ∅
+    
+    // Invariant check
+    assert(|Σ.ids[F]| = |T_F|)
+    assert(Σ.connections.empty())
+    
+    return Σ</code></pre>
+
+            <div class="example-box">
+                <div class="example-title">📖 Example from UserFriendCompanyInnerJoin</div>
+                <pre class="code-example"><code>Query: FROM u:users
+
+Initial State Σ₀:
+  ids = {
+    u: {0, 1, 2, 3, 4}  // All 5 users
+  }
+  tables = {
+    u: Arrow::Table(5 rows × 3 columns)
+        ┌────┬───────┬─────┐
+        │ id │ name  │ age │
+        ├────┼───────┼─────┤
+        │ 0  │ alex  │ 25  │
+        │ 1  │ bob   │ 31  │
+        │ 2  │ jeff  │ 33  │
+        │ 3  │ sam   │ 21  │
+        │ 4  │ matt  │ 40  │
+        └────┴───────┴─────┘
+  }
+  connections = ∅
+  aliases = { u → users }</code></pre>
+            </div>
+        </div>
+
+        <!-- Phase 2: Traverse & Join -->
+        <div class="phase-section">
+            <div class="phase-header">
+                <div class="phase-number">2</div>
+                <div class="phase-title">
+                    <h2>Traverse & Join Logic</h2>
+                    <p>Graph traversal with relational join semantics</p>
+                </div>
+            </div>
+
+            <h3>Mathematical Formulation</h3>
+            <div class="math-block">
+                <p>For a traverse clause \( t = (s, e, d, j) \) where:</p>
+                <ul style="list-style: none; padding-left: 1rem;">
+                    <li>\( s \) = source schema</li>
+                    <li>\( e \) = edge type</li>
+                    <li>\( d \) = destination schema</li>
+                    <li>\( j \in \{\text{INNER}, \text{LEFT}, \text{RIGHT}, \text{FULL}\} \) = join type</li>
+                </ul>
+                
+                <p style="margin-top: 1rem;">Define the edge set:</p>
+                $$ \mathcal{E}_t = \{ (u, v) \mid u \in \Sigma.\text{ids}[s] \wedge (u \xrightarrow{e} v) \in \mathcal{G} \wedge v \in \mathcal{N}_d \} $$
+                
+                <p style="margin-top: 1rem;">Matched sets:</p>
+                $$ M_s = \{ u \mid \exists v : (u, v) \in \mathcal{E}_t \} \quad \text{(matched sources)} $$
+                $$ M_d = \{ v \mid \exists u : (u, v) \in \mathcal{E}_t \} \quad \text{(matched destinations)} $$
+                $$ U_s = \Sigma.\text{ids}[s] \setminus M_s \quad \text{(unmatched sources)} $$
+            </div>
+
+            <h3>Join Type Semantics</h3>
+            <div class="math-block">
+                <p>The new state \( \Sigma' \) after applying traverse \( t \) depends on join type \( j \):</p>
+                
+                <p style="margin-top: 1rem;"><strong>INNER JOIN:</strong></p>
+                $$ \Sigma'.\text{ids}[s] = M_s $$
+                $$ \Sigma'.\text{ids}[d] = \begin{cases} 
+                    M_d & \text{if } \Sigma.\text{ids}[d] = \emptyset \\
+                    \Sigma.\text{ids}[d] \cap M_d & \text{otherwise}
+                \end{cases} $$
+                
+                <p style="margin-top: 1rem;"><strong>LEFT JOIN:</strong></p>
+                $$ \Sigma'.\text{ids}[s] = \Sigma.\text{ids}[s] \quad \text{(keep all sources)} $$
+                $$ \Sigma'.\text{ids}[d] = \Sigma.\text{ids}[d] \cup M_d $$
+                
+                <p style="margin-top: 1rem;"><strong>RIGHT/FULL JOIN:</strong></p>
+                $$ \Sigma'.\text{ids}[d] = \begin{cases}
+                    \mathcal{N}_d \setminus M_s & \text{if } s = d \text{ (self-join)} \\
+                    \mathcal{N}_d & \text{if } s \neq d \text{ (cross-schema)}
+                \end{cases} $$
+            </div>
+
+            <div class="invariant">
+                <div class="invariant-title">📌 Invariant 2.1: Join Monotonicity (LEFT)</div>
+                $$ \text{For LEFT joins: } |\Sigma'.\text{ids}[s]| = |\Sigma.\text{ids}[s]| $$
+                <p style="margin-top: 0.5rem;">LEFT joins never reduce the source ID set.</p>
+            </div>
+
+            <div class="invariant">
+                <div class="invariant-title">📌 Invariant 2.2: Connection Validity</div>
+                $$ \forall (u, v) \in \Sigma'.\text{connections} : u \in \Sigma'.\text{ids}[s] \wedge v \in \Sigma'.\text{ids}[d] $$
+                <p style="margin-top: 0.5rem;">All connections must reference nodes in the current ID sets.</p>
+            </div>
+
+            <h3>Pseudo-Code with Complexity Analysis</h3>
+            <pre class="code-example" style="margin: 1rem 0;"><code>function process_traverse(traverse: Traverse, Σ: QueryState) → QueryState:
+    // Resolve schemas
+    s_schema ← resolve_schema(traverse.source, Σ)
+    d_schema ← resolve_schema(traverse.dest, Σ)
+    
+    // Initialize tracking sets
+    M_s ← ∅  // Matched sources
+    M_d ← ∅  // Matched destinations
+    U_s ← ∅  // Unmatched sources
+    
+    // Phase 2.1: Traverse edges  [Complexity: O(|Σ.ids[s]| × E_avg)]
+    for each u in Σ.ids[s]:
+        edges ← edge_store.get_outgoing_edges(u, traverse.edge_type)  // O(E_avg)
+        
+        had_match ← false
+        for each edge in edges:
+            v ← edge.target_id
+            
+            // Check if target exists and passes filters
+            node ← get_node(d_schema, v)  // O(1) hash lookup
+            if node = null or not apply_filters(node, WHERE_clauses):
+                continue
+            
+            // Valid edge found
+            had_match ← true
+            M_s.insert(u)
+            M_d.insert(v)
+            
+            // Record connection  [Complexity: O(1)]
+            conn ← GraphConnection(s, u, traverse.edge_type, d, v)
+            Σ.connections[s][u].append(conn)
+            Σ.incoming[v].append(conn)
+        
+        if not had_match:
+            U_s.insert(u)
+    
+    // Phase 2.2: Apply join logic  [Complexity: O(|M_s| + |M_d|)]
+    Σ' ← apply_join_logic(traverse.join_type, M_s, M_d, U_s, Σ)
+    
+    // Phase 2.3: Build target table  [Complexity: O(|Σ'.ids[d]| × F)]
+    target_nodes ← [get_node(d_schema, v) for v in Σ'.ids[d]]
+    Σ'.tables[d] ← create_table_from_nodes(d_schema, target_nodes)
+    
+    // Invariant checks
+    assert(all(u in Σ'.ids[s] for (u,v) in Σ'.connections))
+    assert(all(v in Σ'.ids[d] for (u,v) in Σ'.connections))
+    
+    return Σ'</code></pre>
+
+            <div class="example-box">
+                <div class="example-title">📖 Example: INNER JOIN Execution</div>
+                <pre class="code-example"><code>Query: FROM u:users TRAVERSE u-[friend]->f:users INNER
+
+State Before (Σ₀):
+  ids[u] = {0, 1, 2, 3, 4}
+
+Edge Traversal:
+  u:0 → edges = [(0, friend, 1)] → M_s.add(0), M_d.add(1)
+  u:1 → edges = [] → U_s.add(1)
+  u:2 → edges = [] → U_s.add(2)
+  u:3 → edges = [] → U_s.add(3)
+  u:4 → edges = [] → U_s.add(4)
+
+Results:
+  M_s = {0}       // Only alex has a friend
+  M_d = {1}       // Only bob is a friend
+  U_s = {1,2,3,4} // 4 users with no friends
+
+INNER JOIN Logic:
+  Remove U_s from ids[u]
+  ids[u]' = M_s = {0}
+  ids[f]' = M_d = {1}
+
+State After (Σ₁):
+  ids = {
+    u: {0},     // Only alex (has friend)
+    f: {1}      // Only bob (is friend)
+  }
+  connections = {
+    u:0 → [(0, friend, 1)]
+  }
+  incoming = {
+    1: [(u:0, friend, f:1)]
+  }</code></pre>
+            </div>
+
+            <h3>Self-Join vs Cross-Schema: Critical Distinction</h3>
+            <div class="math-block">
+                <p><strong>Problem:</strong> For FULL/RIGHT joins, how do we compute unmatched targets?</p>
+                
+                <p style="margin-top: 1rem;"><strong>Case 1: Self-Join</strong> (e.g., users → users)</p>
+                <p>IDs are in the <em>same space</em>. A node can be both a source and a target.</p>
+                $$ \text{Unmatched}_d = \mathcal{N}_d \setminus M_s $$
+                <p><em>Reason:</em> If a node was a matched source, it shouldn't also appear as an unmatched target (prevents duplicates).</p>
+                
+                <p style="margin-top: 1rem;"><strong>Case 2: Cross-Schema</strong> (e.g., users → companies)</p>
+                <p>IDs are in <em>different spaces</em>. No collision possible.</p>
+                $$ \text{Unmatched}_d = \mathcal{N}_d \setminus M_d $$
+                <p><em>Reason:</em> Compare within the same schema to avoid false exclusions due to ID collision.</p>
+            </div>
+
+            <div class="example-box">
+                <div class="example-title">⚠️ Why This Matters: ID Collision Example</div>
+                <pre class="code-example"><code>Scenario: users:0 -[works-at]-> companies:0
+
+Per-Schema IDs:
+  users:     {0, 1, 2, 3, 4}
+  companies: {0, 1, 2}
+
+FULL JOIN (WRONG approach - using M_s):
+  M_s = {0}  // User 0 (alex) works at a company
+  Unmatched = companies - M_s = {0,1,2} - {0} = {1,2}
+  ❌ WRONG! Company:0 (IBM) is excluded due to ID collision with User:0
+
+FULL JOIN (CORRECT approach - using M_d):
+  M_d = {0}  // Company 0 (IBM) is matched
+  Unmatched = companies - M_d = {0,1,2} - {0} = {1,2}
+  ✅ CORRECT! All companies properly included</code></pre>
+            </div>
+        </div>
+
+        <!-- Phase 3: Row Population (BFS) -->
+        <div class="phase-section">
+            <div class="phase-header">
+                <div class="phase-number">3</div>
+                <div class="phase-title">
+                    <h2>Row Population via BFS</h2>
+                    <p>Materializing denormalized rows through breadth-first search</p>
+                </div>
+            </div>
+
+            <h3>Mathematical Foundation</h3>
+            <div class="math-block">
+                <p>Given the connection graph \( \mathcal{G}_c = (\mathcal{V}, \mathcal{E}_c) \) where:</p>
+                <ul style="list-style: none; padding-left: 1rem;">
+                    <li>\( \mathcal{V} = \bigcup_{s \in \text{schemas}} \{ (s, v) \mid v \in \Sigma.\text{ids}[s] \} \)</li>
+                    <li>\( \mathcal{E}_c = \Sigma.\text{connections} \)</li>
+                </ul>
+                
+                <p style="margin-top: 1rem;">A <strong>path</strong> is a sequence:</p>
+                $$ \pi = \langle (s_1, v_1), (s_2, v_2), ..., (s_k, v_k) \rangle $$
+                
+                <p>such that \( \forall i \in [1, k-1] : ((s_i, v_i), (s_{i+1}, v_{i+1})) \in \mathcal{E}_c \)</p>
+                
+                <p style="margin-top: 1rem;">A <strong>complete path</strong> is a path with no outgoing edges from \( (s_k, v_k) \):</p>
+                $$ \text{Complete}(\pi) \iff \nexists (s', v') : ((s_k, v_k), (s', v')) \in \mathcal{E}_c $$
+                
+                <p style="margin-top: 1rem;">The <strong>result set</strong> is:</p>
+                $$ \mathcal{R} = \{ \text{row}(\pi) \mid \pi \text{ is a complete path starting from } F \} $$
+            </div>
+
+            <div class="invariant">
+                <div class="invariant-title">📌 Invariant 3.1: Path Acyclicity</div>
+                $$ \forall \pi = \langle ..., (s_i, v_i), ..., (s_j, v_j), ... \rangle : i \neq j \implies (s_i, v_i) \neq (s_j, v_j) $$
+                <p style="margin-top: 0.5rem;">No node appears twice in the same path (cycle prevention).</p>
+            </div>
+
+            <h3>BFS Algorithm with State Tracking</h3>
+            <pre class="code-example" style="margin: 1rem 0;"><code>function populate_rows_bfs(start_id: int, start_schema: Schema, 
+                          output_schema: Schema, Σ: QueryState) → List[Row]:
+    
+    // Initialize state
+    Q ← Queue()  // BFS queue
+    R ← []       // Result rows
+    G_visited ← Set()  // Global visited (across all starting nodes)
+    row_counter ← 0
+    
+    // Create initial row and queue item
+    r₀ ← create_empty_row(output_schema)
+    q₀ ← QueueItem(start_id, start_schema, depth=0, row=r₀, path=[], path_visited=∅)
+    Q.enqueue(q₀)
+    
+    // BFS Loop  [Complexity: O(|paths| × P_avg) where P_avg = avg path length]
+    while not Q.empty():
+        item ← Q.dequeue()
+        
+        // Step 1: Mark as visited (cycle prevention)
+        packed_id ← hash(item.schema, item.node_id)
+        if packed_id in item.path_visited:
+            continue  // Skip if already in current path (cycle)
+        
+        G_visited.insert(packed_id)
+        item.path_visited.insert(packed_id)
+        
+        // Step 2: Fill row with current node's fields
+        node ← get_node(item.schema, item.node_id)
+        for each field in item.schema.fields:
+            field_idx ← output_schema.field_index(item.schema.alias + "." + field.name)
+            item.row[field_idx] ← node.get_value(field)
+        
+        item.path.append((item.schema, item.node_id))
+        
+        // Step 3: Get outgoing connections, grouped by target schema
+        grouped_conns ← group_by_target_schema(Σ.connections[item.schema][item.node_id])
+        
+        // Remove connections to already-visited nodes in this path
+        for schema, conns in grouped_conns:
+            filtered_conns ← [c for c in conns if hash(c.target, c.target_id) ∉ item.path_visited]
+            grouped_conns[schema] = filtered_conns
+        
+        // Step 4: Branch or complete
+        if grouped_conns.empty():
+            // ✅ Complete path - add to results
+            r ← clone(item.row)
+            r.id ← row_counter++
+            r.path ← item.path
+            R.append(r)
+        else:
+            // 🌿 Branch: Continue traversal
+            for schema, conns in grouped_conns:
+                if |conns| = 1:
+                    // Single connection: reuse row (optimization)
+                    conn ← conns[0]
+                    q_next ← QueueItem(
+                        node_id=conn.target_id,
+                        schema=conn.target,
+                        depth=item.depth + 1,
+                        row=item.row,  // Reuse row
+                        path=item.path.copy(),
+                        path_visited=item.path_visited.copy()
+                    )
+                    Q.enqueue(q_next)
+                else:
+                    // Multiple connections: clone row for each branch
+                    for conn in conns:
+                        r_new ← clone(item.row)
+                        q_next ← QueueItem(
+                            node_id=conn.target_id,
+                            schema=conn.target,
+                            depth=item.depth + 1,
+                            row=r_new,  // New row
+                            path=item.path.copy(),
+                            path_visited=item.path_visited.copy()
+                        )
+                        Q.enqueue(q_next)
+    
+    // Step 5: Merge rows (handle multi-path scenarios)
+    tree ← RowNode(root)
+    for r in R:
+        tree.insert_row(r)
+    
+    R_merged ← tree.merge_rows()
+    
+    return R_merged</code></pre>
+
+            <h3>Interactive State Visualization</h3>
+            <div class="interactive-state">
+                <h4 style="color: var(--primary); margin-bottom: 1rem;">🎮 BFS State Explorer</h4>
+                <div class="state-controls">
+                    <button id="bfs-state-step" class="btn-primary">▶ Step</button>
+                    <button id="bfs-state-reset" class="btn-secondary">⟲ Reset</button>
+                    <button id="bfs-state-auto" class="btn-primary">⏯ Auto</button>
+                </div>
+                <div id="state-display"></div>
+            </div>
+
+            <div class="example-box">
+                <div class="example-title">📖 Example: BFS Execution Trace</div>
+                <pre class="code-example"><code>Query: u:users -[friend]-> f:users -[works-at]-> c:companies
+
+Data:
+  u:0 (alex) -[friend]-> u:1 (bob) -[works-at]-> c:1 (google)
+
+═══════════════════════════════════════════════════════════════
+
+<strong>Initial State:</strong>
+  Q = [QueueItem(u:0, depth=0, row={}, path=[], visited=∅)]
+  R = []
+  G_visited = ∅
+
+<strong>Iteration 1:</strong> Process u:0 (alex)
+  ├─ Dequeue: QueueItem(u:0, depth=0, ...)
+  ├─ Mark visited: G_visited = {u:0}
+  ├─ Fill row: row[u.id]=0, row[u.name]="alex", row[u.age]=25
+  ├─ Get connections: u:0 → {f:1}
+  ├─ Not complete (has connections)
+  └─ Enqueue: QueueItem(f:1, depth=1, row={u.id:0, ...}, path=[(u,0)], visited={u:0})
+
+  Q = [QueueItem(f:1, depth=1, ...)]
+  R = []
+  G_visited = {u:0}
+
+<strong>Iteration 2:</strong> Process f:1 (bob)
+  ├─ Dequeue: QueueItem(f:1, depth=1, ...)
+  ├─ Mark visited: G_visited = {u:0, f:1}
+  ├─ Fill row: row[f.id]=1, row[f.name]="bob", row[f.age]=31
+  ├─ Get connections: f:1 → {c:1}
+  ├─ Not complete (has connections)
+  └─ Enqueue: QueueItem(c:1, depth=2, row={u.id:0, ..., f.id:1, ...}, path=[(u,0), (f,1)], visited={u:0, f:1})
+
+  Q = [QueueItem(c:1, depth=2, ...)]
+  R = []
+  G_visited = {u:0, f:1}
+
+<strong>Iteration 3:</strong> Process c:1 (google)
+  ├─ Dequeue: QueueItem(c:1, depth=2, ...)
+  ├─ Mark visited: G_visited = {u:0, f:1, c:1}
+  ├─ Fill row: row[c.id]=1, row[c.name]="google", row[c.size]=3000
+  ├─ Get connections: c:1 → ∅ (no outgoing)
+  ├─ ✅ Complete path!
+  └─ Add to results: R.append({u.id:0, u.name:"alex", ..., f.id:1, ..., c.id:1, ...})
+
+  Q = []
+  R = [Row(id=0, path=[(u,0), (f,1), (c,1)])]
+  G_visited = {u:0, f:1, c:1}
+
+<strong>BFS Complete!</strong>
+  Return R = [Row{u.id:0, u.name:"alex", u.age:25, f.id:1, f.name:"bob", f.age:31, c.id:1, c.name:"google", c.size:3000}]
+</code></pre>
+            </div>
+
+            <h3>Complexity Analysis</h3>
+            <table class="complexity-table">
+                <tr>
+                    <th>Operation</th>
+                    <th>Time Complexity</th>
+                    <th>Space Complexity</th>
+                    <th>Notes</th>
+                </tr>
+                <tr>
+                    <td>BFS Loop</td>
+                    <td><code>O(P × L)</code></td>
+                    <td><code>O(Q_max)</code></td>
+                    <td>P = num paths, L = avg path length, Q_max = max queue size</td>
+                </tr>
+                <tr>
+                    <td>Field Filling</td>
+                    <td><code>O(F)</code></td>
+                    <td><code>O(F)</code></td>
+                    <td>F = num fields per node</td>
+                </tr>
+                <tr>
+                    <td>Connection Lookup</td>
+                    <td><code>O(1)</code></td>
+                    <td><code>O(1)</code></td>
+                    <td>Hash map lookup</td>
+                </tr>
+                <tr>
+                    <td>Row Cloning</td>
+                    <td><code>O(F)</code></td>
+                    <td><code>O(F)</code></td>
+                    <td>Deep copy of row data</td>
+                </tr>
+                <tr>
+                    <td>Tree Merge</td>
+                    <td><code>O(R × log R)</code></td>
+                    <td><code>O(R)</code></td>
+                    <td>R = num result rows</td>
+                </tr>
+                <tr>
+                    <td><strong>Total</strong></td>
+                    <td><code>O(P × L × F)</code></td>
+                    <td><code>O(Q_max + R × F)</code></td>
+                    <td>Dominated by path traversal</td>
+                </tr>
+            </table>
+        </div>
+
+        <!-- Phase 4: Tree Merging -->
+        <div class="phase-section">
+            <div class="phase-header">
+                <div class="phase-number">4</div>
+                <div class="phase-title">
+                    <h2>Row Tree Construction & Merging</h2>
+                    <p>Handling multi-path scenarios with tree-based deduplication</p>
+                </div>
+            </div>
+
+            <h3>Mathematical Model</h3>
+            <div class="math-block">
+                <p>A <strong>RowNode tree</strong> \( \mathcal{T} \) represents the hierarchical structure of paths:</p>
+                
+                $$ \mathcal{T} = (V_T, E_T, \lambda) $$
+                
+                <p>where:</p>
+                <ul style="list-style: none; padding-left: 1rem;">
+                    <li>\( V_T \) = set of tree nodes</li>
+                    <li>\( E_T \subseteq V_T \times V_T \) = parent-child edges</li>
+                    <li>\( \lambda : V_T \to \text{Row} \) = maps tree nodes to row data</li>
+                </ul>
+                
+                <p style="margin-top: 1rem;"><strong>Merge Operation:</strong></p>
+                <p>For sibling nodes \( n_1, n_2 \in V_T \) with the same parent and path segment:</p>
+                
+                $$ \text{merge}(n_1, n_2) = n_m \text{ where } \lambda(n_m) = \lambda(n_1) \oplus \lambda(n_2) $$
+                
+                <p>The \( \oplus \) operator combines rows field-by-field, preserving non-NULL values.</p>
+            </div>
+
+            <h3>Tree Construction Algorithm</h3>
+            <pre class="code-example" style="margin: 1rem 0;"><code>struct RowNode:
+    path_segment: (schema, node_id)
+    row: Row
+    children: Map[PathSegment, RowNode]
+
+function insert_row(tree: RowNode, row: Row) → void:
+    """Insert a row into the tree based on its path."""
+    current ← tree
+    
+    for segment in row.path:
+        if segment not in current.children:
+            // Create new tree node
+            current.children[segment] ← RowNode(segment, empty_row, {})
+        current ← current.children[segment]
+    
+    // At leaf: merge row data
+    current.row ← merge_rows(current.row, row)
+
+function merge_rows(r1: Row, r2: Row) → Row:
+    """Merge two rows field-by-field."""
+    r_merged ← clone(r1)
+    
+    for i in 0 to |r2.fields|:
+        if r1.fields[i] is NULL and r2.fields[i] is not NULL:
+            r_merged.fields[i] ← r2.fields[i]
+        elif r1.fields[i] is not NULL and r2.fields[i] is NULL:
+            r_merged.fields[i] ← r1.fields[i]
+        elif r1.fields[i] = r2.fields[i]:
+            r_merged.fields[i] ← r1.fields[i]
+        else:
+            // Conflict: prefer first row
+            r_merged.fields[i] ← r1.fields[i]
+    
+    return r_merged
+
+function flatten_tree(tree: RowNode) → List[Row]:
+    """Convert tree back to flat list of rows."""
+    result ← []
+    
+    function dfs(node: RowNode, accumulated_row: Row):
+        // Merge current node's data
+        current_row ← merge_rows(accumulated_row, node.row)
+        
+        if node.children.empty():
+            // Leaf: complete row
+            result.append(current_row)
+        else:
+            // Internal: recurse to children
+            for child in node.children.values():
+                dfs(child, current_row)
+    
+    dfs(tree, empty_row)
+    return result</code></pre>
+
+            <div class="example-box">
+                <div class="example-title">📖 Example: Multi-Path Tree Merging</div>
+                <pre class="code-example"><code>Scenario: One user with TWO friends
+
+Data:
+  u:0 (alex) -[friend]-> u:1 (bob)
+  u:0 (alex) -[friend]-> u:2 (jeff)
+
+BFS generates 2 rows:
+  Row₁: {u.id:0, u.name:"alex", u.age:25, f.id:1, f.name:"bob", f.age:31}
+  Row₂: {u.id:0, u.name:"alex", u.age:25, f.id:2, f.name:"jeff", f.age:33}
+
+Tree Construction:
+  
+  root
+   └─ u:0 (alex)           [u.id:0, u.name:"alex", u.age:25]
+       ├─ f:1 (bob)        [f.id:1, f.name:"bob", f.age:31]
+       └─ f:2 (jeff)       [f.id:2, f.name:"jeff", f.age:33]
+
+Flattened Result (2 rows):
+  ┌────┬───────┬─────┬────┬───────┬─────┐
+  │ u.id │ u.name │ u.age │ f.id │ f.name │ f.age │
+  ├────┼───────┼─────┼────┼───────┼─────┤
+  │ 0   │ alex  │ 25  │ 1  │ bob   │ 31  │
+  │ 0   │ alex  │ 25  │ 2  │ jeff  │ 33  │
+  └────┴───────┴─────┴────┴───────┴─────┘
+
+Note: alex's data (u.*) is duplicated in both rows.</code></pre>
+            </div>
+        </div>
+
+        <!-- Performance & Optimization -->
+        <div class="phase-section">
+            <div class="phase-header">
+                <div class="phase-number">5</div>
+                <div class="phase-title">
+                    <h2>Performance & Optimization</h2>
+                    <p>Practical considerations for real-world queries</p>
+                </div>
+            </div>
+
+            <h3>Overall Complexity</h3>
+            <div class="math-block">
+                <p>For a query with \( n \) traverse clauses, the total complexity is:</p>
+                
+                $$ T_{\text{total}} = T_{\text{init}} + \sum_{i=1}^{n} T_{\text{traverse}_i} + T_{\text{populate}} + T_{\text{arrow}} $$
+                
+                <p style="margin-top: 1rem;">Breaking down each component:</p>
+                
+                $$ T_{\text{init}} = O(N_F) \quad \text{(load FROM table)} $$
+                $$ T_{\text{traverse}_i} = O(S_i \times E_{\text{avg}} + M_{s_i} + M_{d_i}) $$
+                $$ T_{\text{populate}} = O(S_{\text{start}} \times P_{\text{avg}} \times F) $$
+                $$ T_{\text{arrow}} = O(R \times F) $$
+                
+                <p style="margin-top: 1rem;">where:</p>
+                <ul style="list-style: none; padding-left: 1rem;">
+                    <li>\( N_F \) = nodes in FROM schema</li>
+                    <li>\( S_i \) = source nodes in traverse \( i \)</li>
+                    <li>\( E_{\text{avg}} \) = average edges per node</li>
+                    <li>\( M_{s_i}, M_{d_i} \) = matched source/dest sets</li>
+                    <li>\( S_{\text{start}} \) = starting nodes for BFS</li>
+                    <li>\( P_{\text{avg}} \) = average path length</li>
+                    <li>\( F \) = fields per row</li>
+                    <li>\( R \) = result rows</li>
+                </ul>
+            </div>
+
+            <h3>Optimization Strategies</h3>
+            
+            <div class="state-viz">
+                <h4 style="color: var(--primary); margin-bottom: 1rem;">1. Early Pruning with WHERE</h4>
+                <div class="math-block">
+                    <p><strong>Without optimization:</strong></p>
+                    $$ T = O(S \times E_{\text{avg}}) + O(M_d \times W) $$
+                    <p>All edges traversed, then filters applied.</p>
+                    
+                    <p style="margin-top: 1rem;"><strong>With optimization:</strong></p>
+                    $$ T = O(S \times E_{\text{avg}} \times W) $$
+                    <p>Filters applied during traversal, pruning early.</p>
+                    
+                    <p style="margin-top: 1rem;"><strong>Speedup:</strong></p>
+                    $$ \text{Speedup} \approx \frac{M_d}{M_d'} \quad \text{where } M_d' \text{ is filtered matched set} $$
+                </div>
+            </div>
+
+            <div class="state-viz">
+                <h4 style="color: var(--primary); margin-bottom: 1rem;">2. Connection Pooling</h4>
+                <pre class="code-example"><code>// Instead of allocating new connections:
+for each edge:
+    conn = new GraphConnection(...)  // ❌ Allocation overhead
+
+// Use object pool:
+for each edge:
+    conn = connection_pool.get()     // ✅ Reuse existing
+    conn.update(source, target, ...)
+    state.connections.append(conn)</code></pre>
+                <p><strong>Benefit:</strong> Reduces allocations from \( O(E) \) to \( O(1) \).</p>
+            </div>
+
+            <div class="state-viz">
+                <h4 style="color: var(--primary); margin-bottom: 1rem;">3. Parallel Batch Processing</h4>
+                <div class="math-block">
+                    <p>For \( k \) threads and batch size \( b \):</p>
+                    $$ T_{\text{parallel}} = \frac{T_{\text{sequential}}}{k} + O(\text{sync}) $$
+                    $$ \text{Optimal } b \approx \frac{N}{k \times 10} $$
+                    <p>Trade-off: Larger \( b \) reduces overhead but increases imbalance.</p>
+                </div>
+            </div>
+        </div>
+
+        <div style="text-align: center; margin: 3rem 0;">
+            <a href="index.html" class="btn-secondary" style="margin-right: 1rem;">← Home</a>
+            <a href="tundraql.html" class="btn-secondary" style="margin-right: 1rem;">TundraQL Reference</a>
+            <a href="query-execution.html" class="btn-primary">Try Live Demo →</a>
+        </div>
+    </div>
+
+    <script src="algorithm-viz.js"></script>
+</body>
+</html>
+
+

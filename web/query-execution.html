@@ -1,0 +1,682 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TundraDB - Live Query Execution Demo</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+        
+        .demo-header {
+            background: var(--bg-light);
+            border-bottom: 1px solid var(--border);
+            padding: 1.5rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .demo-header h1 {
+            font-size: 1.5rem;
+            color: var(--text);
+        }
+        
+        .demo-layout {
+            display: grid;
+            grid-template-columns: 350px 1fr 350px;
+            height: calc(100vh - 80px);
+        }
+        
+        .demo-sidebar {
+            background: var(--bg-light);
+            border-right: 1px solid var(--border);
+            padding: 1.5rem;
+            overflow-y: auto;
+        }
+        
+        .demo-main {
+            display: flex;
+            flex-direction: column;
+            background: var(--bg);
+        }
+        
+        .demo-graph-container {
+            flex: 1;
+            position: relative;
+        }
+        
+        .demo-controls-bottom {
+            background: var(--bg-light);
+            border-top: 1px solid var(--border);
+            padding: 1rem 2rem;
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+        
+        .demo-right {
+            background: var(--bg-light);
+            border-left: 1px solid var(--border);
+            padding: 1.5rem;
+            overflow-y: auto;
+        }
+        
+        #live-graph {
+            width: 100%;
+            height: 100%;
+        }
+        
+        .query-builder {
+            margin-bottom: 2rem;
+        }
+        
+        .query-builder h3 {
+            color: var(--primary);
+            margin-bottom: 1rem;
+        }
+        
+        .query-input {
+            width: 100%;
+            padding: 0.75rem;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text);
+            font-family: 'Fira Code', monospace;
+            font-size: 0.9rem;
+            margin-bottom: 0.5rem;
+            resize: none;
+        }
+        
+        .preset-queries {
+            margin-top: 1rem;
+        }
+        
+        .preset-btn {
+            display: block;
+            width: 100%;
+            padding: 0.75rem;
+            margin-bottom: 0.5rem;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text);
+            cursor: pointer;
+            text-align: left;
+            transition: all 0.2s;
+            font-size: 0.9rem;
+        }
+        
+        .preset-btn:hover {
+            border-color: var(--primary);
+            background: rgba(37, 99, 235, 0.1);
+        }
+        
+        .execution-log {
+            margin-top: 1rem;
+        }
+        
+        .execution-log h3 {
+            color: var(--primary);
+            margin-bottom: 1rem;
+        }
+        
+        .log-entry {
+            padding: 0.75rem;
+            margin-bottom: 0.5rem;
+            background: var(--bg);
+            border-left: 3px solid var(--border);
+            border-radius: 4px;
+            font-family: 'Fira Code', monospace;
+            font-size: 0.85rem;
+        }
+        
+        .log-entry.active {
+            border-left-color: var(--accent);
+            background: rgba(245, 158, 11, 0.1);
+        }
+        
+        .log-entry.success {
+            border-left-color: var(--success);
+        }
+        
+        .result-table-container {
+            margin-top: 1.5rem;
+        }
+        
+        .result-table-container h3 {
+            color: var(--primary);
+            margin-bottom: 1rem;
+        }
+        
+        .result-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+        }
+        
+        .result-table th,
+        .result-table td {
+            padding: 0.5rem;
+            border: 1px solid var(--border);
+            text-align: left;
+        }
+        
+        .result-table th {
+            background: var(--bg);
+            color: var(--primary);
+            font-weight: 600;
+        }
+        
+        .progress-bar {
+            flex: 1;
+            height: 8px;
+            background: var(--bg);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--primary), var(--secondary));
+            width: 0%;
+            transition: width 0.3s;
+        }
+        
+        .step-indicator {
+            color: var(--text-dim);
+            font-size: 0.9rem;
+            min-width: 120px;
+        }
+    </style>
+</head>
+<body>
+    <div class="demo-header">
+        <h1>🎮 Live Query Execution Demo</h1>
+        <div>
+            <a href="index.html" class="btn-secondary" style="margin-right: 0.5rem;">← Home</a>
+            <a href="tundraql.html" class="btn-secondary" style="margin-right: 0.5rem;">TundraQL</a>
+            <a href="architecture.html" class="btn-secondary" style="margin-right: 0.5rem;">Architecture</a>
+            <a href="algorithm-deep-dive.html" class="btn-secondary" style="background: rgba(245, 158, 11, 0.15); border-color: var(--accent); color: var(--accent);">🔬 Algorithm Deep Dive</a>
+        </div>
+    </div>
+    
+    <div class="demo-layout">
+        <!-- Left Sidebar: Query Builder -->
+        <div class="demo-sidebar">
+            <div class="query-builder">
+                <h3>Query Input</h3>
+                <textarea id="query-input" class="query-input" rows="6" placeholder="Enter your query...">MATCH (u:User)-[:friend INNER]->(f:User)
+      -[:works_at INNER]->(c:Company)
+WHERE c.name = "Google"
+SELECT u.name, f.name, c.name;</textarea>
+                
+                <div class="preset-queries">
+                    <h4 style="color: var(--text-dim); margin-bottom: 0.5rem; font-size: 0.9rem;">Preset Queries:</h4>
+                    <button class="preset-btn" data-query="inner">Simple INNER JOIN</button>
+                    <button class="preset-btn" data-query="left">LEFT JOIN</button>
+                    <button class="preset-btn" data-query="multi">Multi-Hop</button>
+                    <button class="preset-btn" data-query="full">FULL OUTER JOIN</button>
+                </div>
+            </div>
+            
+            <div class="execution-log">
+                <h3>Execution Log</h3>
+                <div id="execution-log"></div>
+            </div>
+        </div>
+        
+        <!-- Main: Graph Visualization -->
+        <div class="demo-main">
+            <div class="demo-graph-container">
+                <div id="live-graph"></div>
+            </div>
+            
+            <div class="demo-controls-bottom">
+                <button id="btn-reset" class="btn-secondary">⟲ Reset</button>
+                <button id="btn-step" class="btn-primary">▶ Step</button>
+                <button id="btn-auto" class="btn-primary">⏯ Auto</button>
+                <div class="progress-bar">
+                    <div id="progress-fill" class="progress-fill"></div>
+                </div>
+                <div id="step-indicator" class="step-indicator">Step 0/0</div>
+            </div>
+        </div>
+        
+        <!-- Right Sidebar: Results -->
+        <div class="demo-right">
+            <div>
+                <h3 style="color: var(--primary); margin-bottom: 1rem;">Query State</h3>
+                <div id="query-state" style="font-family: 'Fira Code', monospace; font-size: 0.85rem; color: var(--text-dim);"></div>
+            </div>
+            
+            <div class="result-table-container">
+                <h3>Result Table</h3>
+                <div id="result-table"></div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Preset queries — using TundraQL MATCH syntax
+        const presetQueries = {
+            inner: `MATCH (u:User)-[:friend INNER]->(f:User)
+      -[:works_at INNER]->(c:Company)
+WHERE c.name = "Google"
+SELECT u.name, f.name, c.name;`,
+            left: `MATCH (u:User)-[:friend LEFT]->(f:User)
+SELECT u.name, f.name;`,
+            multi: `MATCH (u:User)-[:friend INNER]->(f:User)
+      -[:works_at INNER]->(c:Company)
+SELECT u.name, f.name, c.name;`,
+            full: `MATCH (u:User)-[:friend FULL]->(f:User)
+SELECT u.name, f.name;`
+        };
+        
+        // Sample data
+        const sampleData = {
+            nodes: [
+                { id: 'u0', label: 'Alex', schema: 'users', props: { name: 'Alex', age: 25 } },
+                { id: 'u1', label: 'Bob', schema: 'users', props: { name: 'Bob', age: 31 } },
+                { id: 'u2', label: 'Jeff', schema: 'users', props: { name: 'Jeff', age: 33 } },
+                { id: 'c0', label: 'IBM', schema: 'companies', props: { name: 'IBM', size: 1000 } },
+                { id: 'c1', label: 'Google', schema: 'companies', props: { name: 'Google', size: 3000 } },
+                { id: 'c2', label: 'AWS', schema: 'companies', props: { name: 'AWS', size: 5000 } }
+            ],
+            edges: [
+                { source: 'u0', target: 'u1', label: 'friend' },
+                { source: 'u1', target: 'c1', label: 'works-at' }
+            ]
+        };
+        
+        // Execution state
+        let executionState = {
+            steps: [],
+            currentStep: 0,
+            queryState: { ids: {}, connections: [], tables: {} },
+            isRunning: false,
+            interval: null
+        };
+        
+        // Initialize Cytoscape
+        let cy = cytoscape({
+            container: document.getElementById('live-graph'),
+            elements: [
+                ...sampleData.nodes.map(n => ({ data: n })),
+                ...sampleData.edges.map(e => ({ data: e }))
+            ],
+            style: [
+                {
+                    selector: 'node',
+                    style: {
+                        'background-color': '#334155',
+                        'label': 'data(label)',
+                        'text-valign': 'center',
+                        'text-halign': 'center',
+                        'color': '#f1f5f9',
+                        'font-size': '14px',
+                        'width': 60,
+                        'height': 60,
+                        'border-width': 3,
+                        'border-color': '#64748b'
+                    }
+                },
+                {
+                    selector: 'node[schema="users"]',
+                    style: {
+                        'background-color': '#2563eb',
+                        'border-color': '#3b82f6'
+                    }
+                },
+                {
+                    selector: 'node[schema="companies"]',
+                    style: {
+                        'background-color': '#10b981',
+                        'border-color': '#34d399'
+                    }
+                },
+                {
+                    selector: 'node.active',
+                    style: {
+                        'background-color': '#f59e0b',
+                        'border-color': '#fbbf24',
+                        'border-width': 5
+                    }
+                },
+                {
+                    selector: 'node.matched',
+                    style: {
+                        'background-color': '#10b981',
+                        'border-color': '#34d399',
+                        'border-width': 5
+                    }
+                },
+                {
+                    selector: 'node.excluded',
+                    style: {
+                        'background-color': '#ef4444',
+                        'border-color': '#f87171'
+                    }
+                },
+                {
+                    selector: 'edge',
+                    style: {
+                        'width': 3,
+                        'line-color': '#475569',
+                        'target-arrow-color': '#475569',
+                        'target-arrow-shape': 'triangle',
+                        'curve-style': 'bezier',
+                        'label': 'data(label)',
+                        'font-size': '12px',
+                        'color': '#cbd5e1',
+                        'text-background-color': '#0f172a',
+                        'text-background-opacity': 1
+                    }
+                },
+                {
+                    selector: 'edge.active',
+                    style: {
+                        'line-color': '#f59e0b',
+                        'target-arrow-color': '#f59e0b',
+                        'width': 5
+                    }
+                }
+            ],
+            layout: {
+                name: 'cose',
+                padding: 30,
+                nodeRepulsion: 10000,
+                idealEdgeLength: 150
+            }
+        });
+        
+        // Event listeners
+        document.querySelectorAll('.preset-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                activeQueryType = btn.dataset.query;
+                document.getElementById('query-input').value = presetQueries[activeQueryType];
+                resetExecution();
+                generateExecutionSteps();
+            });
+        });
+        
+        document.getElementById('btn-reset').addEventListener('click', resetExecution);
+        document.getElementById('btn-step').addEventListener('click', stepExecution);
+        document.getElementById('btn-auto').addEventListener('click', toggleAuto);
+        
+        // Execution step generators per query type
+        const queryStepGenerators = {
+            inner: () => [
+                { message: 'Initialize QueryState: ids[u] = {u0, u1, u2}',
+                  action: () => {
+                    executionState.queryState = { ids: { u: ['u0','u1','u2'] }, connections: [], tables: {} };
+                    cy.nodes().removeClass('active matched excluded');
+                    cy.nodes('[schema="users"]').addClass('active');
+                }},
+                { message: 'TRAVERSE u-[:friend]->f — scan edges',
+                  action: () => {
+                    cy.nodes().removeClass('active');
+                    cy.edges('[label="friend"]').addClass('active');
+                    cy.nodes('#u0, #u1').addClass('active');
+                }},
+                { message: 'Connection found: u0 → u1 (friend)',
+                  action: () => {
+                    executionState.queryState.connections.push({ source:'u:0', target:'f:1', edge:'friend' });
+                    cy.nodes('#u0, #u1').addClass('matched');
+                    executionState.queryState.ids.f = ['u1'];
+                }},
+                { message: 'INNER JOIN: remove unmatched sources {u1, u2}',
+                  action: () => {
+                    cy.nodes('#u2').addClass('excluded');
+                    executionState.queryState.ids.u = ['u0'];
+                }},
+                { message: 'TRAVERSE f-[:works_at]->c — scan edges',
+                  action: () => {
+                    cy.edges().removeClass('active');
+                    cy.edges('[label="works-at"]').addClass('active');
+                    cy.nodes().removeClass('active excluded');
+                    cy.nodes('#u1, #c1').addClass('active');
+                }},
+                { message: 'Connection found: f1 → c1 (works_at)',
+                  action: () => {
+                    executionState.queryState.connections.push({ source:'f:1', target:'c:1', edge:'works_at' });
+                    cy.nodes('#c1').addClass('matched');
+                    executionState.queryState.ids.c = ['c1'];
+                }},
+                { message: 'WHERE c.name = "Google" → c1 passes ✓',
+                  action: () => { cy.nodes('#c1').addClass('matched'); }},
+                { message: 'BFS: populate rows from u0 → f1 → c1',
+                  action: () => {
+                    cy.nodes().removeClass('active excluded');
+                    cy.nodes('#u0').addClass('active');
+                }},
+                { message: '✅ Build result table (1 row)',
+                  action: () => {
+                    document.getElementById('result-table').innerHTML = `
+                      <table class="result-table">
+                        <tr><th>u.name</th><th>f.name</th><th>c.name</th></tr>
+                        <tr><td>Alex</td><td>Bob</td><td>Google</td></tr>
+                      </table>`;
+                }}
+            ],
+            left: () => [
+                { message: 'Initialize QueryState: ids[u] = {u0, u1, u2}',
+                  action: () => {
+                    executionState.queryState = { ids: { u: ['u0','u1','u2'] }, connections: [], tables: {} };
+                    cy.nodes().removeClass('active matched excluded');
+                    cy.nodes('[schema="users"]').addClass('active');
+                }},
+                { message: 'TRAVERSE u-[:friend LEFT]->f — scan edges',
+                  action: () => {
+                    cy.edges('[label="friend"]').addClass('active');
+                    cy.nodes('#u0, #u1').addClass('active');
+                }},
+                { message: 'Connection found: u0 → u1',
+                  action: () => {
+                    executionState.queryState.connections.push({ source:'u:0', target:'f:1', edge:'friend' });
+                    cy.nodes('#u0, #u1').addClass('matched');
+                    executionState.queryState.ids.f = ['u1'];
+                }},
+                { message: 'LEFT JOIN: keep ALL sources (u1, u2 have no friends → NULL)',
+                  action: () => {
+                    executionState.queryState.ids.u = ['u0','u1','u2'];
+                    cy.nodes('#u1, #u2').addClass('active');
+                }},
+                { message: 'BFS: u0→f1, u1→NULL, u2→NULL',
+                  action: () => { cy.nodes().removeClass('excluded'); }},
+                { message: '✅ Build result table (3 rows, 2 with NULL)',
+                  action: () => {
+                    document.getElementById('result-table').innerHTML = `
+                      <table class="result-table">
+                        <tr><th>u.name</th><th>f.name</th></tr>
+                        <tr><td>Alex</td><td>Bob</td></tr>
+                        <tr><td>Bob</td><td style="color:#ef4444">NULL</td></tr>
+                        <tr><td>Jeff</td><td style="color:#ef4444">NULL</td></tr>
+                      </table>`;
+                }}
+            ],
+            multi: () => [
+                { message: 'Initialize QueryState: ids[u] = {u0, u1, u2}',
+                  action: () => {
+                    executionState.queryState = { ids: { u: ['u0','u1','u2'] }, connections: [], tables: {} };
+                    cy.nodes().removeClass('active matched excluded');
+                    cy.nodes('[schema="users"]').addClass('active');
+                }},
+                { message: 'TRAVERSE u-[:friend INNER]->f',
+                  action: () => {
+                    cy.edges('[label="friend"]').addClass('active');
+                    cy.nodes('#u0, #u1').addClass('active');
+                }},
+                { message: 'INNER JOIN: ids[u]={u0}, ids[f]={u1}',
+                  action: () => {
+                    executionState.queryState.connections.push({ source:'u:0', target:'f:1', edge:'friend' });
+                    cy.nodes('#u0, #u1').addClass('matched');
+                    cy.nodes('#u2').addClass('excluded');
+                    executionState.queryState.ids.u = ['u0'];
+                    executionState.queryState.ids.f = ['u1'];
+                }},
+                { message: 'TRAVERSE f-[:works_at INNER]->c',
+                  action: () => {
+                    cy.edges().removeClass('active');
+                    cy.edges('[label="works-at"]').addClass('active');
+                    cy.nodes().removeClass('excluded');
+                    cy.nodes('#u1, #c1').addClass('active');
+                }},
+                { message: 'INNER JOIN: ids[c]={c1}',
+                  action: () => {
+                    executionState.queryState.connections.push({ source:'f:1', target:'c:1', edge:'works_at' });
+                    cy.nodes('#c1').addClass('matched');
+                    executionState.queryState.ids.c = ['c1'];
+                }},
+                { message: 'BFS: u0 → f1 → c1 (complete path)',
+                  action: () => {
+                    cy.nodes().removeClass('active excluded');
+                    cy.nodes('#u0, #u1, #c1').addClass('matched');
+                }},
+                { message: '✅ Build result table (1 row)',
+                  action: () => {
+                    document.getElementById('result-table').innerHTML = `
+                      <table class="result-table">
+                        <tr><th>u.name</th><th>f.name</th><th>c.name</th></tr>
+                        <tr><td>Alex</td><td>Bob</td><td>Google</td></tr>
+                      </table>`;
+                }}
+            ],
+            full: () => [
+                { message: 'Initialize QueryState: ids[u] = {u0, u1, u2}',
+                  action: () => {
+                    executionState.queryState = { ids: { u: ['u0','u1','u2'] }, connections: [], tables: {} };
+                    cy.nodes().removeClass('active matched excluded');
+                    cy.nodes('[schema="users"]').addClass('active');
+                }},
+                { message: 'TRAVERSE u-[:friend FULL]->f — scan edges',
+                  action: () => {
+                    cy.edges('[label="friend"]').addClass('active');
+                    cy.nodes('#u0, #u1').addClass('active');
+                }},
+                { message: 'Connection found: u0 → u1',
+                  action: () => {
+                    executionState.queryState.connections.push({ source:'u:0', target:'f:1', edge:'friend' });
+                    cy.nodes('#u0, #u1').addClass('matched');
+                }},
+                { message: 'FULL JOIN: keep ALL sources + unmatched targets',
+                  action: () => {
+                    executionState.queryState.ids.u = ['u0','u1','u2'];
+                    executionState.queryState.ids.f = ['u1','u2'];
+                    cy.nodes().addClass('active');
+                }},
+                { message: 'Self-join: unmatched targets = all_users - matched_sources = {u1, u2}',
+                  action: () => { cy.nodes('#u1, #u2').addClass('matched'); }},
+                { message: '✅ Build result table (4 rows)',
+                  action: () => {
+                    document.getElementById('result-table').innerHTML = `
+                      <table class="result-table">
+                        <tr><th>u.name</th><th>f.name</th></tr>
+                        <tr><td>Alex</td><td>Bob</td></tr>
+                        <tr><td>Bob</td><td style="color:#ef4444">NULL</td></tr>
+                        <tr><td>Jeff</td><td style="color:#ef4444">NULL</td></tr>
+                        <tr><td style="color:#ef4444">NULL</td><td>Jeff</td></tr>
+                      </table>`;
+                }}
+            ]
+        };
+
+        let activeQueryType = 'inner';
+
+        // Generate execution steps based on selected query
+        function generateExecutionSteps() {
+            const generator = queryStepGenerators[activeQueryType] || queryStepGenerators.inner;
+            executionState.steps = generator();
+        }
+        
+        function stepExecution() {
+            if (executionState.currentStep >= executionState.steps.length) {
+                addLog('✅ Execution complete!', 'success');
+                return;
+            }
+            
+            const step = executionState.steps[executionState.currentStep];
+            step.action();
+            addLog(step.message, 'active');
+            
+            executionState.currentStep++;
+            updateProgress();
+            updateQueryState();
+        }
+        
+        function resetExecution() {
+            executionState.currentStep = 0;
+            executionState.queryState = { ids: {}, connections: [], tables: {} };
+            if (executionState.interval) {
+                clearInterval(executionState.interval);
+                executionState.interval = null;
+                executionState.isRunning = false;
+                document.getElementById('btn-auto').textContent = '⏯ Auto';
+            }
+            cy.nodes().removeClass('active matched excluded');
+            cy.edges().removeClass('active');
+            document.getElementById('execution-log').innerHTML = '';
+            document.getElementById('result-table').innerHTML = '<p style="color: var(--text-dim);">No results yet</p>';
+            updateProgress();
+            updateQueryState();
+        }
+        
+        function toggleAuto() {
+            if (executionState.isRunning) {
+                clearInterval(executionState.interval);
+                executionState.isRunning = false;
+                document.getElementById('btn-auto').textContent = '⏯ Auto';
+            } else {
+                executionState.isRunning = true;
+                document.getElementById('btn-auto').textContent = '⏸ Pause';
+                executionState.interval = setInterval(() => {
+                    if (executionState.currentStep >= executionState.steps.length) {
+                        toggleAuto();
+                    } else {
+                        stepExecution();
+                    }
+                }, 1500);
+            }
+        }
+        
+        function addLog(message, status = '') {
+            const log = document.getElementById('execution-log');
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${status}`;
+            entry.textContent = `[${executionState.currentStep}] ${message}`;
+            log.appendChild(entry);
+            log.scrollTop = log.scrollHeight;
+        }
+        
+        function updateProgress() {
+            const progress = (executionState.currentStep / executionState.steps.length) * 100;
+            document.getElementById('progress-fill').style.width = `${progress}%`;
+            document.getElementById('step-indicator').textContent = 
+                `Step ${executionState.currentStep}/${executionState.steps.length}`;
+        }
+        
+        function updateQueryState() {
+            const state = executionState.queryState;
+            document.getElementById('query-state').innerHTML = `
+                <div><strong>IDs:</strong></div>
+                <div style="margin-left: 1rem;">${JSON.stringify(state.ids, null, 2)}</div>
+                <div style="margin-top: 0.5rem;"><strong>Connections (${state.connections.length}):</strong></div>
+                ${state.connections.map(c => `<div style="margin-left: 1rem;">→ ${c.source} -[${c.edge}]-> ${c.target}</div>`).join('')}
+            `;
+        }
+        
+        // Initialize
+        generateExecutionSteps();
+        updateProgress();
+        updateQueryState();
+    </script>
+</body>
+</html>
+

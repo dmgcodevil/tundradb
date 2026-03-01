@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TundraDB - TundraQL Language Reference</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        body { margin: 0; padding: 0; }
+        .page-header {
+            background: var(--bg-light);
+            border-bottom: 1px solid var(--border);
+            padding: 2rem 3rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .page-header h1 {
+            font-size: 1.75rem;
+            background: linear-gradient(135deg, #2563eb, #10b981);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .page-body {
+            display: grid;
+            grid-template-columns: 260px 1fr;
+            min-height: calc(100vh - 80px);
+        }
+        .toc {
+            background: var(--bg-light);
+            border-right: 1px solid var(--border);
+            padding: 1.5rem 0;
+            position: sticky;
+            top: 0;
+            height: calc(100vh - 80px);
+            overflow-y: auto;
+        }
+        .toc h4 { padding: 0 1.5rem; color: var(--text-dim); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 0.75rem; }
+        .toc a {
+            display: block;
+            padding: 0.5rem 1.5rem;
+            color: var(--text-dim);
+            text-decoration: none;
+            font-size: 0.9rem;
+            border-left: 3px solid transparent;
+            transition: all 0.15s;
+        }
+        .toc a:hover, .toc a.active { color: var(--primary); background: rgba(37,99,235,0.08); border-left-color: var(--primary); }
+        .toc .sep { border-top: 1px solid var(--border); margin: 0.75rem 1.5rem; }
+        .main-content {
+            padding: 3rem 4rem;
+            max-width: 960px;
+        }
+        .main-content h2 { font-size: 1.75rem; margin-top: 3rem; margin-bottom: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); color: var(--text); }
+        .main-content h2:first-of-type { border-top: none; margin-top: 0; }
+        .main-content h3 { font-size: 1.15rem; color: var(--primary); margin-top: 2rem; margin-bottom: 0.75rem; }
+        .main-content p, .main-content li { color: var(--text-dim); line-height: 1.7; }
+        .main-content ul, .main-content ol { padding-left: 1.5rem; margin-bottom: 1rem; }
+        .syntax-block {
+            background: var(--bg-light);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            margin: 1rem 0 1.5rem;
+            overflow: hidden;
+        }
+        .syntax-block .label {
+            background: var(--bg-lighter);
+            padding: 0.5rem 1rem;
+            font-size: 0.8rem;
+            color: var(--text-dim);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+        }
+        .syntax-block .label .tag { background: var(--primary); color: #fff; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.7rem; font-weight: 600; }
+        .syntax-block pre { margin: 0; padding: 1.25rem; overflow-x: auto; }
+        .syntax-block code { font-size: 0.9rem; line-height: 1.7; color: #a5b4fc; }
+        .kw { color: #c084fc; font-weight: 600; }
+        .str { color: #86efac; }
+        .num { color: #fbbf24; }
+        .cmt { color: #64748b; font-style: italic; }
+        .type { color: #22d3ee; }
+        .alias { color: #fb923c; }
+        .edge-type { color: #f472b6; }
+        .op { color: #f9a8d4; }
+        .info-box {
+            background: rgba(37,99,235,0.08);
+            border: 1px solid rgba(37,99,235,0.25);
+            border-radius: 8px;
+            padding: 1rem 1.25rem;
+            margin: 1rem 0;
+            font-size: 0.9rem;
+        }
+        .info-box strong { color: var(--primary); }
+        .warn-box {
+            background: rgba(245,158,11,0.08);
+            border: 1px solid rgba(245,158,11,0.25);
+            border-radius: 8px;
+            padding: 1rem 1.25rem;
+            margin: 1rem 0;
+            font-size: 0.9rem;
+        }
+        .warn-box strong { color: var(--accent); }
+        .type-table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem; }
+        .type-table th, .type-table td { padding: 0.6rem 1rem; border: 1px solid var(--border); text-align: left; }
+        .type-table th { background: var(--bg-lighter); color: var(--primary); font-weight: 600; }
+        .type-table code { background: var(--bg); padding: 0.15rem 0.4rem; border-radius: 3px; color: var(--accent); font-size: 0.85rem; }
+        @media (max-width: 900px) {
+            .page-body { grid-template-columns: 1fr; }
+            .toc { display: none; }
+            .main-content { padding: 2rem 1.5rem; }
+        }
+    </style>
+</head>
+<body>
+    <div class="page-header">
+        <h1>TundraQL Language Reference</h1>
+        <div>
+            <a href="index.html" class="btn-secondary" style="margin-right:0.5rem;">← Home</a>
+            <a href="query-execution.html" class="btn-secondary">Live Demo</a>
+        </div>
+    </div>
+
+    <div class="page-body">
+        <nav class="toc">
+            <h4>Statements</h4>
+            <a href="#schema">CREATE SCHEMA</a>
+            <a href="#node">CREATE NODE</a>
+            <a href="#edge">CREATE EDGE</a>
+            <a href="#match">MATCH</a>
+            <a href="#delete">DELETE</a>
+            <a href="#commit">COMMIT</a>
+            <a href="#show">SHOW</a>
+            <div class="sep"></div>
+            <h4>Clauses</h4>
+            <a href="#where">WHERE</a>
+            <a href="#select">SELECT</a>
+            <a href="#joins">JOIN Types</a>
+            <div class="sep"></div>
+            <h4>Reference</h4>
+            <a href="#types">Data Types</a>
+            <a href="#operators">Operators</a>
+            <a href="#patterns">Pattern Syntax</a>
+        </nav>
+
+        <div class="main-content">
+            <!-- ========== CREATE SCHEMA ========== -->
+            <h2 id="schema">CREATE SCHEMA</h2>
+            <p>Defines a new node type (schema) with named, typed fields.</p>
+
+            <div class="syntax-block">
+                <div class="label">Syntax <span class="tag">DDL</span></div>
+                <pre><code><span class="kw">CREATE SCHEMA</span> <span class="alias">SchemaName</span> (
+    <span class="alias">field1</span>: <span class="type">TYPE</span>,
+    <span class="alias">field2</span>: <span class="type">TYPE</span>,
+    ...
+);</code></pre>
+            </div>
+
+            <div class="syntax-block">
+                <div class="label">Example</div>
+                <pre><code><span class="kw">CREATE SCHEMA</span> <span class="alias">User</span> (
+    <span class="alias">name</span>: <span class="type">STRING</span>,
+    <span class="alias">age</span>:  <span class="type">INT64</span>
+);
+
+<span class="kw">CREATE SCHEMA</span> <span class="alias">Company</span> (
+    <span class="alias">name</span>: <span class="type">STRING</span>,
+    <span class="alias">revenue</span>: <span class="type">FLOAT64</span>
+);</code></pre>
+            </div>
+
+            <!-- ========== CREATE NODE ========== -->
+            <h2 id="node">CREATE NODE</h2>
+            <p>Creates a new node of a given schema. Optionally returns the auto-assigned ID.</p>
+
+            <div class="syntax-block">
+                <div class="label">Syntax <span class="tag">DML</span></div>
+                <pre><code><span class="kw">CREATE NODE</span> <span class="alias">SchemaName</span> ( <span class="alias">field</span> = <span class="str">value</span>, ... ) [<span class="kw">RETURN</span> <span class="kw">id</span>];</code></pre>
+            </div>
+
+            <div class="syntax-block">
+                <div class="label">Example</div>
+                <pre><code><span class="kw">CREATE NODE</span> <span class="alias">User</span> (<span class="alias">name</span> = <span class="str">"Alice"</span>, <span class="alias">age</span> = <span class="num">30</span>) <span class="kw">RETURN id</span>;
+<span class="kw">CREATE NODE</span> <span class="alias">User</span> (<span class="alias">name</span> = <span class="str">"Bob"</span>,   <span class="alias">age</span> = <span class="num">25</span>);
+<span class="kw">CREATE NODE</span> <span class="alias">Company</span> (<span class="alias">name</span> = <span class="str">"Google"</span>, <span class="alias">revenue</span> = <span class="num">300.5</span>);</code></pre>
+            </div>
+
+            <div class="info-box">
+                <strong>Note:</strong> Every node receives a globally unique <code>id</code> and a per-schema <code>index</code> automatically. Use <code>RETURN id</code> to see the assigned ID.
+            </div>
+
+            <!-- ========== CREATE EDGE ========== -->
+            <h2 id="edge">CREATE EDGE</h2>
+            <p>Creates a directed edge between two nodes. Nodes are referenced by <code>Schema(id)</code> or property lookup.</p>
+
+            <div class="syntax-block">
+                <div class="label">Syntax <span class="tag">DML</span></div>
+                <pre><code><span class="kw">CREATE</span> [<span class="kw">UNIQUE</span>] <span class="kw">EDGE</span> <span class="edge-type">edge_type</span>
+    <span class="kw">FROM</span> <span class="alias">Schema</span>(<span class="num">id</span>)
+    <span class="kw">TO</span>   <span class="alias">Schema</span>(<span class="num">id</span>)
+    [<span class="kw">WITH</span> (<span class="alias">prop</span> = <span class="str">value</span>, ...)];</code></pre>
+            </div>
+
+            <div class="syntax-block">
+                <div class="label">Examples</div>
+                <pre><code><span class="cmt">// By ID</span>
+<span class="kw">CREATE EDGE</span> <span class="edge-type">friend</span> <span class="kw">FROM</span> <span class="alias">User</span>(<span class="num">0</span>) <span class="kw">TO</span> <span class="alias">User</span>(<span class="num">1</span>);
+
+<span class="cmt">// By property lookup</span>
+<span class="kw">CREATE EDGE</span> <span class="edge-type">works_at</span>
+    <span class="kw">FROM</span> (<span class="alias">User</span>{<span class="alias">name</span> = <span class="str">"Alice"</span>})
+    <span class="kw">TO</span>   (<span class="alias">Company</span>{<span class="alias">name</span> = <span class="str">"Google"</span>});
+
+<span class="cmt">// Unique edge (prevents duplicates)</span>
+<span class="kw">CREATE UNIQUE EDGE</span> <span class="edge-type">manages</span>
+    <span class="kw">FROM</span> <span class="alias">User</span>(<span class="num">0</span>) <span class="kw">TO</span> <span class="alias">User</span>(<span class="num">1</span>)
+    <span class="kw">WITH</span> (<span class="alias">since</span> = <span class="str">"2024"</span>);</code></pre>
+            </div>
+
+            <!-- ========== MATCH ========== -->
+            <h2 id="match">MATCH</h2>
+            <p>The primary query statement. Uses Cypher-inspired pattern syntax to traverse the graph.</p>
+
+            <div class="syntax-block">
+                <div class="label">Syntax <span class="tag">QUERY</span></div>
+                <pre><code><span class="kw">MATCH</span> <span class="cmt">&lt;pattern&gt;</span> [, <span class="cmt">&lt;pattern&gt;</span> ...]
+    [<span class="kw">WHERE</span> <span class="cmt">&lt;condition&gt;</span>]
+    [<span class="kw">SELECT</span> <span class="cmt">&lt;fields&gt;</span>];</code></pre>
+            </div>
+
+            <h3>Node Patterns</h3>
+            <div class="syntax-block">
+                <div class="label">Syntax</div>
+                <pre><code>(<span class="alias">alias</span>:<span class="type">SchemaName</span>)      <span class="cmt">// bind alias to schema</span>
+(<span class="alias">alias</span>)                   <span class="cmt">// alias only (schema inferred)</span></code></pre>
+            </div>
+
+            <h3>Edge Patterns</h3>
+            <div class="syntax-block">
+                <div class="label">Syntax</div>
+                <pre><code><span class="cmt">// Outgoing edge</span>
+-[:<span class="edge-type">EDGE_TYPE</span> <span class="kw">JOIN</span>]-&gt;
+
+<span class="cmt">// Incoming edge</span>
+&lt;-[:<span class="edge-type">EDGE_TYPE</span> <span class="kw">JOIN</span>]-</code></pre>
+            </div>
+
+            <h3>Full Examples</h3>
+            <div class="syntax-block">
+                <div class="label">Example — Simple traversal</div>
+                <pre><code><span class="kw">MATCH</span> (<span class="alias">u</span>:<span class="type">User</span>)-[:<span class="edge-type">friend</span> <span class="kw">INNER</span>]-&gt;(<span class="alias">f</span>:<span class="type">User</span>)
+    <span class="kw">WHERE</span> <span class="alias">u</span>.<span class="alias">age</span> <span class="op">&gt;</span> <span class="num">25</span>
+    <span class="kw">SELECT</span> <span class="alias">u</span>.<span class="alias">name</span>, <span class="alias">f</span>.<span class="alias">name</span>;</code></pre>
+            </div>
+
+            <div class="syntax-block">
+                <div class="label">Example — Multi-hop traversal</div>
+                <pre><code><span class="kw">MATCH</span> (<span class="alias">u</span>:<span class="type">User</span>)-[:<span class="edge-type">friend</span> <span class="kw">INNER</span>]-&gt;(<span class="alias">f</span>:<span class="type">User</span>)
+              -[:<span class="edge-type">works_at</span> <span class="kw">INNER</span>]-&gt;(<span class="alias">c</span>:<span class="type">Company</span>)
+    <span class="kw">WHERE</span> <span class="alias">c</span>.<span class="alias">name</span> <span class="op">=</span> <span class="str">"Google"</span>
+    <span class="kw">SELECT</span> <span class="alias">u</span>.<span class="alias">name</span>, <span class="alias">f</span>.<span class="alias">name</span>, <span class="alias">c</span>.<span class="alias">name</span>;</code></pre>
+            </div>
+
+            <div class="syntax-block">
+                <div class="label">Example — LEFT JOIN (keep unmatched sources)</div>
+                <pre><code><span class="kw">MATCH</span> (<span class="alias">u</span>:<span class="type">User</span>)-[:<span class="edge-type">friend</span> <span class="kw">LEFT</span>]-&gt;(<span class="alias">f</span>:<span class="type">User</span>)
+    <span class="kw">SELECT</span> <span class="alias">u</span>.<span class="alias">name</span>, <span class="alias">f</span>.<span class="alias">name</span>;
+
+<span class="cmt">// Result: all users, f.name = NULL if no friends</span></code></pre>
+            </div>
+
+            <div class="syntax-block">
+                <div class="label">Example — Multiple patterns (comma-separated)</div>
+                <pre><code><span class="kw">MATCH</span> (<span class="alias">u</span>:<span class="type">User</span>)-[:<span class="edge-type">friend</span> <span class="kw">INNER</span>]-&gt;(<span class="alias">f</span>:<span class="type">User</span>),
+      (<span class="alias">f</span>)-[:<span class="edge-type">works_at</span> <span class="kw">INNER</span>]-&gt;(<span class="alias">c</span>:<span class="type">Company</span>)
+    <span class="kw">SELECT</span> <span class="alias">u</span>.<span class="alias">name</span>, <span class="alias">c</span>.<span class="alias">name</span>;</code></pre>
+            </div>
+
+            <!-- ========== DELETE ========== -->
+            <h2 id="delete">DELETE</h2>
+            <p>Removes nodes or edges from the graph.</p>
+
+            <div class="syntax-block">
+                <div class="label">Syntax</div>
+                <pre><code><span class="cmt">// Delete a specific node by ID</span>
+<span class="kw">DELETE</span> <span class="alias">User</span>(<span class="num">123</span>);
+
+<span class="cmt">// Delete nodes matching a pattern</span>
+<span class="kw">DELETE</span> (<span class="alias">u</span>:<span class="type">User</span>) <span class="kw">WHERE</span> <span class="alias">u</span>.<span class="alias">age</span> <span class="op">&lt;</span> <span class="num">18</span>;
+
+<span class="cmt">// Delete edges by type + direction</span>
+<span class="kw">DELETE EDGE</span> <span class="edge-type">friend</span> <span class="kw">FROM</span> <span class="alias">User</span>(<span class="num">0</span>) <span class="kw">TO</span> <span class="alias">User</span>(<span class="num">1</span>);
+
+<span class="cmt">// Delete all outgoing edges of a type from a node</span>
+<span class="kw">DELETE EDGE</span> <span class="edge-type">friend</span> <span class="kw">FROM</span> <span class="alias">User</span>(<span class="num">0</span>);
+
+<span class="cmt">// Delete all incoming edges of a type to a node</span>
+<span class="kw">DELETE EDGE</span> <span class="edge-type">works_at</span> <span class="kw">TO</span> <span class="alias">Company</span>(<span class="num">0</span>);</code></pre>
+            </div>
+
+            <!-- ========== COMMIT ========== -->
+            <h2 id="commit">COMMIT</h2>
+            <p>Persists the current database state to disk (Parquet files + JSON metadata).</p>
+
+            <div class="syntax-block">
+                <div class="label">Syntax</div>
+                <pre><code><span class="kw">COMMIT</span>;</code></pre>
+            </div>
+
+            <div class="info-box">
+                <strong>Note:</strong> Without <code>COMMIT</code>, data lives in-memory only. Call <code>COMMIT</code> before shutting down to persist.
+            </div>
+
+            <!-- ========== SHOW ========== -->
+            <h2 id="show">SHOW</h2>
+            <p>Inspect edge data and available edge types.</p>
+
+            <div class="syntax-block">
+                <div class="label">Syntax</div>
+                <pre><code><span class="cmt">// List all edge types</span>
+<span class="kw">SHOW EDGE TYPES</span>;
+
+<span class="cmt">// Show edges of a specific type</span>
+<span class="kw">SHOW EDGES</span> <span class="edge-type">friend</span>;</code></pre>
+            </div>
+
+            <!-- ========== WHERE ========== -->
+            <h2 id="where">WHERE Clause</h2>
+            <p>Filters results using boolean expressions. Supports <code>AND</code>, <code>OR</code>, and parenthesized grouping.</p>
+
+            <div class="syntax-block">
+                <div class="label">Syntax</div>
+                <pre><code><span class="kw">WHERE</span> <span class="alias">alias</span>.<span class="alias">field</span> <span class="op">operator</span> <span class="str">value</span>
+      [<span class="kw">AND</span>|<span class="kw">OR</span> <span class="alias">alias</span>.<span class="alias">field</span> <span class="op">operator</span> <span class="str">value</span>]</code></pre>
+            </div>
+
+            <div class="syntax-block">
+                <div class="label">Examples</div>
+                <pre><code><span class="kw">WHERE</span> <span class="alias">u</span>.<span class="alias">age</span> <span class="op">&gt;=</span> <span class="num">25</span> <span class="kw">AND</span> <span class="alias">u</span>.<span class="alias">age</span> <span class="op">&lt;</span> <span class="num">40</span>
+
+<span class="kw">WHERE</span> <span class="alias">c</span>.<span class="alias">name</span> <span class="op">=</span> <span class="str">"Google"</span> <span class="kw">OR</span> <span class="alias">c</span>.<span class="alias">name</span> <span class="op">=</span> <span class="str">"Apple"</span>
+
+<span class="kw">WHERE</span> (<span class="alias">u</span>.<span class="alias">age</span> <span class="op">&gt;</span> <span class="num">30</span> <span class="kw">AND</span> <span class="alias">u</span>.<span class="alias">name</span> <span class="op">=</span> <span class="str">"Alice"</span>) <span class="kw">OR</span> <span class="alias">u</span>.<span class="alias">age</span> <span class="op">&lt;</span> <span class="num">20</span></code></pre>
+            </div>
+
+            <!-- ========== SELECT ========== -->
+            <h2 id="select">SELECT Clause</h2>
+            <p>Choose which fields to include in the result table. Supports aliasing with <code>AS</code>.</p>
+
+            <div class="syntax-block">
+                <div class="label">Syntax</div>
+                <pre><code><span class="kw">SELECT</span> <span class="alias">alias</span>.<span class="alias">field</span> [<span class="kw">AS</span> <span class="alias">alias_name</span>], ...</code></pre>
+            </div>
+
+            <div class="syntax-block">
+                <div class="label">Example</div>
+                <pre><code><span class="kw">MATCH</span> (<span class="alias">u</span>:<span class="type">User</span>)-[:<span class="edge-type">works_at</span> <span class="kw">INNER</span>]-&gt;(<span class="alias">c</span>:<span class="type">Company</span>)
+    <span class="kw">SELECT</span> <span class="alias">u</span>.<span class="alias">name</span> <span class="kw">AS</span> <span class="alias">employee</span>, <span class="alias">c</span>.<span class="alias">name</span> <span class="kw">AS</span> <span class="alias">company</span>, <span class="alias">u</span>.<span class="alias">age</span>;</code></pre>
+            </div>
+
+            <!-- ========== JOIN TYPES ========== -->
+            <h2 id="joins">JOIN Types</h2>
+            <p>Specified inside the edge pattern <code>-[:EDGE_TYPE <em>JOIN</em>]-></code>. Controls how unmatched nodes are handled.</p>
+
+            <table class="type-table">
+                <tr>
+                    <th>Join</th>
+                    <th>Sources</th>
+                    <th>Targets</th>
+                    <th>Description</th>
+                </tr>
+                <tr>
+                    <td><code>INNER</code></td>
+                    <td>Only matched</td>
+                    <td>Only matched</td>
+                    <td>Default. Both sides must have a connection.</td>
+                </tr>
+                <tr>
+                    <td><code>LEFT</code></td>
+                    <td>All kept</td>
+                    <td>Only matched</td>
+                    <td>Keep all source nodes; target = NULL if no edge.</td>
+                </tr>
+                <tr>
+                    <td><code>RIGHT</code></td>
+                    <td>Only matched</td>
+                    <td>All kept</td>
+                    <td>Keep all target nodes; source = NULL if no edge.</td>
+                </tr>
+                <tr>
+                    <td><code>FULL</code></td>
+                    <td>All kept</td>
+                    <td>All kept</td>
+                    <td>Keep both sides. NULLs for unmatched on either side.</td>
+                </tr>
+            </table>
+
+            <div class="syntax-block">
+                <div class="label">Side-by-side comparison</div>
+                <pre><code><span class="cmt">// INNER: only Alice (has a friend)</span>
+<span class="kw">MATCH</span> (<span class="alias">u</span>:<span class="type">User</span>)-[:<span class="edge-type">friend</span> <span class="kw">INNER</span>]-&gt;(<span class="alias">f</span>:<span class="type">User</span>);
+
+<span class="cmt">// LEFT: all users, f=NULL for users without friends</span>
+<span class="kw">MATCH</span> (<span class="alias">u</span>:<span class="type">User</span>)-[:<span class="edge-type">friend</span> <span class="kw">LEFT</span>]-&gt;(<span class="alias">f</span>:<span class="type">User</span>);
+
+<span class="cmt">// FULL: all users on both sides, NULLs where no match</span>
+<span class="kw">MATCH</span> (<span class="alias">u</span>:<span class="type">User</span>)-[:<span class="edge-type">friend</span> <span class="kw">FULL</span>]-&gt;(<span class="alias">f</span>:<span class="type">User</span>);</code></pre>
+            </div>
+
+            <div class="warn-box">
+                <strong>Self-join caveat:</strong> When source and target are the same schema (e.g., User → User), FULL/RIGHT joins use <code>unmatched = all_target_ids - matched_source_ids</code> to avoid duplicates. For cross-schema joins, it uses <code>all_target_ids - matched_target_ids</code>.
+            </div>
+
+            <!-- ========== DATA TYPES ========== -->
+            <h2 id="types">Data Types</h2>
+
+            <table class="type-table">
+                <tr><th>TundraQL</th><th>Internal</th><th>Arrow</th><th>Description</th></tr>
+                <tr><td><code>STRING</code></td><td><code>ValueType::STRING</code></td><td><code>utf8</code></td><td>Variable-length UTF-8 string</td></tr>
+                <tr><td><code>INT64</code></td><td><code>ValueType::INT64</code></td><td><code>int64</code></td><td>64-bit signed integer</td></tr>
+                <tr><td><code>FLOAT64</code></td><td><code>ValueType::DOUBLE</code></td><td><code>float64</code></td><td>64-bit floating point</td></tr>
+                <tr><td>—</td><td><code>ValueType::INT32</code></td><td><code>int32</code></td><td>32-bit signed integer (C++ API only)</td></tr>
+                <tr><td>—</td><td><code>ValueType::FLOAT</code></td><td><code>float32</code></td><td>32-bit floating point (C++ API only)</td></tr>
+                <tr><td>—</td><td><code>ValueType::BOOL</code></td><td><code>boolean</code></td><td>Boolean (C++ API only)</td></tr>
+                <tr><td>—</td><td><code>FIXED_STRING16/32/64</code></td><td><code>utf8</code></td><td>Fixed-size strings for memory optimization</td></tr>
+            </table>
+
+            <div class="info-box">
+                <strong>Storage note:</strong> Strings use a tiered <code>StringArena</code> — short strings (≤16/32/64 bytes) are stored in fixed-size pools for cache efficiency. Longer strings go into a variable-length pool.
+            </div>
+
+            <!-- ========== OPERATORS ========== -->
+            <h2 id="operators">Operators</h2>
+
+            <table class="type-table">
+                <tr><th>Operator</th><th>Meaning</th><th>Example</th></tr>
+                <tr><td><code>=</code></td><td>Equal</td><td><code>u.name = "Alice"</code></td></tr>
+                <tr><td><code>!=</code></td><td>Not equal</td><td><code>u.age != 30</code></td></tr>
+                <tr><td><code>&gt;</code></td><td>Greater than</td><td><code>u.age > 25</code></td></tr>
+                <tr><td><code>&gt;=</code></td><td>Greater or equal</td><td><code>u.age >= 25</code></td></tr>
+                <tr><td><code>&lt;</code></td><td>Less than</td><td><code>u.age < 40</code></td></tr>
+                <tr><td><code>&lt;=</code></td><td>Less or equal</td><td><code>u.age <= 40</code></td></tr>
+                <tr><td><code>AND</code></td><td>Logical and</td><td><code>u.age > 20 AND u.age < 40</code></td></tr>
+                <tr><td><code>OR</code></td><td>Logical or</td><td><code>u.name = "Alice" OR u.name = "Bob"</code></td></tr>
+            </table>
+
+            <!-- ========== PATTERN SYNTAX ========== -->
+            <h2 id="patterns">Pattern Syntax Reference</h2>
+            <p>Complete pattern grammar used in <code>MATCH</code> and <code>DELETE</code> statements.</p>
+
+            <div class="syntax-block">
+                <div class="label">Grammar (EBNF-style)</div>
+                <pre><code><span class="cmt">pattern      :=</span>  nodePattern ( edgePattern nodePattern )*
+<span class="cmt">nodePattern  :=</span>  '(' <span class="alias">alias</span> [ ':' <span class="type">Schema</span> ] ')'
+<span class="cmt">edgePattern  :=</span>  '-[' [ ':' <span class="edge-type">type</span> ] [ <span class="kw">join</span> ] ']->'      <span class="cmt">// outgoing</span>
+              |  '<-[' [ ':' <span class="edge-type">type</span> ] [ <span class="kw">join</span> ] ']-'      <span class="cmt">// incoming</span>
+<span class="cmt">join         :=</span>  <span class="kw">INNER</span> | <span class="kw">LEFT</span> | <span class="kw">RIGHT</span> | <span class="kw">FULL</span>
+<span class="cmt">value        :=</span>  <span class="str">STRING_LITERAL</span> | <span class="num">INTEGER</span> | <span class="num">FLOAT</span></code></pre>
+            </div>
+
+            <div class="syntax-block">
+                <div class="label">Complete session example</div>
+                <pre><code><span class="cmt">// 1. Define schemas</span>
+<span class="kw">CREATE SCHEMA</span> <span class="alias">User</span> (<span class="alias">name</span>: <span class="type">STRING</span>, <span class="alias">age</span>: <span class="type">INT64</span>);
+<span class="kw">CREATE SCHEMA</span> <span class="alias">Company</span> (<span class="alias">name</span>: <span class="type">STRING</span>, <span class="alias">size</span>: <span class="type">INT64</span>);
+
+<span class="cmt">// 2. Create nodes</span>
+<span class="kw">CREATE NODE</span> <span class="alias">User</span> (<span class="alias">name</span> = <span class="str">"Alice"</span>, <span class="alias">age</span> = <span class="num">30</span>) <span class="kw">RETURN id</span>;
+<span class="kw">CREATE NODE</span> <span class="alias">User</span> (<span class="alias">name</span> = <span class="str">"Bob"</span>,   <span class="alias">age</span> = <span class="num">25</span>) <span class="kw">RETURN id</span>;
+<span class="kw">CREATE NODE</span> <span class="alias">Company</span> (<span class="alias">name</span> = <span class="str">"Google"</span>, <span class="alias">size</span> = <span class="num">3000</span>);
+
+<span class="cmt">// 3. Create edges</span>
+<span class="kw">CREATE EDGE</span> <span class="edge-type">friend</span>   <span class="kw">FROM</span> <span class="alias">User</span>(<span class="num">0</span>) <span class="kw">TO</span> <span class="alias">User</span>(<span class="num">1</span>);
+<span class="kw">CREATE EDGE</span> <span class="edge-type">works_at</span> <span class="kw">FROM</span> <span class="alias">User</span>(<span class="num">1</span>) <span class="kw">TO</span> <span class="alias">Company</span>(<span class="num">2</span>);
+
+<span class="cmt">// 4. Query: Alice's friends who work at Google</span>
+<span class="kw">MATCH</span> (<span class="alias">u</span>:<span class="type">User</span>)-[:<span class="edge-type">friend</span> <span class="kw">INNER</span>]-&gt;(<span class="alias">f</span>:<span class="type">User</span>)
+              -[:<span class="edge-type">works_at</span> <span class="kw">INNER</span>]-&gt;(<span class="alias">c</span>:<span class="type">Company</span>)
+    <span class="kw">WHERE</span> <span class="alias">u</span>.<span class="alias">name</span> <span class="op">=</span> <span class="str">"Alice"</span> <span class="kw">AND</span> <span class="alias">c</span>.<span class="alias">name</span> <span class="op">=</span> <span class="str">"Google"</span>
+    <span class="kw">SELECT</span> <span class="alias">u</span>.<span class="alias">name</span> <span class="kw">AS</span> <span class="alias">user</span>, <span class="alias">f</span>.<span class="alias">name</span> <span class="kw">AS</span> <span class="alias">friend</span>, <span class="alias">c</span>.<span class="alias">name</span> <span class="kw">AS</span> <span class="alias">company</span>;
+
+<span class="cmt">// 5. Persist</span>
+<span class="kw">COMMIT</span>;</code></pre>
+            </div>
+
+        </div>
+    </div>
+</body>
+</html>
+
