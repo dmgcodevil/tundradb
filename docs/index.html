@@ -204,13 +204,13 @@
             <div class="label"><span>Create nodes</span> <span class="step">Step 2</span></div>
             <pre><code><span class="kw">CREATE NODE</span> User (name = <span class="str">"Alice"</span>, age = <span class="num">30</span>) <span class="kw">RETURN id</span>;  <span class="cmt">// → id: 0</span>
 <span class="kw">CREATE NODE</span> User (name = <span class="str">"Bob"</span>,   age = <span class="num">25</span>) <span class="kw">RETURN id</span>;  <span class="cmt">// → id: 1</span>
-<span class="kw">CREATE NODE</span> Company (name = <span class="str">"Google"</span>, size = <span class="num">3000</span>);</code></pre>
+<span class="kw">CREATE NODE</span> Company (name = <span class="str">"Google"</span>, size = <span class="num">3000</span>);            <span class="cmt">// → id: 0</span></code></pre>
         </div>
 
         <div class="qs-block">
             <div class="label"><span>Create edges</span> <span class="step">Step 3</span></div>
             <pre><code><span class="kw">CREATE EDGE</span> friend   <span class="kw">FROM</span> User(<span class="num">0</span>) <span class="kw">TO</span> User(<span class="num">1</span>);
-<span class="kw">CREATE EDGE</span> works_at <span class="kw">FROM</span> User(<span class="num">1</span>) <span class="kw">TO</span> Company(<span class="num">2</span>);</code></pre>
+<span class="kw">CREATE EDGE</span> works_at <span class="kw">FROM</span> User(<span class="num">1</span>) <span class="kw">TO</span> Company(<span class="num">0</span>);</code></pre>
         </div>
 
         <div class="qs-block">

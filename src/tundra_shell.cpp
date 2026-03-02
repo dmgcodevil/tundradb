@@ -338,6 +338,30 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
     std::vector<int64_t> source_ids = resolveNodeSelector(sourceSelector);
     std::vector<int64_t> target_ids = resolveNodeSelector(targetSelector);
 
+    // Validate that referenced nodes actually exist
+    std::string source_schema = getSchemaFromSelector(sourceSelector);
+    std::string target_schema = getSchemaFromSelector(targetSelector);
+    auto node_manager = db.get_node_manager();
+
+    for (auto source_id : source_ids) {
+      auto node_result = node_manager->get_node(source_schema, source_id);
+      if (!node_result.ok()) {
+        throw std::runtime_error("Source node " + source_schema + "(" +
+                                 std::to_string(source_id) +
+                                 ") does not exist. Each schema has its own ID "
+                                 "counter starting from 0.");
+      }
+    }
+    for (auto target_id : target_ids) {
+      auto node_result = node_manager->get_node(target_schema, target_id);
+      if (!node_result.ok()) {
+        throw std::runtime_error("Target node " + target_schema + "(" +
+                                 std::to_string(target_id) +
+                                 ") does not exist. Each schema has its own ID "
+                                 "counter starting from 0.");
+      }
+    }
+
     // Handle UNIQUE constraint
     if (is_unique) {
       if (source_ids.size() != 1) {
@@ -982,6 +1006,16 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
   }
 
  private:
+  // Helper method to extract schema name from a node selector
+  std::string getSchemaFromSelector(
+      tundraql::TundraQLParser::NodeSelectorContext* selector) {
+    if (selector->nodeLocator()) {
+      return selector->nodeLocator()->IDENTIFIER()->getText();
+    } else {
+      return selector->IDENTIFIER()->getText();
+    }
+  }
+
   // Helper method to resolve node selector to list of node IDs
   std::vector<int64_t> resolveNodeSelector(
       tundraql::TundraQLParser::NodeSelectorContext* selector) {

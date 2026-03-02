@@ -188,7 +188,7 @@
             </div>
 
             <div class="info-box">
-                <strong>Note:</strong> Every node receives a globally unique <code>id</code> and a per-schema <code>index</code> automatically. Use <code>RETURN id</code> to see the assigned ID.
+                <strong>Note:</strong> Every node receives a <strong>per-schema</strong> <code>id</code> automatically (each schema has its own counter starting from 0). Use <code>RETURN id</code> to see the assigned ID.
             </div>
 
             <!-- ========== CREATE EDGE ========== -->
@@ -469,11 +469,11 @@
 <span class="cmt">// 2. Create nodes</span>
 <span class="kw">CREATE NODE</span> <span class="alias">User</span> (<span class="alias">name</span> = <span class="str">"Alice"</span>, <span class="alias">age</span> = <span class="num">30</span>) <span class="kw">RETURN id</span>;
 <span class="kw">CREATE NODE</span> <span class="alias">User</span> (<span class="alias">name</span> = <span class="str">"Bob"</span>,   <span class="alias">age</span> = <span class="num">25</span>) <span class="kw">RETURN id</span>;
-<span class="kw">CREATE NODE</span> <span class="alias">Company</span> (<span class="alias">name</span> = <span class="str">"Google"</span>, <span class="alias">size</span> = <span class="num">3000</span>);
+<span class="kw">CREATE NODE</span> <span class="alias">Company</span> (<span class="alias">name</span> = <span class="str">"Google"</span>, <span class="alias">size</span> = <span class="num">3000</span>); <span class="cmt">// → Company id: 0</span>
 
-<span class="cmt">// 3. Create edges</span>
+<span class="cmt">// 3. Create edges (IDs are per-schema: User has 0,1 — Company has 0)</span>
 <span class="kw">CREATE EDGE</span> <span class="edge-type">friend</span>   <span class="kw">FROM</span> <span class="alias">User</span>(<span class="num">0</span>) <span class="kw">TO</span> <span class="alias">User</span>(<span class="num">1</span>);
-<span class="kw">CREATE EDGE</span> <span class="edge-type">works_at</span> <span class="kw">FROM</span> <span class="alias">User</span>(<span class="num">1</span>) <span class="kw">TO</span> <span class="alias">Company</span>(<span class="num">2</span>);
+<span class="kw">CREATE EDGE</span> <span class="edge-type">works_at</span> <span class="kw">FROM</span> <span class="alias">User</span>(<span class="num">1</span>) <span class="kw">TO</span> <span class="alias">Company</span>(<span class="num">0</span>);
 
 <span class="cmt">// 4. Query: Alice's friends who work at Google</span>
 <span class="kw">MATCH</span> (<span class="alias">u</span>:<span class="type">User</span>)-[:<span class="edge-type">friend</span> <span class="kw">INNER</span>]-&gt;(<span class="alias">f</span>:<span class="type">User</span>)

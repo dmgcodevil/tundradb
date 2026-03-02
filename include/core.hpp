@@ -18,11 +18,11 @@
 #include <unordered_map>
 #include <vector>
 
-#include "json.hpp"
 #include "arrow_utils.hpp"
 #include "config.hpp"
 #include "edge_store.hpp"
 #include "file_utils.hpp"
+#include "json.hpp"
 #include "logger.hpp"
 #include "metadata.hpp"
 #include "node.hpp"

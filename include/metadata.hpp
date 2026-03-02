@@ -8,8 +8,8 @@
 #include <string>
 #include <vector>
 
-#include "json.hpp"
 #include "file_utils.hpp"
+#include "json.hpp"
 #include "llvm/ADT/SmallVector.h"
 #include "logger.hpp"
 #include "schema.hpp"
