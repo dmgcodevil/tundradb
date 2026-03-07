@@ -4,7 +4,7 @@ project(tundradb VERSION 1.0.0 LANGUAGES CXX C)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Option: bui   ld shared or static library (default: static)
+# Option: build shared or static library (default: static)
 option(BUILD_SHARED_LIBS "Build TundraDB as a shared library" OFF)
 option(TUNDRADB_BUILD_SHELL "Build the tundra_shell interactive CLI" ON)
 option(TUNDRADB_BUILD_TESTS "Build tests" ON)
