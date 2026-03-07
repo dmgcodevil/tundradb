@@ -908,6 +908,155 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
     return deleted_count;
   }
 
+  // Handle UPDATE statements — delegates to UpdateQuery + Database::update()
+  antlrcpp::Any visitUpdateStatement(
+      tundraql::TundraQLParser::UpdateStatementContext* ctx) override {
+    spdlog::info("Executing UPDATE command");
+
+    auto updateTarget = ctx->updateTarget();
+    auto setClause = ctx->setClause();
+
+    // --- Determine schema name, alias, and optional node ID ---
+    std::string schema_name;
+    std::string alias;
+    std::optional<int64_t> node_id;
+
+    if (updateTarget->nodeLocator()) {
+      // UPDATE User(0) SET ...  — Mode 1 (by ID)
+      auto loc = updateTarget->nodeLocator();
+      schema_name = loc->IDENTIFIER()->getText();
+      node_id = std::stoll(loc->INTEGER_LITERAL()->getText());
+    } else if (updateTarget->nodePattern()) {
+      // UPDATE (u:User) SET ... WHERE ...  — Mode 2 (by MATCH)
+      auto pat = updateTarget->nodePattern();
+      if (pat->IDENTIFIER().size() > 1) {
+        alias = pat->IDENTIFIER(0)->getText();
+        schema_name = pat->IDENTIFIER(1)->getText();
+      } else {
+        alias = pat->IDENTIFIER(0)->getText();
+        schema_name = alias;
+      }
+    }
+
+    auto schema_registry = db.get_schema_registry();
+    tundradb::UpdateResult update_result;
+
+    if (node_id.has_value()) {
+      // ----- Mode 1: UPDATE User(0) SET age = 31; -----
+      // Bare field names, single schema.
+      auto schema_result = schema_registry->get(schema_name);
+      if (!schema_result.ok()) {
+        throw std::runtime_error("Schema '" + schema_name + "' not found");
+      }
+      auto schema = schema_result.ValueOrDie();
+
+      auto builder = tundradb::UpdateQuery::on(schema_name, *node_id);
+      for (auto assignment : setClause->setAssignment()) {
+        std::string field_name;
+        if (assignment->IDENTIFIER().size() == 2) {
+          field_name = assignment->IDENTIFIER(1)->getText();  // strip alias
+        } else {
+          field_name = assignment->IDENTIFIER(0)->getText();
+        }
+        std::string raw_value = assignment->value()->getText();
+        if (raw_value.size() >= 2 && raw_value.front() == '"' &&
+            raw_value.back() == '"') {
+          raw_value = raw_value.substr(1, raw_value.size() - 2);
+        }
+        auto field = schema->get_field(field_name);
+        if (!field) {
+          throw std::runtime_error("Field '" + field_name +
+                                   "' not found in schema '" + schema_name +
+                                   "'");
+        }
+        builder.set(field_name, parseValueForField(field, raw_value));
+      }
+
+      auto update_query = std::move(builder).build();
+      auto result = db.update(update_query);
+      if (!result.ok()) {
+        throw std::runtime_error("UPDATE failed: " +
+                                 result.status().ToString());
+      }
+      update_result = result.ValueOrDie();
+
+      *g_output_stream << "Updated " << schema_name << "(" << *node_id
+                       << "): " << update_query.assignments().size()
+                       << " field(s)" << std::endl;
+    } else {
+      // ----- Mode 2: UPDATE (u:User) SET u.age = 31 WHERE u.name = "Alice";
+      // Alias-qualified SET fields (e.g. "u.age").
+      auto query_builder = tundradb::Query::from(alias + ":" + schema_name);
+
+      if (ctx->whereClause()) {
+        processWhereClause(query_builder, ctx->whereClause());
+      }
+
+      auto match_query = query_builder.build();
+      auto builder = tundradb::UpdateQuery::match(std::move(match_query));
+
+      // Parse SET assignments — keep the alias.field format
+      for (auto assignment : setClause->setAssignment()) {
+        std::string qualified_name;
+        if (assignment->IDENTIFIER().size() == 2) {
+          // "u.age" → keep as "u.age"
+          qualified_name = assignment->IDENTIFIER(0)->getText() + "." +
+                           assignment->IDENTIFIER(1)->getText();
+        } else {
+          // bare field — assume the update target alias
+          qualified_name = alias + "." + assignment->IDENTIFIER(0)->getText();
+        }
+
+        // Resolve bare field for type conversion
+        std::string bare_field =
+            qualified_name.substr(qualified_name.find('.') + 1);
+
+        // Determine which schema this alias refers to
+        std::string set_alias =
+            qualified_name.substr(0, qualified_name.find('.'));
+        std::string set_schema = (set_alias == alias) ? schema_name : set_alias;
+
+        auto s_result = schema_registry->get(set_schema);
+        if (!s_result.ok()) {
+          throw std::runtime_error("Schema '" + set_schema + "' not found");
+        }
+        auto s = s_result.ValueOrDie();
+        auto field = s->get_field(bare_field);
+        if (!field) {
+          throw std::runtime_error("Field '" + bare_field +
+                                   "' not found in schema '" + set_schema +
+                                   "'");
+        }
+
+        std::string raw_value = assignment->value()->getText();
+        if (raw_value.size() >= 2 && raw_value.front() == '"' &&
+            raw_value.back() == '"') {
+          raw_value = raw_value.substr(1, raw_value.size() - 2);
+        }
+        builder.set(qualified_name, parseValueForField(field, raw_value));
+      }
+
+      auto update_query = std::move(builder).build();
+      auto result = db.update(update_query);
+      if (!result.ok()) {
+        throw std::runtime_error("UPDATE failed: " +
+                                 result.status().ToString());
+      }
+      update_result = result.ValueOrDie();
+
+      *g_output_stream << "Updated " << update_result.updated_count
+                       << " node(s): " << update_query.assignments().size()
+                       << " field(s)" << std::endl;
+    }
+
+    // Print any errors
+    for (const auto& err : update_result.errors) {
+      *g_output_stream << "Warning: " << err << std::endl;
+    }
+
+    return static_cast<int>(update_result.updated_count);
+  }
+
   // Handle SHOW statements
   antlrcpp::Any visitShowStatement(
       tundraql::TundraQLParser::ShowStatementContext* ctx) override {
@@ -1006,6 +1155,36 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
   }
 
  private:
+  // Helper: convert a raw string value to a typed Value based on field type
+  tundradb::Value parseValueForField(
+      const std::shared_ptr<tundradb::Field>& field,
+      const std::string& raw_value) {
+    auto field_type = field->type();
+    std::string cleaned = raw_value;
+    // Trim whitespace
+    cleaned.erase(0, cleaned.find_first_not_of(" \t\n\r"));
+    cleaned.erase(cleaned.find_last_not_of(" \t\n\r") + 1);
+
+    if (field_type == tundradb::ValueType::STRING) {
+      return tundradb::Value(cleaned);
+    } else if (field_type == tundradb::ValueType::INT64) {
+      return tundradb::Value(static_cast<int64_t>(std::stoll(cleaned)));
+    } else if (field_type == tundradb::ValueType::INT32) {
+      return tundradb::Value(static_cast<int32_t>(std::stoi(cleaned)));
+    } else if (field_type == tundradb::ValueType::DOUBLE ||
+               field_type == tundradb::ValueType::FLOAT) {
+      return tundradb::Value(std::stod(cleaned));
+    } else if (field_type == tundradb::ValueType::BOOL) {
+      std::string lower = cleaned;
+      std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+      if (lower == "true" || lower == "1") return tundradb::Value(true);
+      if (lower == "false" || lower == "0") return tundradb::Value(false);
+      throw std::runtime_error("Invalid boolean value: " + cleaned);
+    }
+    throw std::runtime_error("Unsupported field type for SET: " +
+                             tundradb::to_string(field_type));
+  }
+
   // Helper method to extract schema name from a node selector
   std::string getSchemaFromSelector(
       tundraql::TundraQLParser::NodeSelectorContext* selector) {
@@ -1470,6 +1649,7 @@ static void completionCallback(const char* buf, linenoiseCompletions* lc) {
     // Empty buffer, show all top-level commands
     linenoiseAddCompletion(lc, "CREATE ");
     linenoiseAddCompletion(lc, "MATCH ");
+    linenoiseAddCompletion(lc, "UPDATE ");
     linenoiseAddCompletion(lc, "DELETE ");
     linenoiseAddCompletion(lc, "SHOW ");
     linenoiseAddCompletion(lc, "COMMIT");
@@ -1541,6 +1721,10 @@ static char* hintsCallback(const char* buf, int* color, int* bold) {
   }
   if (strcmp(buf, "DELETE EDGE ") == 0) {
     return const_cast<char*>("edge_type [FROM node] [TO node]");
+  }
+  if (strcmp(buf, "UPDATE ") == 0) {
+    return const_cast<char*>(
+        "User(0) SET field = value | (u:User) SET u.field = value WHERE ...");
   }
   if (strcmp(buf, "SHOW ") == 0) {
     return const_cast<char*>("EDGES edge_type | EDGE TYPES");

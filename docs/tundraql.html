@@ -129,6 +129,7 @@
             <a href="#node">CREATE NODE</a>
             <a href="#edge">CREATE EDGE</a>
             <a href="#match">MATCH</a>
+            <a href="#update">UPDATE</a>
             <a href="#delete">DELETE</a>
             <a href="#commit">COMMIT</a>
             <a href="#show">SHOW</a>
@@ -136,6 +137,7 @@
             <h4>Clauses</h4>
             <a href="#where">WHERE</a>
             <a href="#select">SELECT</a>
+            <a href="#set">SET</a>
             <a href="#joins">JOIN Types</a>
             <div class="sep"></div>
             <h4>Reference</h4>
@@ -300,6 +302,58 @@
 <span class="kw">DELETE EDGE</span> <span class="edge-type">works_at</span> <span class="kw">TO</span> <span class="alias">Company</span>(<span class="num">0</span>);</code></pre>
             </div>
 
+            <!-- ========== UPDATE ========== -->
+            <h2 id="update">UPDATE</h2>
+            <p>Modifies field values on existing nodes. Supports two forms: <strong>by ID</strong> (direct) and <strong>by pattern</strong> (with optional <code>WHERE</code> filter).</p>
+
+            <h3>Form 1 — Update by ID</h3>
+            <p>Targets a single node using <code>Schema(id)</code>. Field names are bare (no alias prefix).</p>
+
+            <div class="syntax-block">
+                <div class="label">Syntax <span class="tag">DML</span></div>
+                <pre><code><span class="kw">UPDATE</span> <span class="alias">Schema</span>(<span class="num">id</span>) <span class="kw">SET</span> <span class="alias">field</span> = <span class="str">value</span> [, <span class="alias">field</span> = <span class="str">value</span> ...] ;</code></pre>
+            </div>
+
+            <div class="syntax-block">
+                <div class="label">Examples</div>
+                <pre><code><span class="cmt">// Update a single field</span>
+<span class="kw">UPDATE</span> <span class="alias">User</span>(<span class="num">0</span>) <span class="kw">SET</span> <span class="alias">age</span> = <span class="num">31</span>;
+
+<span class="cmt">// Update multiple fields at once (creates one version)</span>
+<span class="kw">UPDATE</span> <span class="alias">User</span>(<span class="num">0</span>) <span class="kw">SET</span> <span class="alias">name</span> = <span class="str">"Alice B."</span>, <span class="alias">age</span> = <span class="num">31</span>;</code></pre>
+            </div>
+
+            <h3>Form 2 — Update by Pattern</h3>
+            <p>Uses a node pattern <code>(alias:Schema)</code> with an optional <code>WHERE</code> clause to match nodes. Field names must be alias-qualified (<code>alias.field</code>).</p>
+
+            <div class="syntax-block">
+                <div class="label">Syntax <span class="tag">DML</span></div>
+                <pre><code><span class="kw">UPDATE</span> (<span class="alias">alias</span>:<span class="type">Schema</span>) <span class="kw">SET</span> <span class="alias">alias</span>.<span class="alias">field</span> = <span class="str">value</span> [, ...]
+    [<span class="kw">WHERE</span> <span class="alias">alias</span>.<span class="alias">field</span> <span class="op">op</span> <span class="str">value</span>] ;</code></pre>
+            </div>
+
+            <div class="syntax-block">
+                <div class="label">Examples</div>
+                <pre><code><span class="cmt">// Update all users named Alice</span>
+<span class="kw">UPDATE</span> (<span class="alias">u</span>:<span class="type">User</span>) <span class="kw">SET</span> <span class="alias">u</span>.<span class="alias">age</span> = <span class="num">31</span>
+    <span class="kw">WHERE</span> <span class="alias">u</span>.<span class="alias">name</span> <span class="op">=</span> <span class="str">"Alice"</span>;
+
+<span class="cmt">// Update with compound condition</span>
+<span class="kw">UPDATE</span> (<span class="alias">u</span>:<span class="type">User</span>) <span class="kw">SET</span> <span class="alias">u</span>.<span class="alias">name</span> = <span class="str">"Senior"</span>
+    <span class="kw">WHERE</span> <span class="alias">u</span>.<span class="alias">age</span> <span class="op">&gt;</span> <span class="num">30</span> <span class="kw">AND</span> <span class="alias">u</span>.<span class="alias">age</span> <span class="op">&lt;</span> <span class="num">50</span>;
+
+<span class="cmt">// Update all nodes of a schema (no WHERE)</span>
+<span class="kw">UPDATE</span> (<span class="alias">u</span>:<span class="type">User</span>) <span class="kw">SET</span> <span class="alias">u</span>.<span class="alias">age</span> = <span class="num">0</span>;</code></pre>
+            </div>
+
+            <div class="info-box">
+                <strong>Versioning:</strong> When multiple fields are updated in a single <code>SET</code> clause, TundraDB creates <strong>one version</strong> for the entire batch — not one per field.
+            </div>
+
+            <div class="warn-box">
+                <strong>Pattern form requires alias prefix:</strong> <code>SET age = 31</code> is only valid in the by-ID form. In the pattern form you must write <code>SET u.age = 31</code>.
+            </div>
+
             <!-- ========== COMMIT ========== -->
             <h2 id="commit">COMMIT</h2>
             <p>Persists the current database state to disk (Parquet files + JSON metadata).</p>
@@ -358,6 +412,37 @@
                 <div class="label">Example</div>
                 <pre><code><span class="kw">MATCH</span> (<span class="alias">u</span>:<span class="type">User</span>)-[:<span class="edge-type">works_at</span> <span class="kw">INNER</span>]-&gt;(<span class="alias">c</span>:<span class="type">Company</span>)
     <span class="kw">SELECT</span> <span class="alias">u</span>.<span class="alias">name</span> <span class="kw">AS</span> <span class="alias">employee</span>, <span class="alias">c</span>.<span class="alias">name</span> <span class="kw">AS</span> <span class="alias">company</span>, <span class="alias">u</span>.<span class="alias">age</span>;</code></pre>
+            </div>
+
+            <!-- ========== SET ========== -->
+            <h2 id="set">SET Clause</h2>
+            <p>Specifies field assignments in an <code>UPDATE</code> statement. Comma-separated list of <code>field = value</code> pairs.</p>
+
+            <div class="syntax-block">
+                <div class="label">Syntax</div>
+                <pre><code><span class="kw">SET</span> <span class="alias">field</span> = <span class="str">value</span> [, <span class="alias">field</span> = <span class="str">value</span> ...]</code></pre>
+            </div>
+
+            <table class="type-table">
+                <tr>
+                    <th>Update Form</th>
+                    <th>Field Name Format</th>
+                    <th>Example</th>
+                </tr>
+                <tr>
+                    <td>By ID</td>
+                    <td>Bare name</td>
+                    <td><code>SET name = "Alice", age = 31</code></td>
+                </tr>
+                <tr>
+                    <td>By Pattern</td>
+                    <td>Alias-qualified</td>
+                    <td><code>SET u.name = "Alice", u.age = 31</code></td>
+                </tr>
+            </table>
+
+            <div class="info-box">
+                <strong>Batch semantics:</strong> All assignments in a single <code>SET</code> clause are applied atomically — one version is created per node, regardless of how many fields are changed.
             </div>
 
             <!-- ========== JOIN TYPES ========== -->
@@ -481,7 +566,13 @@
     <span class="kw">WHERE</span> <span class="alias">u</span>.<span class="alias">name</span> <span class="op">=</span> <span class="str">"Alice"</span> <span class="kw">AND</span> <span class="alias">c</span>.<span class="alias">name</span> <span class="op">=</span> <span class="str">"Google"</span>
     <span class="kw">SELECT</span> <span class="alias">u</span>.<span class="alias">name</span> <span class="kw">AS</span> <span class="alias">user</span>, <span class="alias">f</span>.<span class="alias">name</span> <span class="kw">AS</span> <span class="alias">friend</span>, <span class="alias">c</span>.<span class="alias">name</span> <span class="kw">AS</span> <span class="alias">company</span>;
 
-<span class="cmt">// 5. Persist</span>
+<span class="cmt">// 5. Update: Alice turned 31</span>
+<span class="kw">UPDATE</span> <span class="alias">User</span>(<span class="num">0</span>) <span class="kw">SET</span> <span class="alias">age</span> = <span class="num">31</span>;
+
+<span class="cmt">// 6. Bulk update: set all users older than 30 to "Senior"</span>
+<span class="kw">UPDATE</span> (<span class="alias">u</span>:<span class="type">User</span>) <span class="kw">SET</span> <span class="alias">u</span>.<span class="alias">name</span> = <span class="str">"Senior"</span> <span class="kw">WHERE</span> <span class="alias">u</span>.<span class="alias">age</span> <span class="op">&gt;</span> <span class="num">30</span>;
+
+<span class="cmt">// 7. Persist</span>
 <span class="kw">COMMIT</span>;</code></pre>
             </div>
 

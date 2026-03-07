@@ -237,6 +237,23 @@ class Shard {
     return nodes_[node_id]->update(field, value, update_type);
   }
 
+  /**
+   * @brief Batch-update multiple fields on one node (creates 1 version).
+   */
+  arrow::Result<bool> update_fields(
+      const int64_t node_id,
+      const std::vector<std::pair<std::shared_ptr<Field>, Value>>
+          &field_updates,
+      const UpdateType update_type) {
+    if (!nodes_.contains(node_id)) {
+      return arrow::Status::KeyError("Node not found: ", node_id);
+    }
+    dirty_ = true;
+    updated_ = true;
+    updated_ts_ = now_millis();
+    return nodes_[node_id]->update_fields(field_updates, update_type);
+  }
+
   arrow::Result<std::shared_ptr<arrow::Table>> get_table(TemporalContext *ctx) {
     // if we have ctx we need to create a new table every time
     if (dirty_ || !table_ || ctx) {
@@ -572,6 +589,29 @@ class ShardManager {
                                    schema_name);
   }
 
+  /**
+   * @brief Batch-update multiple fields on one node (creates 1 version).
+   */
+  arrow::Result<bool> update_node_fields(
+      const std::string &schema_name, const int64_t id,
+      const std::vector<std::pair<std::shared_ptr<Field>, Value>>
+          &field_updates,
+      const UpdateType update_type) {
+    auto schema_it = shards_.find(schema_name);
+    if (schema_it == shards_.end()) {
+      return arrow::Status::KeyError("Schema not found: ", schema_name);
+    }
+
+    for (const auto &shard : schema_it->second) {
+      if (id >= shard->min_id && id <= shard->max_id) {
+        return shard->update_fields(id, field_updates, update_type);
+      }
+    }
+
+    return arrow::Status::KeyError("Node with id ", id, " not found in schema ",
+                                   schema_name);
+  }
+
   arrow::Result<std::vector<std::shared_ptr<Node>>> get_nodes(
       const std::string &schema_name) {
     const auto schema_it = shards_.find(schema_name);
@@ -785,6 +825,18 @@ class Database {
                                        update_type);
   }
 
+  /**
+   * @brief Batch-update multiple fields on one node (creates 1 version).
+   */
+  arrow::Result<bool> update_node_fields(
+      const std::string &schema_name, const int64_t id,
+      const std::vector<std::pair<std::shared_ptr<Field>, Value>>
+          &field_updates,
+      const UpdateType update_type) {
+    return shard_manager_->update_node_fields(schema_name, id, field_updates,
+                                              update_type);
+  }
+
   arrow::Result<bool> remove_node(const std::string &schema_name,
                                   int64_t node_id) {
     if (auto res = node_manager_->remove_node(schema_name, node_id); !res) {
@@ -877,6 +929,51 @@ class Database {
 
   [[nodiscard]] arrow::Result<std::shared_ptr<QueryResult>> query(
       const Query &query) const;
+
+  /**
+   * @brief Execute an UpdateQuery.
+   *
+   * Mode 1 — by ID (bare field names):
+   *   db.update(UpdateQuery::on("User", 0).set("age", Value(31)).build());
+   *
+   * Mode 2 — by MATCH query (alias-qualified SET, multi-schema):
+   *   db.update(UpdateQuery::match(
+   *       Query::from("u:User")
+   *           .traverse("u", "WORKS_AT", "c:Company")
+   *           .where("c.name", CompareOp::Eq, Value("Google"))
+   *           .build()
+   *   ).set("u.status", Value("employed"))
+   *    .set("c.size", Value(int32_t(5001)))
+   *    .build());
+   */
+  [[nodiscard]] arrow::Result<UpdateResult> update(const UpdateQuery &uq);
+
+ private:
+  /** Mode 1: update a single node by schema + ID. */
+  [[nodiscard]] arrow::Result<UpdateResult> update_by_id(const UpdateQuery &uq);
+
+  /** Mode 2: find nodes via MATCH query, then batch-update each. */
+  [[nodiscard]] arrow::Result<UpdateResult> update_by_match(
+      const UpdateQuery &uq);
+
+  /**
+   * Apply field updates to every node whose ID appears in @p id_column.
+   * One call to update_node_fields() per unique node ID (1 version each).
+   */
+  void apply_updates(
+      const std::string &schema_name,
+      const std::shared_ptr<arrow::ChunkedArray> &id_column,
+      const std::vector<std::pair<std::shared_ptr<Field>, Value>> &fields,
+      UpdateType update_type, UpdateResult &result);
+
+  /**
+   * Build an alias→schema mapping from a Query's FROM + TRAVERSE clauses.
+   * Only declarations ("alias:Schema") are recorded; bare references ("alias")
+   * are skipped.  Returns an error if the same alias is bound to two different
+   * schemas.
+   */
+  static arrow::Result<std::unordered_map<std::string, std::string>>
+  resolve_alias_map(const Query &query);
 };
 
 }  // namespace tundradb

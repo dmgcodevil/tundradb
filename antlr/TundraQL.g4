@@ -1,7 +1,7 @@
 grammar TundraQL;
 
 // Entry point for parsing a full command
-statement: createSchemaStatement | createNodeStatement | createEdgeStatement | matchStatement | deleteStatement | commitStatement | showStatement EOF;
+statement: createSchemaStatement | createNodeStatement | createEdgeStatement | matchStatement | deleteStatement | updateStatement | commitStatement | showStatement EOF;
 
 // --- Schema Definition ---
 createSchemaStatement: K_CREATE K_SCHEMA IDENTIFIER LPAREN schemaFieldList RPAREN SEMI;
@@ -46,6 +46,18 @@ edgeDeleteTarget:
     | K_EDGE IDENTIFIER K_FROM nodeSelector               // DELETE EDGE edge_type FROM node;
     | K_EDGE IDENTIFIER K_TO nodeSelector                 // DELETE EDGE edge_type TO node;
     | K_EDGE IDENTIFIER K_FROM nodeSelector K_TO nodeSelector;  // DELETE EDGE edge_type FROM node TO node;
+
+// --- Update Statement ---
+// UPDATE User(0) SET name = "Bob", age = 31;
+// UPDATE (u:User) SET u.age = 31 WHERE u.name = "Alice";
+updateStatement: K_UPDATE updateTarget K_SET setClause (K_WHERE whereClause)? SEMI;
+
+updateTarget:
+    nodeLocator                    // UPDATE User(0) SET ...;
+    | nodePattern;                 // UPDATE (u:User) SET ... WHERE ...;
+
+setClause: setAssignment (COMMA setAssignment)*;
+setAssignment: IDENTIFIER (DOT IDENTIFIER)? EQ value;
 
 // --- Commit Statement ---
 commitStatement: K_COMMIT SEMI;
@@ -106,6 +118,8 @@ K_RIGHT: 'RIGHT';
 K_FULL: 'FULL';
 K_AND: 'AND';
 K_OR: 'OR';
+K_UPDATE: 'UPDATE';
+K_SET: 'SET';
 K_COMMIT: 'COMMIT';
 K_UNIQUE: 'UNIQUE';
 K_SHOW: 'SHOW';
