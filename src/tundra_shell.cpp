@@ -943,7 +943,6 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
 
     if (node_id.has_value()) {
       // ----- Mode 1: UPDATE User(0) SET age = 31; -----
-      // Bare field names, single schema.
       auto schema_result = schema_registry->get(schema_name);
       if (!schema_result.ok()) {
         throw std::runtime_error("Schema '" + schema_name + "' not found");
@@ -954,7 +953,7 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
       for (auto assignment : setClause->setAssignment()) {
         std::string field_name;
         if (assignment->IDENTIFIER().size() == 2) {
-          field_name = assignment->IDENTIFIER(1)->getText();  // strip alias
+          field_name = assignment->IDENTIFIER(1)->getText();
         } else {
           field_name = assignment->IDENTIFIER(0)->getText();
         }
@@ -984,9 +983,43 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
                        << "): " << update_query.assignments().size()
                        << " field(s)" << std::endl;
     } else {
-      // ----- Mode 2: UPDATE (u:User) SET u.age = 31 WHERE u.name = "Alice";
-      // Alias-qualified SET fields (e.g. "u.age").
-      auto query_builder = tundradb::Query::from(alias + ":" + schema_name);
+      // ----- Mode 2 & 3: pattern-based or MATCH-based UPDATE -----
+      // Build a Query from the pattern(s).
+      // Mode 2: UPDATE (u:User) SET ... WHERE ...        → single nodePattern
+      // Mode 3: UPDATE MATCH (u:User)-[:E]->(c:C) SET ... WHERE ... → full
+      // MATCH
+
+      tundradb::Query::Builder query_builder = [&]() {
+        if (updateTarget->patternList()) {
+          // Mode 3: full MATCH patterns
+          auto patterns = updateTarget->patternList()->pathPattern();
+          auto qb = processPathPattern(patterns[0]);
+          for (size_t p = 1; p < patterns.size(); p++) {
+            processAdditionalPattern(qb, patterns[p]);
+          }
+          return qb;
+        }
+        // Mode 2: single nodePattern → build a trivial query
+        return tundradb::Query::from(alias + ":" + schema_name);
+      }();
+
+      // Build alias→schema map from the query builder's pattern
+      std::unordered_map<std::string, std::string> alias_to_schema;
+      if (updateTarget->patternList()) {
+        for (auto pathPat : updateTarget->patternList()->pathPattern()) {
+          for (auto nodePat : pathPat->nodePattern()) {
+            if (nodePat->IDENTIFIER().size() > 1) {
+              alias_to_schema[nodePat->IDENTIFIER(0)->getText()] =
+                  nodePat->IDENTIFIER(1)->getText();
+            } else {
+              auto name = nodePat->IDENTIFIER(0)->getText();
+              alias_to_schema[name] = name;
+            }
+          }
+        }
+      } else {
+        alias_to_schema[alias] = schema_name;
+      }
 
       if (ctx->whereClause()) {
         processWhereClause(query_builder, ctx->whereClause());
@@ -995,33 +1028,33 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
       auto match_query = query_builder.build();
       auto builder = tundradb::UpdateQuery::match(std::move(match_query));
 
-      // Parse SET assignments — keep the alias.field format
+      // Parse SET assignments — keep alias.field format
       for (auto assignment : setClause->setAssignment()) {
         std::string qualified_name;
         if (assignment->IDENTIFIER().size() == 2) {
-          // "u.age" → keep as "u.age"
           qualified_name = assignment->IDENTIFIER(0)->getText() + "." +
                            assignment->IDENTIFIER(1)->getText();
         } else {
-          // bare field — assume the update target alias
           qualified_name = alias + "." + assignment->IDENTIFIER(0)->getText();
         }
 
-        // Resolve bare field for type conversion
+        std::string set_alias =
+            qualified_name.substr(0, qualified_name.find('.'));
         std::string bare_field =
             qualified_name.substr(qualified_name.find('.') + 1);
 
-        // Determine which schema this alias refers to
-        std::string set_alias =
-            qualified_name.substr(0, qualified_name.find('.'));
-        std::string set_schema = (set_alias == alias) ? schema_name : set_alias;
+        auto it = alias_to_schema.find(set_alias);
+        if (it == alias_to_schema.end()) {
+          throw std::runtime_error("Unknown alias '" + set_alias +
+                                   "' in SET clause");
+        }
+        const std::string& set_schema = it->second;
 
         auto s_result = schema_registry->get(set_schema);
         if (!s_result.ok()) {
           throw std::runtime_error("Schema '" + set_schema + "' not found");
         }
-        auto s = s_result.ValueOrDie();
-        auto field = s->get_field(bare_field);
+        auto field = s_result.ValueOrDie()->get_field(bare_field);
         if (!field) {
           throw std::runtime_error("Field '" + bare_field +
                                    "' not found in schema '" + set_schema +

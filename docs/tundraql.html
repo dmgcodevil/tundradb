@@ -304,7 +304,7 @@
 
             <!-- ========== UPDATE ========== -->
             <h2 id="update">UPDATE</h2>
-            <p>Modifies field values on existing nodes. Supports two forms: <strong>by ID</strong> (direct) and <strong>by pattern</strong> (with optional <code>WHERE</code> filter).</p>
+            <p>Modifies field values on existing nodes. Supports three forms: <strong>by ID</strong> (direct), <strong>by pattern</strong> (single schema + optional <code>WHERE</code>), and <strong>by MATCH</strong> (traversals / joins + optional <code>WHERE</code>).</p>
 
             <h3>Form 1 — Update by ID</h3>
             <p>Targets a single node using <code>Schema(id)</code>. Field names are bare (no alias prefix).</p>
@@ -346,12 +346,39 @@
 <span class="kw">UPDATE</span> (<span class="alias">u</span>:<span class="type">User</span>) <span class="kw">SET</span> <span class="alias">u</span>.<span class="alias">age</span> = <span class="num">0</span>;</code></pre>
             </div>
 
+            <h3>Form 3 — Update by MATCH (traversals / joins)</h3>
+            <p>Uses a full <code>MATCH</code> pattern with traversals to find nodes across multiple schemas, then applies <code>SET</code> assignments. Field names must be alias-qualified. Multiple schemas can be updated in a single statement.</p>
+
+            <div class="syntax-block">
+                <div class="label">Syntax <span class="tag">DML</span></div>
+                <pre><code><span class="kw">UPDATE MATCH</span> (<span class="alias">a</span>:<span class="type">Schema1</span>)-[:<span class="edge-type">EDGE_TYPE</span>]-&gt;(<span class="alias">b</span>:<span class="type">Schema2</span>)
+    <span class="kw">SET</span> <span class="alias">a</span>.<span class="alias">field</span> = <span class="str">value</span> [, <span class="alias">b</span>.<span class="alias">field</span> = <span class="str">value</span> ...]
+    [<span class="kw">WHERE</span> <span class="alias">alias</span>.<span class="alias">field</span> <span class="op">op</span> <span class="str">value</span>] ;</code></pre>
+            </div>
+
+            <div class="syntax-block">
+                <div class="label">Examples</div>
+                <pre><code><span class="cmt">// Update both user and company for a traversal</span>
+<span class="kw">UPDATE MATCH</span> (<span class="alias">u</span>:<span class="type">User</span>)-[:<span class="edge-type">WORKS_AT</span>]-&gt;(<span class="alias">c</span>:<span class="type">Company</span>)
+    <span class="kw">SET</span> <span class="alias">u</span>.<span class="alias">employed</span> = <span class="num">true</span>, <span class="alias">c</span>.<span class="alias">size</span> = <span class="num">1</span>
+    <span class="kw">WHERE</span> <span class="alias">c</span>.<span class="alias">name</span> <span class="op">=</span> <span class="str">"Acme Corp"</span>;
+
+<span class="cmt">// Update only one side of the relationship</span>
+<span class="kw">UPDATE MATCH</span> (<span class="alias">u</span>:<span class="type">User</span>)-[:<span class="edge-type">WORKS_AT</span>]-&gt;(<span class="alias">c</span>:<span class="type">Company</span>)
+    <span class="kw">SET</span> <span class="alias">u</span>.<span class="alias">status</span> = <span class="str">"employed"</span>
+    <span class="kw">WHERE</span> <span class="alias">c</span>.<span class="alias">name</span> <span class="op">=</span> <span class="str">"Google"</span>;
+
+<span class="cmt">// Same-schema traversal (e.g. friends)</span>
+<span class="kw">UPDATE MATCH</span> (<span class="alias">a</span>:<span class="type">User</span>)-[:<span class="edge-type">FRIEND</span>]-&gt;(<span class="alias">b</span>:<span class="type">User</span>)
+    <span class="kw">SET</span> <span class="alias">a</span>.<span class="alias">has_friend</span> = <span class="num">true</span>, <span class="alias">b</span>.<span class="alias">has_friend</span> = <span class="num">true</span>;</code></pre>
+            </div>
+
             <div class="info-box">
                 <strong>Versioning:</strong> When multiple fields are updated in a single <code>SET</code> clause, TundraDB creates <strong>one version</strong> for the entire batch — not one per field.
             </div>
 
             <div class="warn-box">
-                <strong>Pattern form requires alias prefix:</strong> <code>SET age = 31</code> is only valid in the by-ID form. In the pattern form you must write <code>SET u.age = 31</code>.
+                <strong>Pattern/MATCH forms require alias prefix:</strong> <code>SET age = 31</code> is only valid in the by-ID form. In pattern and MATCH forms you must write <code>SET u.age = 31</code>.
             </div>
 
             <!-- ========== COMMIT ========== -->
@@ -572,7 +599,12 @@
 <span class="cmt">// 6. Bulk update: set all users older than 30 to "Senior"</span>
 <span class="kw">UPDATE</span> (<span class="alias">u</span>:<span class="type">User</span>) <span class="kw">SET</span> <span class="alias">u</span>.<span class="alias">name</span> = <span class="str">"Senior"</span> <span class="kw">WHERE</span> <span class="alias">u</span>.<span class="alias">age</span> <span class="op">&gt;</span> <span class="num">30</span>;
 
-<span class="cmt">// 7. Persist</span>
+<span class="cmt">// 7. Update with MATCH (traversal) — set employed flag for Google employees</span>
+<span class="kw">UPDATE MATCH</span> (<span class="alias">u</span>:<span class="type">User</span>)-[:<span class="edge-type">works_at</span>]-&gt;(<span class="alias">c</span>:<span class="type">Company</span>)
+    <span class="kw">SET</span> <span class="alias">u</span>.<span class="alias">name</span> = <span class="str">"Employed"</span>
+    <span class="kw">WHERE</span> <span class="alias">c</span>.<span class="alias">name</span> <span class="op">=</span> <span class="str">"Google"</span>;
+
+<span class="cmt">// 8. Persist</span>
 <span class="kw">COMMIT</span>;</code></pre>
             </div>
 

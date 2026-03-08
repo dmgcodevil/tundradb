@@ -50,10 +50,12 @@ edgeDeleteTarget:
 // --- Update Statement ---
 // UPDATE User(0) SET name = "Bob", age = 31;
 // UPDATE (u:User) SET u.age = 31 WHERE u.name = "Alice";
+// UPDATE MATCH (u:User)-[:WORKS_AT]->(c:Company) SET u.employed = true, c.size = 1 WHERE c.name = "Acme";
 updateStatement: K_UPDATE updateTarget K_SET setClause (K_WHERE whereClause)? SEMI;
 
 updateTarget:
     nodeLocator                    // UPDATE User(0) SET ...;
+    | K_MATCH patternList          // UPDATE MATCH (u:User)-[:WORKS_AT]->(c:Company) SET ...;
     | nodePattern;                 // UPDATE (u:User) SET ... WHERE ...;
 
 setClause: setAssignment (COMMA setAssignment)*;
