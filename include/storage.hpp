@@ -13,6 +13,7 @@
 namespace tundradb {
 
 class SchemaRegistry;
+class NodeManager;
 class Shard;
 
 class Storage {
@@ -47,8 +48,5 @@ class Storage {
 };
 
 }  // namespace tundradb
-
-// Include core.hpp after our declarations to prevent circular dependencies
-#include "core.hpp"
 
 #endif  // STORAGE_HPP

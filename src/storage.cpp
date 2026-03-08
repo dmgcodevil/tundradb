@@ -19,6 +19,8 @@
 #include "json.hpp"
 #include "logger.hpp"
 #include "metadata.hpp"
+#include "node.hpp"
+#include "shard.hpp"
 #include "table_info.hpp"
 
 namespace tundradb {

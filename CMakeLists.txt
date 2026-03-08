@@ -223,10 +223,11 @@ add_library(core
         src/query_execution.cpp
         src/join.cpp
         src/row.cpp
+        src/shard.cpp
         src/storage.cpp
         src/metadata.cpp
         src/file_utils.cpp
-        src/snapshot.cpp
+        src/snapshot_manager.cpp
         src/edge_store.cpp
         src/table_info.cpp
         src/utils.cpp
