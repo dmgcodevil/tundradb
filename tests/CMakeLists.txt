@@ -146,6 +146,14 @@ add_executable(node_view_test
 add_executable(temporal_query_test
         temporal_query_test.cpp)
 
+# Update query test
+add_executable(update_query_test
+        update_query_test.cpp)
+
+# Update query join test
+add_executable(update_query_join_test
+        update_query_join_test.cpp)
+
 # Link against Arrow and GTest
 target_link_libraries(sharding_test
     PRIVATE
@@ -369,6 +377,32 @@ target_link_libraries(temporal_query_test
         LLVMSupport LLVMCore
 )
 
+target_link_libraries(update_query_test
+        PRIVATE
+        core
+        Arrow::arrow_shared
+        Parquet::parquet_shared
+        GTest::GTest
+        GTest::Main
+        pthread
+        TBB::tbb
+        spdlog::spdlog
+        LLVMSupport LLVMCore
+)
+
+target_link_libraries(update_query_join_test
+        PRIVATE
+        core
+        Arrow::arrow_shared
+        Parquet::parquet_shared
+        GTest::GTest
+        GTest::Main
+        pthread
+        TBB::tbb
+        spdlog::spdlog
+        LLVMSupport LLVMCore
+)
+
 # Apply sanitizer flags to all test targets if enabled
 if(ENABLE_SANITIZERS)
     target_compile_options(sharding_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
@@ -409,6 +443,12 @@ if(ENABLE_SANITIZERS)
     
     target_compile_options(temporal_query_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
     target_link_options(temporal_query_test PRIVATE ${SANITIZER_LINK_FLAGS})
+
+    target_compile_options(update_query_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
+    target_link_options(update_query_test PRIVATE ${SANITIZER_LINK_FLAGS})
+
+    target_compile_options(update_query_join_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
+    target_link_options(update_query_join_test PRIVATE ${SANITIZER_LINK_FLAGS})
 endif()
 
 # Simple test registration
@@ -430,6 +470,8 @@ add_test(NAME StringRefConcurrentTest COMMAND string_ref_concurrent_test)
 add_test(NAME NodeVersionTest COMMAND node_version_test)
 add_test(NAME NodeViewTest COMMAND node_view_test)
 add_test(NAME TemporalQueryTest COMMAND temporal_query_test)
+add_test(NAME UpdateQueryTest COMMAND update_query_test)
+add_test(NAME UpdateQueryJoinTest COMMAND update_query_join_test)
 
 # Set TSan options for tests after they've been registered
 if(ENABLE_SANITIZERS AND SANITIZER_TYPE STREQUAL "thread" AND EXISTS ${TSAN_SUPPRESSIONS_FILE})
@@ -453,6 +495,8 @@ set_tests_properties(
         JoinTest
         WhereExpressionTest
         FreeListArenaTest
+        UpdateQueryTest
+        UpdateQueryJoinTest
         PROPERTIES
         ISOLATED TRUE  # This ensures tests run in isolation
 )

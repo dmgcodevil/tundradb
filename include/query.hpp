@@ -15,6 +15,7 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "node.hpp"
@@ -628,6 +629,179 @@ class QueryResult {
  private:
   std::shared_ptr<arrow::Table> table_;
   QueryExecutionStats stats_;
+};
+
+/** @brief A single field assignment: field_name = value. */
+struct SetAssignment {
+  std::string field_name;
+  Value value;
+
+  SetAssignment(std::string field_name, Value value)
+      : field_name(std::move(field_name)), value(std::move(value)) {}
+};
+
+/**
+ * @brief Describes an UPDATE operation.
+ *
+ * Two modes:
+ *
+ *   **Mode 1 — by ID** (no query engine involved, bare field names):
+ *   @code
+ *   UpdateQuery::on("User", 0).set("age", Value(31)).build();
+ *   @endcode
+ *
+ *   **Mode 2 — by MATCH query** (alias-qualified SET fields):
+ *   @code
+ *   // Simple WHERE — update one schema:
+ *   UpdateQuery::match(
+ *       Query::from("u:User")
+ *           .where("u.city", CompareOp::Eq, Value("NYC"))
+ *           .build()
+ *   ).set("u.status", Value("active")).build();
+ *
+ *   // Traversal — update multiple schemas:
+ *   UpdateQuery::match(
+ *       Query::from("u:User")
+ *           .traverse("u", "WORKS_AT", "c:Company")
+ *           .where("c.name", CompareOp::Eq, Value("Google"))
+ *           .build()
+ *   ).set("u.status", Value("employed"))
+ *    .set("c.size", Value(int32_t(5001)))
+ *    .build();
+ *   @endcode
+ *
+ *   In Mode 2, each SET field must be alias-qualified ("alias.field").
+ *   The target aliases are derived from the SET assignments automatically.
+ */
+class UpdateQuery {
+ public:
+  class Builder;
+
+  /** @brief Schema name (Mode 1 only). */
+  [[nodiscard]] const std::string& schema() const { return schema_; }
+
+  [[nodiscard]] const std::vector<SetAssignment>& assignments() const {
+    return assignments_;
+  }
+
+  /** @brief Node ID for Mode 1 (direct update). */
+  [[nodiscard]] const std::optional<int64_t>& node_id() const {
+    return node_id_;
+  }
+
+  /** @brief The MATCH query for Mode 2 (query-based update). */
+  [[nodiscard]] const std::optional<Query>& match_query() const {
+    return match_query_;
+  }
+
+  /** @brief True if this is a Mode 2 (query-based) update. */
+  [[nodiscard]] bool has_match() const { return match_query_.has_value(); }
+
+  [[nodiscard]] UpdateType update_type() const { return update_type_; }
+
+  /**
+   * @brief Extract unique aliases referenced in SET assignments.
+   *
+   * For Mode 2 only.  Parses each "alias.field" to collect the set of
+   * distinct alias prefixes (e.g. {"u", "c"}).
+   */
+  [[nodiscard]] std::vector<std::string> target_aliases() const {
+    std::vector<std::string> aliases;
+    for (const auto& a : assignments_) {
+      auto dot = a.field_name.find('.');
+      if (dot == std::string::npos) continue;
+      std::string alias = a.field_name.substr(0, dot);
+      if (std::find(aliases.begin(), aliases.end(), alias) == aliases.end()) {
+        aliases.push_back(alias);
+      }
+    }
+    return aliases;
+  }
+
+  /** @brief Mode 1 — target a specific node by schema + ID. */
+  static Builder on(const std::string& schema, int64_t node_id) {
+    return {schema, node_id};
+  }
+
+  /** @brief Mode 2 — target nodes found by a MATCH query. */
+  static Builder match(Query query) { return Builder{std::move(query)}; }
+
+  class Builder {
+   public:
+    /** @brief Mode 1 constructor: update a specific node by ID. */
+    Builder(std::string schema, int64_t node_id)
+        : schema_(std::move(schema)), node_id_(node_id) {}
+
+    /** @brief Mode 2 constructor: update nodes found by a MATCH query. */
+    explicit Builder(Query query) : match_query_(std::move(query)) {}
+
+    /**
+     * @brief Add a field assignment.
+     *
+     * - Mode 1: bare name  — set("age", Value(31))
+     * - Mode 2: qualified  — set("u.age", Value(31))
+     */
+    Builder& set(std::string field_name, Value value) {
+      assignments_.emplace_back(std::move(field_name), std::move(value));
+      return *this;
+    }
+
+    /** @brief Override the update type (default: SET). */
+    Builder& type(UpdateType t) {
+      update_type_ = t;
+      return *this;
+    }
+
+    /** @brief Build the immutable UpdateQuery (rvalue). */
+    [[nodiscard]] UpdateQuery build() && {
+      if (assignments_.empty()) {
+        throw std::runtime_error(
+            "UpdateQuery must have at least one SET assignment");
+      }
+      return UpdateQuery(std::move(schema_), std::move(assignments_), node_id_,
+                         std::move(match_query_), update_type_);
+    }
+
+    /** @brief Build the immutable UpdateQuery (lvalue). */
+    [[nodiscard]] UpdateQuery build() & {
+      if (assignments_.empty()) {
+        throw std::runtime_error(
+            "UpdateQuery must have at least one SET assignment");
+      }
+      return UpdateQuery(schema_, assignments_, node_id_, match_query_,
+                         update_type_);
+    }
+
+   private:
+    std::string schema_;
+    std::vector<SetAssignment> assignments_;
+    std::optional<int64_t> node_id_;
+    std::optional<Query> match_query_;
+    UpdateType update_type_ = UpdateType::SET;
+  };
+
+ private:
+  UpdateQuery(std::string schema, std::vector<SetAssignment> assignments,
+              std::optional<int64_t> node_id, std::optional<Query> match_query,
+              UpdateType update_type)
+      : schema_(std::move(schema)),
+        assignments_(std::move(assignments)),
+        node_id_(std::move(node_id)),
+        match_query_(std::move(match_query)),
+        update_type_(update_type) {}
+
+  std::string schema_;
+  std::vector<SetAssignment> assignments_;
+  std::optional<int64_t> node_id_;
+  std::optional<Query> match_query_;
+  UpdateType update_type_;
+};
+
+/** @brief Result of an update operation. */
+struct UpdateResult {
+  int64_t updated_count = 0;        ///< Number of nodes updated.
+  int64_t failed_count = 0;         ///< Number of nodes that failed to update.
+  std::vector<std::string> errors;  ///< Error messages for failed updates.
 };
 
 }  // namespace tundradb

@@ -848,4 +848,197 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
   return result;
 }
 
+// ---------------------------------------------------------------------------
+// Database::update  - dispatch to Mode 1 or Mode 2
+// ---------------------------------------------------------------------------
+arrow::Result<UpdateResult> Database::update(const UpdateQuery& uq) {
+  if (uq.node_id().has_value()) {
+    return update_by_id(uq);
+  }
+  if (uq.has_match()) {
+    return update_by_match(uq);
+  }
+  return arrow::Status::Invalid(
+      "UpdateQuery must specify a node ID or a MATCH query");
+}
+
+// ---------------------------------------------------------------------------
+// Mode 1: update a single node by schema + ID
+// ---------------------------------------------------------------------------
+arrow::Result<UpdateResult> Database::update_by_id(const UpdateQuery& uq) {
+  UpdateResult result;
+
+  auto schema_result = schema_registry_->get(uq.schema());
+  if (!schema_result.ok()) {
+    return arrow::Status::KeyError("Schema '", uq.schema(), "' not found");
+  }
+  const auto& schema = schema_result.ValueOrDie();
+
+  // Resolve fields upfront - fail early on bad field names
+  std::vector<std::pair<std::shared_ptr<Field>, Value>> resolved;
+  resolved.reserve(uq.assignments().size());
+  for (const auto& a : uq.assignments()) {
+    auto field = schema->get_field(a.field_name);
+    if (!field) {
+      return arrow::Status::Invalid(
+          "Field '", a.field_name, "' not found in schema '", uq.schema(), "'");
+    }
+    resolved.emplace_back(field, a.value);
+  }
+
+  const int64_t id = uq.node_id().value();
+  if (const auto r =
+          update_node_fields(uq.schema(), id, resolved, uq.update_type());
+      !r.ok()) {
+    result.failed_count++;
+    result.errors.push_back(uq.schema() + "(" + std::to_string(id) +
+                            "): " + r.status().ToString());
+  } else {
+    result.updated_count = 1;
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Mode 2: find nodes via MATCH query, then batch-update each
+// ---------------------------------------------------------------------------
+arrow::Result<UpdateResult> Database::update_by_match(const UpdateQuery& uq) {
+  UpdateResult result;
+  const auto& match_query = uq.match_query().value();
+
+  // 1. Resolve alias -> schema mapping (declarations only, with validation)
+  ARROW_ASSIGN_OR_RAISE(auto alias_to_schema, resolve_alias_map(match_query));
+
+  // 2. Group SET assignments by alias: { alias -> (schema, [(Field,Value)]) }
+  struct AliasUpdate {
+    std::string schema_name;
+    std::vector<std::pair<std::shared_ptr<Field>, Value>> fields;
+  };
+  std::unordered_map<std::string, AliasUpdate> grouped;
+
+  for (const auto& a : uq.assignments()) {
+    auto dot = a.field_name.find('.');
+    if (dot == std::string::npos) {
+      return arrow::Status::Invalid(
+          "SET field '", a.field_name,
+          "' must be alias-qualified (e.g. u.age) in a MATCH-based update");
+    }
+    std::string alias = a.field_name.substr(0, dot);
+    std::string bare_field = a.field_name.substr(dot + 1);
+
+    auto it = alias_to_schema.find(alias);
+    if (it == alias_to_schema.end()) {
+      return arrow::Status::Invalid("Alias '", alias,
+                                    "' not found in MATCH query");
+    }
+
+    auto schema_result = schema_registry_->get(it->second);
+    if (!schema_result.ok()) {
+      return arrow::Status::KeyError("Schema '", it->second, "' not found");
+    }
+    const auto& schema = schema_result.ValueOrDie();
+    auto field = schema->get_field(bare_field);
+    if (!field) {
+      return arrow::Status::Invalid("Field '", bare_field,
+                                    "' not found in schema '", it->second, "'");
+    }
+
+    auto& entry = grouped[alias];
+    if (entry.schema_name.empty()) entry.schema_name = it->second;
+    entry.fields.emplace_back(field, a.value);
+  }
+
+  // 3. Build ID-only SELECT: we only need "u.id", "c.id", etc.
+  std::vector<std::string> id_columns;
+  id_columns.reserve(grouped.size());
+  for (const auto& alias : grouped | std::views::keys) {
+    id_columns.push_back(alias + ".id");
+  }
+  Query id_query(match_query.from(), match_query.clauses(),
+                 std::make_shared<Select>(std::move(id_columns)),
+                 match_query.inline_where(), match_query.execution_config(),
+                 match_query.temporal_snapshot());
+
+  // 4. Run the MATCH query once
+  ARROW_ASSIGN_OR_RAISE(auto query_result, this->query(id_query));
+  auto table = query_result->table();
+  if (!table || table->num_rows() == 0) {
+    return result;
+  }
+
+  // 5. Apply updates per alias group
+  for (const auto& [alias, info] : grouped) {
+    auto id_column = table->GetColumnByName(alias + ".id");
+    if (!id_column) {
+      return arrow::Status::Invalid("Could not find '", alias,
+                                    ".id' column in query results");
+    }
+    apply_updates(info.schema_name, id_column, info.fields, uq.update_type(),
+                  result);
+  }
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// apply_updates - iterate an ID column and batch-update each node
+// ---------------------------------------------------------------------------
+void Database::apply_updates(
+    const std::string& schema_name,
+    const std::shared_ptr<arrow::ChunkedArray>& id_column,
+    const std::vector<std::pair<std::shared_ptr<Field>, Value>>& fields,
+    UpdateType update_type, UpdateResult& result) {
+  for (int ci = 0; ci < id_column->num_chunks(); ci++) {
+    const auto chunk =
+        std::static_pointer_cast<arrow::Int64Array>(id_column->chunk(ci));
+    for (int64_t i = 0; i < chunk->length(); i++) {
+      if (chunk->IsNull(i)) continue;
+      const int64_t node_id = chunk->Value(i);
+
+      if (auto r =
+              update_node_fields(schema_name, node_id, fields, update_type);
+          !r.ok()) {
+        result.failed_count++;
+        result.errors.push_back(schema_name + "(" + std::to_string(node_id) +
+                                "): " + r.status().ToString());
+      } else {
+        result.updated_count++;
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// resolve_alias_map - build alias->schema from declarations, reject conflicts
+// ---------------------------------------------------------------------------
+arrow::Result<std::unordered_map<std::string, std::string>>
+Database::resolve_alias_map(const Query& query) {
+  std::unordered_map<std::string, std::string> map;
+
+  auto register_ref = [&](const SchemaRef& ref) -> arrow::Status {
+    if (!ref.is_declaration()) return arrow::Status::OK();
+    const auto& alias = ref.value();
+    const auto& schema = ref.schema();
+    if (auto [it, inserted] = map.emplace(alias, schema);
+        !inserted && it->second != schema) {
+      return arrow::Status::Invalid("Alias '", alias, "' bound to '",
+                                    it->second, "' cannot be re-bound to '",
+                                    schema, "'");
+    }
+    return arrow::Status::OK();
+  };
+
+  ARROW_RETURN_NOT_OK(register_ref(query.from()));
+
+  for (const auto& clause : query.clauses()) {
+    if (clause->type() == Clause::Type::TRAVERSE) {
+      const auto t = std::static_pointer_cast<Traverse>(clause);
+      ARROW_RETURN_NOT_OK(register_ref(t->source()));
+      ARROW_RETURN_NOT_OK(register_ref(t->target()));
+    }
+  }
+
+  return map;
+}
+
 }  // namespace tundradb

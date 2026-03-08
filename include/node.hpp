@@ -114,6 +114,36 @@ class Node {
     return true;
   }
 
+  /**
+   * @brief Batch-update multiple fields in a single version.
+   *
+   * When using the arena (versioned storage), this creates exactly ONE
+   * new version for all field updates instead of N versions.
+   */
+  arrow::Result<bool> update_fields(
+      const std::vector<std::pair<std::shared_ptr<Field>, Value>>
+          &field_updates,
+      UpdateType update_type) {
+    if (field_updates.empty()) return true;
+
+    if (arena_ != nullptr) {
+      return arena_->update_fields(*handle_, layout_, field_updates);
+    }
+
+    // Non-arena fallback: update data_ map directly
+    for (const auto &[field, value] : field_updates) {
+      if (data_.find(field->name()) == data_.end()) {
+        return arrow::Status::KeyError("Field not found: ", field->name());
+      }
+      switch (update_type) {
+        case SET:
+          data_[field->name()] = value;
+          break;
+      }
+    }
+    return true;
+  }
+
   [[deprecated]]
   arrow::Result<bool> set_value(const std::string &field, const Value &value) {
     log_warn("set_value by string is deprecated");

@@ -1,9 +1,27 @@
-#include "core.hpp"
+#include "snapshot_manager.hpp"
+
+#include "edge.hpp"
 #include "logger.hpp"
-#include "metadata.hpp"
+#include "node.hpp"
+#include "shard.hpp"
+#include "storage.hpp"
 #include "utils.hpp"
 
 namespace tundradb {
+
+SnapshotManager::SnapshotManager(
+    std::shared_ptr<MetadataManager> metadata_manager,
+    std::shared_ptr<Storage> storage,
+    std::shared_ptr<ShardManager> shard_manager,
+    std::shared_ptr<EdgeStore> edge_store,
+    std::shared_ptr<NodeManager> node_manager,
+    std::shared_ptr<SchemaRegistry> schema_registry)
+    : metadata_manager_(std::move(metadata_manager)),
+      storage_(std::move(storage)),
+      shard_manager_(std::move(shard_manager)),
+      edge_store_(std::move(edge_store)),
+      node_manager_(std::move(node_manager)),
+      schema_registry_(std::move(schema_registry)) {}
 
 arrow::Result<bool> SnapshotManager::initialize() {
   log_info("Initializing snapshot manager...");
@@ -93,8 +111,7 @@ arrow::Result<bool> SnapshotManager::initialize() {
           if (!shard_result.ok()) {
             log_error("Failed to load shard: " +
                       shard_result.status().ToString());
-            return shard_result
-                .status();  // Return the error instead of continuing
+            return shard_result.status();
           }
 
           const auto &shard = shard_result.ValueOrDie();
@@ -163,8 +180,6 @@ arrow::Result<Snapshot> SnapshotManager::commit() {
   for (const auto &schema_name : this->shard_manager_->get_schema_names()) {
     for (const auto &shard :
          this->shard_manager_->get_shards(schema_name).ValueOrDie()) {
-      // If the shard existed before compaction and wasn't marked as updated,
-      // restore that status
       if (original_update_states.contains(schema_name) &&
           original_update_states[schema_name].contains(shard->id) &&
           !original_update_states[schema_name][shard->id]) {
@@ -174,7 +189,7 @@ arrow::Result<Snapshot> SnapshotManager::commit() {
   }
 
   Snapshot new_snapshot;
-  new_snapshot.id = generate_unique_snapshot_id();  // timestamp_ms;
+  new_snapshot.id = generate_unique_snapshot_id();
   new_snapshot.timestamp_ms = timestamp_ms;
 
   if (this->metadata_.get_current_snapshot() != nullptr) {
@@ -244,7 +259,6 @@ arrow::Result<Snapshot> SnapshotManager::commit() {
       log_debug("Snapshotting shard id: " + std::to_string(shard->id));
       log_debug("Snapshotting shard size: " + std::to_string(shard->size()));
 
-      // Only write updated shards, reuse unchanged ones
       if (shard->is_updated()) {
         ShardMetadata shard_metadata;
         shard_metadata.id = shard->id;
