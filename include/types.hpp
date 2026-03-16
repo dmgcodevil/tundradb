@@ -7,11 +7,13 @@
 #include <iostream>
 #include <string>
 #include <variant>
+#include <vector>
 
 // Arrow includes for type conversion functions
 #include <arrow/api.h>
 #include <arrow/type.h>
 
+#include "array_ref.hpp"
 #include "string_arena.hpp"
 
 namespace tundradb {
@@ -19,8 +21,6 @@ namespace tundradb {
 class Value {
  public:
   Value() : type_(ValueType::NA), data_(std::monostate{}) {}
-  // explicit Value(int32_t i) : type_(ValueType::Int32), data_(i) {}
-  // explicit Value(int64_t v) : type_(ValueType::Int64), data_(v) {}
   explicit Value(double v) : type_(ValueType::DOUBLE), data_(v) {}
   explicit Value(std::string v)
       : type_(ValueType::STRING), data_(std::move(v)) {}
@@ -31,11 +31,18 @@ class Value {
   // Constructor for creating StringRef value with specific string type
   Value(StringRef v, const ValueType string_type)
       : type_(string_type), data_(v) {
-    // Ensure it's actually a string type
     assert(is_string_type(string_type));
   }
+
+  // Arena-backed array (already allocated in ArrayArena)
+  explicit Value(ArrayRef v) : type_(ValueType::ARRAY), data_(std::move(v)) {}
+
+  // Raw array data - will be converted to ArrayRef by NodeArena
+  // (same pattern as std::string -> StringRef for strings)
+  explicit Value(std::vector<Value> v)
+      : type_(ValueType::ARRAY), data_(std::move(v)) {}
+
   explicit Value(bool v) : type_(ValueType::BOOL), data_(v) {}
-  // Value(int i) : type_(ValueType::Int32), data_(i) {}
   Value(int32_t i) : type_(ValueType::INT32), data_(i) {}  // Non-explicit
   Value(int64_t v) : type_(ValueType::INT64), data_(v) {}  // Non-explicit
   Value(const char* s) : type_(ValueType::STRING), data_(std::string(s)) {}
@@ -55,6 +62,7 @@ class Value {
   [[nodiscard]] const StringRef& as_string_ref() const {
     return get<StringRef>();
   }
+  [[nodiscard]] const ArrayRef& as_array_ref() const { return get<ArrayRef>(); }
   [[nodiscard]] bool as_bool() const { return get<bool>(); }
   [[nodiscard]] bool is_null() const { return type_ == ValueType::NA; }
 
@@ -66,6 +74,21 @@ class Value {
   // Check if the Value contains a std::string
   [[nodiscard]] bool holds_std_string() const {
     return is_string_type(type_) && std::holds_alternative<std::string>(data_);
+  }
+
+  // Check if the Value contains an ArrayRef (arena-backed)
+  [[nodiscard]] bool holds_array_ref() const {
+    return type_ == ValueType::ARRAY && std::holds_alternative<ArrayRef>(data_);
+  }
+
+  // Check if the Value contains a raw array (std::vector<Value>)
+  [[nodiscard]] bool holds_raw_array() const {
+    return type_ == ValueType::ARRAY &&
+           std::holds_alternative<std::vector<Value>>(data_);
+  }
+
+  [[nodiscard]] const std::vector<Value>& as_raw_array() const {
+    return get<std::vector<Value>>();
   }
 
   // Convert the Value to its raw string representation (without quotes for
@@ -87,6 +110,21 @@ class Value {
         return as_string();
       case ValueType::BOOL:
         return as_bool() ? "true" : "false";
+      case ValueType::ARRAY: {
+        if (holds_array_ref()) {
+          const auto& arr = as_array_ref();
+          std::string result = "[";
+          for (uint32_t i = 0; i < arr.length(); ++i) {
+            if (i > 0) result += ", ";
+            auto elem = Value::read_value_from_memory(arr.element_ptr(i),
+                                                      arr.elem_type());
+            result += elem.to_string();
+          }
+          result += "]";
+          return result;
+        }
+        return "[]";
+      }
       default:
         return "";
     }
@@ -112,6 +150,8 @@ class Value {
         // All string types stored as StringRef, but preserve the field's
         // declared type
         return Value{*reinterpret_cast<const StringRef*>(ptr), type};
+      case ValueType::ARRAY:
+        return Value{*reinterpret_cast<const ArrayRef*>(ptr)};
       case ValueType::NA:
       default:
         return Value{};
@@ -131,7 +171,7 @@ class Value {
  private:
   ValueType type_;
   std::variant<std::monostate, int32_t, int64_t, float, double, std::string,
-               StringRef, bool>
+               StringRef, ArrayRef, std::vector<Value>, bool>
       data_;
 };
 
@@ -171,6 +211,10 @@ struct ValueRef {
     return *reinterpret_cast<const StringRef*>(data);
   }
 
+  [[nodiscard]] const ArrayRef& as_array_ref() const {
+    return *reinterpret_cast<const ArrayRef*>(data);
+  }
+
   arrow::Result<std::shared_ptr<arrow::Scalar>> as_scalar() const {
     switch (type) {
       case ValueType::INT32:
@@ -185,6 +229,9 @@ struct ValueRef {
         return arrow::MakeScalar(as_bool());
       case ValueType::NA:
         return arrow::MakeNullScalar(arrow::null());
+      case ValueType::ARRAY:
+        return arrow::Status::NotImplemented(
+            "Array scalar conversion not yet implemented");
       default:
         return arrow::Status::NotImplemented(
             "Unsupported Value type for Arrow scalar conversion: ",
@@ -237,9 +284,13 @@ struct ValueRef {
       case ValueType::STRING: {
         const StringRef& str1 = *reinterpret_cast<const StringRef*>(data);
         const StringRef& str2 = *reinterpret_cast<const StringRef*>(other.data);
-
-        // Use StringRef's operator== which handles all edge cases
         return str1 == str2;
+      }
+
+      case ValueType::ARRAY: {
+        const ArrayRef& arr1 = *reinterpret_cast<const ArrayRef*>(data);
+        const ArrayRef& arr2 = *reinterpret_cast<const ArrayRef*>(other.data);
+        return arr1 == arr2;
       }
 
       default:
@@ -289,6 +340,19 @@ struct ValueRef {
         // Use StringRef's to_string() method
         return "\"" + str_ref.to_string() + "\"";
       }
+      case ValueType::ARRAY: {
+        const ArrayRef& arr = as_array_ref();
+        if (arr.is_null()) return "NULL";
+        std::string result = "[";
+        for (uint32_t i = 0; i < arr.length(); ++i) {
+          if (i > 0) result += ", ";
+          auto elem = Value::read_value_from_memory(arr.element_ptr(i),
+                                                    arr.elem_type());
+          result += elem.to_string();
+        }
+        result += "]";
+        return result;
+      }
       default:
         return "UNKNOWN_TYPE";
     }
@@ -303,59 +367,6 @@ inline std::ostream& operator<<(std::ostream& os, const ValueType type) {
 // Stream operator for Value
 inline std::ostream& operator<<(std::ostream& os, const Value& value) {
   return os << value.to_string();
-}
-
-static constexpr ValueType arrow_type_to_value_type(
-    const std::shared_ptr<arrow::DataType>& arrow_type) {
-  switch (arrow_type->id()) {
-    case arrow::Type::INT32:
-    case arrow::Type::INT16:
-    case arrow::Type::INT8:
-    case arrow::Type::UINT16:
-    case arrow::Type::UINT8:
-      return ValueType::INT32;
-
-    case arrow::Type::INT64:
-    case arrow::Type::UINT64:
-    case arrow::Type::UINT32:  // Could overflow int32, safer as int64
-      return ValueType::INT64;
-
-    case arrow::Type::FLOAT:
-      return ValueType::FLOAT;
-    case arrow::Type::DOUBLE:
-      return ValueType::DOUBLE;
-    case arrow::Type::STRING:
-    case arrow::Type::LARGE_STRING:
-      return ValueType::STRING;
-    case arrow::Type::BOOL:
-      return ValueType::BOOL;
-    case arrow::Type::NA:
-      return ValueType::NA;
-    default:
-      return ValueType::NA;
-  }
-}
-
-static std::shared_ptr<arrow::DataType> value_type_to_arrow_type(
-    const ValueType type) {
-  switch (type) {
-    case ValueType::NA:
-      return arrow::null();
-    case ValueType::INT32:
-      return arrow::int32();
-    case ValueType::INT64:
-      return arrow::int64();
-    case ValueType::FLOAT:
-      return arrow::float32();
-    case ValueType::DOUBLE:
-      return arrow::float64();
-    case ValueType::STRING:
-      return arrow::utf8();
-    case ValueType::BOOL:
-      return arrow::boolean();
-    default:
-      return arrow::utf8();  // Default fallback
-  }
 }
 
 }  // namespace tundradb

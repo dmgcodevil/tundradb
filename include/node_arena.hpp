@@ -10,6 +10,7 @@
 #include <memory>
 #include <string>
 
+#include "array_arena.hpp"
 #include "clock.hpp"
 #include "free_list_arena.hpp"
 #include "mem_arena.hpp"
@@ -336,6 +337,7 @@ class NodeArena {
         layout_registry_(std::move(layout_registry)),
         string_arena_(string_arena ? std::move(string_arena)
                                    : std::make_unique<StringArena>()),
+        array_arena_(std::make_unique<ArrayArena>()),
         versioning_enabled_(enable_versioning),
         version_counter_(0) {
     // Only allocate version arena if versioning is enabled
@@ -597,12 +599,17 @@ class NodeArena {
       assert(batch_memory != nullptr &&
              "Batch memory must be allocated for non-null fields");
 
-      // Prepare value (convert strings to StringRef)
+      // Prepare value (convert raw types to arena-backed refs)
       Value storage_value = new_value;
-      if (new_value.type() == ValueType::STRING) {
+      if (new_value.type() == ValueType::STRING && new_value.holds_std_string()) {
         const StringRef str_ref =
             string_arena_->store_string_auto(new_value.as_string());
         storage_value = Value{str_ref, field_layout.type};
+      } else if (new_value.type() == ValueType::ARRAY &&
+                 new_value.holds_raw_array()) {
+        ArrayRef arr_ref =
+            store_raw_array(field_layout.type_desc, new_value.as_raw_array());
+        storage_value = Value{std::move(arr_ref)};
       }
 
       // Use batch-allocated memory (safe because batch_memory != nullptr here)
@@ -685,6 +692,19 @@ class NodeArena {
       }
     }
 
+    // If the field currently contains an array, mark it for deletion
+    if (is_array_type(field_layout->type) &&
+        is_field_set(static_cast<char*>(handle.ptr), field_layout->index)) {
+      const Value old_value = layout->get_field_value(
+          static_cast<char*>(handle.ptr), *field_layout);
+      if (!old_value.is_null() && old_value.holds_array_ref()) {
+        const ArrayRef& old_arr_ref = old_value.as_array_ref();
+        if (!old_arr_ref.is_null()) {
+          array_arena_->mark_for_deletion(old_arr_ref);
+        }
+      }
+    }
+
     // Handle string storage
     if (value.type() == ValueType::STRING) {
       const std::string& str_content = value.as_string();
@@ -692,10 +712,19 @@ class NodeArena {
       return layout->set_field_value(static_cast<char*>(handle.ptr),
                                      *field_layout,
                                      Value{str_ref, field_layout->type});
-    } else {
-      return layout->set_field_value(static_cast<char*>(handle.ptr),
-                                     *field_layout, value);
     }
+
+    // Handle array storage: std::vector<Value> -> ArrayRef via arena
+    if (value.type() == ValueType::ARRAY && value.holds_raw_array()) {
+      ArrayRef arr_ref =
+          store_raw_array(field_layout->type_desc, value.as_raw_array());
+      return layout->set_field_value(static_cast<char*>(handle.ptr),
+                                     *field_layout, Value{std::move(arr_ref)});
+    }
+
+    // Value already holds arena-backed ref (StringRef / ArrayRef) or primitive
+    return layout->set_field_value(static_cast<char*>(handle.ptr),
+                                   *field_layout, value);
   }
 
   /** Reset arenas (keeps chunks). */
@@ -712,6 +741,9 @@ class NodeArena {
 
   /** Get string arena. */
   StringArena* get_string_arena() const { return string_arena_.get(); }
+
+  /** Get array arena. */
+  ArrayArena* get_array_arena() const { return array_arena_.get(); }
 
   // Statistics and getters
   size_t get_total_allocated() const {
@@ -795,7 +827,7 @@ class NodeArena {
   bool set_field_value_internal(void* node_ptr,
                                 const std::shared_ptr<SchemaLayout>& layout,
                                 const FieldLayout* field_layout,
-                                const Value& value) const {
+                                const Value& value) {
     // If the field currently contains a string, deallocate it first
     if (is_string_type(field_layout->type) &&
         is_field_set(static_cast<char*>(node_ptr), field_layout->index)) {
@@ -813,14 +845,37 @@ class NodeArena {
       }
     }
 
-    // Handle string storage
-    if (value.type() == ValueType::STRING) {
+    // If the field currently contains an array, mark for deletion
+    if (is_array_type(field_layout->type) &&
+        is_field_set(static_cast<char*>(node_ptr), field_layout->index)) {
+      Value old_value =
+          layout->get_field_value(static_cast<char*>(node_ptr), *field_layout);
+      if (!old_value.is_null() && old_value.holds_array_ref()) {
+        const ArrayRef& old_arr_ref = old_value.as_array_ref();
+        if (!old_arr_ref.is_null()) {
+          array_arena_->mark_for_deletion(old_arr_ref);
+        }
+      }
+    }
+
+    // Handle string storage: std::string -> StringRef via arena
+    if (value.type() == ValueType::STRING && value.holds_std_string()) {
       const std::string& str_content = value.as_string();
       const StringRef str_ref = string_arena_->store_string_auto(str_content);
       return layout->set_field_value(static_cast<char*>(node_ptr),
                                      *field_layout,
                                      Value{str_ref, field_layout->type});
     }
+
+    // Handle array storage: std::vector<Value> -> ArrayRef via arena
+    if (value.type() == ValueType::ARRAY && value.holds_raw_array()) {
+      ArrayRef arr_ref =
+          store_raw_array(field_layout->type_desc, value.as_raw_array());
+      return layout->set_field_value(static_cast<char*>(node_ptr),
+                                     *field_layout, Value{std::move(arr_ref)});
+    }
+
+    // Value already holds arena-backed ref (StringRef / ArrayRef) or primitive
     return layout->set_field_value(static_cast<char*>(node_ptr), *field_layout,
                                    value);
   }
@@ -881,14 +936,64 @@ class NodeArena {
         *reinterpret_cast<StringRef*>(ptr) = value.as_string_ref();
         return true;
 
+      case ValueType::ARRAY:
+        if (value.type() != ValueType::ARRAY) return false;
+        *reinterpret_cast<ArrayRef*>(ptr) = value.as_array_ref();
+        return true;
+
       default:
         return false;
     }
   }
 
+  /**
+   * Convert a raw array (std::vector<Value>) to an arena-backed ArrayRef.
+   * Mirrors what string_arena_->store_string_auto() does for strings.
+   *
+   * @param type_desc  Field's TypeDescriptor (carries element_type)
+   * @param elements   Raw element values
+   * @return ArrayRef allocated in array_arena_
+   */
+  ArrayRef store_raw_array(const TypeDescriptor& type_desc,
+                           const std::vector<Value>& elements) {
+    const ValueType elem_type = type_desc.element_type;
+    const auto count = static_cast<uint32_t>(elements.size());
+
+    // Determine capacity: use fixed_size if specified, otherwise count
+    uint32_t capacity = count;
+    if (type_desc.is_fixed_size_array() && type_desc.fixed_size > count) {
+      capacity = type_desc.fixed_size;
+    }
+
+    ArrayRef ref = array_arena_->allocate(elem_type, capacity);
+    if (ref.is_null()) return ref;
+
+    const size_t elem_sz = get_type_size(elem_type);
+    auto* header = reinterpret_cast<ArrayRef::ArrayHeader*>(
+        ref.data() - ArrayRef::HEADER_SIZE);
+
+    for (uint32_t i = 0; i < count; ++i) {
+      char* dest = ref.mutable_element_ptr(i);
+      const Value& elem = elements[i];
+
+      // For string elements, store via string arena first
+      if (is_string_type(elem_type) && elem.holds_std_string()) {
+        StringRef str_ref = string_arena_->store_string_auto(elem.as_string());
+        *reinterpret_cast<StringRef*>(dest) = str_ref;
+      } else {
+        // Write primitive or pre-allocated ref directly
+        write_value_to_memory(dest, elem_type, elem);
+      }
+    }
+
+    header->length = count;
+    return ref;
+  }
+
   std::unique_ptr<MemArena> mem_arena_;
   std::shared_ptr<LayoutRegistry> layout_registry_;
   std::unique_ptr<StringArena> string_arena_;
+  std::unique_ptr<ArrayArena> array_arena_;
 
   // Versioning (optional)
   bool versioning_enabled_;

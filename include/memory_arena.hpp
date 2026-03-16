@@ -46,7 +46,7 @@ class MemoryArena : public MemArena {
    */
   void* allocate(size_t size, size_t alignment = 8) override {
     // Calculate aligned offset: rounds current_offset_ up to next multiple of
-    // alignment Example: current_offset_=5, alignment=8 → aligned_offset=8
+    // alignment Example: current_offset_=5, alignment=8 -> aligned_offset=8
     // (skips 3 bytes padding)
     size_t aligned_offset =
         (current_chunk_ != nullptr)

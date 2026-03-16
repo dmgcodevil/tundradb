@@ -13,6 +13,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "logger.hpp"
+#include "type_descriptor.hpp"
 #include "types.hpp"
 
 namespace tundradb {
@@ -21,18 +22,36 @@ struct Field {
  private:
   uint32_t index_;
   std::string name_;
-  ValueType type_;
+  TypeDescriptor type_desc_;
   bool nullable_ = true;
 
   friend struct SchemaLayout;
+  friend class SchemaLayout;
 
  public:
+  /// Construct from a TypeDescriptor (preferred)
+  Field(std::string name, TypeDescriptor type_desc, bool nullable = true)
+      : index_(0),
+        name_(std::move(name)),
+        type_desc_(type_desc),
+        nullable_(nullable) {}
+
+  /// Legacy constructor from ValueType (backwards-compatible)
   Field(std::string name, const ValueType type, bool nullable = true)
-      : index_(0), name_(std::move(name)), type_(type), nullable_(nullable) {}
+      : index_(0),
+        name_(std::move(name)),
+        type_desc_(TypeDescriptor::from_value_type(type)),
+        nullable_(nullable) {}
 
   [[nodiscard]] const std::string &name() const { return name_; }
 
-  [[nodiscard]] const ValueType &type() const { return type_; }
+  /// Returns the base ValueType for switch-based dispatch.
+  [[nodiscard]] ValueType type() const { return type_desc_.base_type; }
+
+  /// Returns the full TypeDescriptor (for parameterized types like ARRAY).
+  [[nodiscard]] const TypeDescriptor &type_descriptor() const {
+    return type_desc_;
+  }
 
   [[nodiscard]] bool nullable() const { return nullable_; }
 

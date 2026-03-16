@@ -242,10 +242,10 @@ class Database {
   /**
    * @brief Execute an UpdateQuery.
    *
-   * Mode 1 — by ID (bare field names):
+   * Mode 1 - by ID (bare field names):
    *   db.update(UpdateQuery::on("User", 0).set("age", Value(31)).build());
    *
-   * Mode 2 — by MATCH query (alias-qualified SET, multi-schema):
+   * Mode 2 - by MATCH query (alias-qualified SET, multi-schema):
    *   db.update(UpdateQuery::match(
    *       Query::from("u:User")
    *           .traverse("u", "WORKS_AT", "c:Company")
@@ -276,7 +276,7 @@ class Database {
       UpdateType update_type, UpdateResult &result);
 
   /**
-   * Build an alias→schema mapping from a Query's FROM + TRAVERSE clauses.
+   * Build an alias->schema mapping from a Query's FROM + TRAVERSE clauses.
    * Only declarations ("alias:Schema") are recorded; bare references ("alias")
    * are skipped.  Returns an error if the same alias is bound to two different
    * schemas.

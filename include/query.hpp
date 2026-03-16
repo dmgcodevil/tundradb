@@ -645,21 +645,21 @@ struct SetAssignment {
  *
  * Two modes:
  *
- *   **Mode 1 — by ID** (no query engine involved, bare field names):
+ *   **Mode 1 - by ID** (no query engine involved, bare field names):
  *   @code
  *   UpdateQuery::on("User", 0).set("age", Value(31)).build();
  *   @endcode
  *
- *   **Mode 2 — by MATCH query** (alias-qualified SET fields):
+ *   **Mode 2 - by MATCH query** (alias-qualified SET fields):
  *   @code
- *   // Simple WHERE — update one schema:
+ *   // Simple WHERE - update one schema:
  *   UpdateQuery::match(
  *       Query::from("u:User")
  *           .where("u.city", CompareOp::Eq, Value("NYC"))
  *           .build()
  *   ).set("u.status", Value("active")).build();
  *
- *   // Traversal — update multiple schemas:
+ *   // Traversal - update multiple schemas:
  *   UpdateQuery::match(
  *       Query::from("u:User")
  *           .traverse("u", "WORKS_AT", "c:Company")
@@ -718,12 +718,12 @@ class UpdateQuery {
     return aliases;
   }
 
-  /** @brief Mode 1 — target a specific node by schema + ID. */
+  /** @brief Mode 1 - target a specific node by schema + ID. */
   static Builder on(const std::string& schema, int64_t node_id) {
     return {schema, node_id};
   }
 
-  /** @brief Mode 2 — target nodes found by a MATCH query. */
+  /** @brief Mode 2 - target nodes found by a MATCH query. */
   static Builder match(Query query) { return Builder{std::move(query)}; }
 
   class Builder {
@@ -738,8 +738,8 @@ class UpdateQuery {
     /**
      * @brief Add a field assignment.
      *
-     * - Mode 1: bare name  — set("age", Value(31))
-     * - Mode 2: qualified  — set("u.age", Value(31))
+     * - Mode 1: bare name  - set("age", Value(31))
+     * - Mode 2: qualified  - set("u.age", Value(31))
      */
     Builder& set(std::string field_name, Value value) {
       assignments_.emplace_back(std::move(field_name), std::move(value));

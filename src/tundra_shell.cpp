@@ -908,7 +908,7 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
     return deleted_count;
   }
 
-  // Handle UPDATE statements — delegates to UpdateQuery + Database::update()
+  // Handle UPDATE statements - delegates to UpdateQuery + Database::update()
   antlrcpp::Any visitUpdateStatement(
       tundraql::TundraQLParser::UpdateStatementContext* ctx) override {
     spdlog::info("Executing UPDATE command");
@@ -922,12 +922,12 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
     std::optional<int64_t> node_id;
 
     if (updateTarget->nodeLocator()) {
-      // UPDATE User(0) SET ...  — Mode 1 (by ID)
+      // UPDATE User(0) SET ...  - Mode 1 (by ID)
       auto loc = updateTarget->nodeLocator();
       schema_name = loc->IDENTIFIER()->getText();
       node_id = std::stoll(loc->INTEGER_LITERAL()->getText());
     } else if (updateTarget->nodePattern()) {
-      // UPDATE (u:User) SET ... WHERE ...  — Mode 2 (by MATCH)
+      // UPDATE (u:User) SET ... WHERE ...  - Mode 2 (by MATCH)
       auto pat = updateTarget->nodePattern();
       if (pat->IDENTIFIER().size() > 1) {
         alias = pat->IDENTIFIER(0)->getText();
@@ -1028,7 +1028,7 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
       auto match_query = query_builder.build();
       auto builder = tundradb::UpdateQuery::match(std::move(match_query));
 
-      // Parse SET assignments — keep alias.field format
+      // Parse SET assignments - keep alias.field format
       for (auto assignment : setClause->setAssignment()) {
         std::string qualified_name;
         if (assignment->IDENTIFIER().size() == 2) {

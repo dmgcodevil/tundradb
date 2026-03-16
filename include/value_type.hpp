@@ -22,7 +22,8 @@ enum class ValueType {
   FIXED_STRING16,  // Fixed-size string up to 16 bytes (uses StringArena pool 0)
   FIXED_STRING32,  // Fixed-size string up to 32 bytes (uses StringArena pool 1)
   FIXED_STRING64,  // Fixed-size string up to 64 bytes (uses StringArena pool 2)
-  BOOL             // Boolean value
+  BOOL,            // Boolean value
+  ARRAY            // Variable or fixed-size array (uses ArrayArena)
 };
 
 /**
@@ -32,6 +33,14 @@ enum class ValueType {
 inline bool is_string_type(const ValueType type) {
   return type == ValueType::STRING || type == ValueType::FIXED_STRING16 ||
          type == ValueType::FIXED_STRING32 || type == ValueType::FIXED_STRING64;
+}
+
+/**
+ * Check if a ValueType represents an array type.
+ * Arrays are stored using ArrayRef (16 bytes) in the node slot.
+ */
+inline bool is_array_type(const ValueType type) {
+  return type == ValueType::ARRAY;
 }
 
 /**
@@ -78,6 +87,8 @@ inline std::string to_string(const ValueType type) {
       return "FixedString64";
     case ValueType::BOOL:
       return "Bool";
+    case ValueType::ARRAY:
+      return "Array";
     default:
       return "Unknown";
   }
@@ -92,6 +103,10 @@ inline size_t get_type_size(const ValueType type) {
   // String types are stored as StringRef (16 bytes)
   if (is_string_type(type)) {
     return 16;  // sizeof(StringRef) = 16 bytes
+  }
+  // Array types are stored as ArrayRef (16 bytes)
+  if (is_array_type(type)) {
+    return 16;  // sizeof(ArrayRef) = 16 bytes
   }
 
   switch (type) {
@@ -117,6 +132,10 @@ inline size_t get_type_alignment(const ValueType type) {
   // String types are stored as StringRef (8-byte pointer alignment)
   if (is_string_type(type)) {
     return 8;  // alignof(StringRef) = 8 bytes (pointer alignment)
+  }
+  // Array types are stored as ArrayRef (8-byte pointer alignment)
+  if (is_array_type(type)) {
+    return 8;  // alignof(ArrayRef) = 8 bytes (pointer alignment)
   }
 
   switch (type) {

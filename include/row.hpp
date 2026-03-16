@@ -98,7 +98,7 @@ struct Row {
   std::vector<ValueRef> cells;    ///< Cell values indexed by field ID.
   std::vector<PathSegment> path;  ///< BFS path that produced this row.
   std::unordered_map<std::string, int64_t>
-      ids;                     ///< Lazily-populated schema→node-ID map.
+      ids;                     ///< Lazily-populated schema->node-ID map.
   bool ids_populated = false;  ///< Whether @ref ids has been built.
 
   /** @brief Constructs an empty row with space for @p max_field_count fields.
@@ -155,7 +155,7 @@ struct Row {
   }
 
   /**
-   * @brief Lazily extracts a schema-name→node-ID map from the "*.id" cells.
+   * @brief Lazily extracts a schema-name->node-ID map from the "*.id" cells.
    *
    * @param field_id_to_name Mapping from field index to fully-qualified name.
    * @return A reference to the cached schema-ID map.

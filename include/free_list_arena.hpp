@@ -154,11 +154,11 @@ class FreeListArena : public MemArena {
    * (same as total_used_)
    *
    * Example flow:
-   * allocate(100) → total_allocated=1024, used_bytes=100, freed_bytes=0
-   * allocate(200) → total_allocated=1024, used_bytes=300, freed_bytes=0
-   * deallocate(100) → total_allocated=1024, used_bytes=200, freed_bytes=100
-   * reset() → total_allocated=1024, used_bytes=0, freed_bytes=0 (chunks kept)
-   * clear() → total_allocated=0, used_bytes=0, freed_bytes=0 (chunks freed)
+   * allocate(100) -> total_allocated=1024, used_bytes=100, freed_bytes=0
+   * allocate(200) -> total_allocated=1024, used_bytes=300, freed_bytes=0
+   * deallocate(100) -> total_allocated=1024, used_bytes=200, freed_bytes=100
+   * reset() -> total_allocated=1024, used_bytes=0, freed_bytes=0 (chunks kept)
+   * clear() -> total_allocated=0, used_bytes=0, freed_bytes=0 (chunks freed)
    */
 
   // Statistics

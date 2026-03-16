@@ -9,9 +9,11 @@
 #include <unordered_map>
 #include <vector>
 
+#include "array_ref.hpp"
 #include "llvm/ADT/StringMap.h"
 #include "mem_utils.hpp"
 #include "schema.hpp"
+#include "type_descriptor.hpp"
 #include "types.hpp"
 
 namespace tundradb {
@@ -47,19 +49,21 @@ inline void set_field_bit(char* base, size_t idx, bool is_set) {
 struct FieldLayout {
   const size_t index;
   std::string name;
-  ValueType type;
-  size_t offset;     // Byte offset from start of node data
-  size_t size;       // Size in bytes
-  size_t alignment;  // Required alignment
-  bool nullable;     // Whether field can be null
+  ValueType type;            // base type for fast dispatch
+  TypeDescriptor type_desc;  // full type descriptor (carries array params etc.)
+  size_t offset;             // Byte offset from start of node data
+  size_t size;               // Size in bytes
+  size_t alignment;          // Required alignment
+  bool nullable;             // Whether field can be null
 
   FieldLayout(const size_t index, std::string field_name,
-              const ValueType field_type, const size_t field_offset,
-              const size_t field_size, const size_t field_alignment,
-              const bool is_nullable = true)
+              const ValueType field_type, const TypeDescriptor& field_type_desc,
+              const size_t field_offset, const size_t field_size,
+              const size_t field_alignment, const bool is_nullable = true)
       : index(index),
         name(std::move(field_name)),
         type(field_type),
+        type_desc(field_type_desc),
         offset(field_offset),
         size(field_size),
         alignment(field_alignment),
@@ -235,15 +239,16 @@ class SchemaLayout {
    */
   void add_field(const std::shared_ptr<Field>& field) {
     assert(field != nullptr);
-    size_t field_size = get_type_size(field->type());
-    size_t field_alignment = get_type_alignment(field->type());
+    const auto& td = field->type_descriptor();
+    size_t field_size = td.storage_size();
+    size_t field_alignment = td.storage_alignment();
 
     alignment_ = std::max(alignment_, field_alignment);
 
     // Calculate field offset (relative to start of data, after bit set)
     size_t aligned_offset = align_up(total_size_, field_alignment);
     field->index_ = fields_.size();
-    fields_.emplace_back(field->index_, field->name(), field->type(),
+    fields_.emplace_back(field->index_, field->name(), field->type(), td,
                          aligned_offset, field_size, field_alignment,
                          field->nullable());
 
@@ -280,6 +285,10 @@ class SchemaLayout {
         *reinterpret_cast<StringRef*>(ptr) = value.as_string_ref();
         return true;
       }
+      case ValueType::ARRAY:
+        if (value.type() != ValueType::ARRAY) return false;
+        *reinterpret_cast<ArrayRef*>(ptr) = value.as_array_ref();
+        return true;
       default:
         return false;
     }
@@ -293,6 +302,10 @@ class SchemaLayout {
       case ValueType::FIXED_STRING64:
         // Initialize StringRef to null/empty
         new (ptr) StringRef();
+        break;
+      case ValueType::ARRAY:
+        // Initialize ArrayRef to null/empty
+        new (ptr) ArrayRef();
         break;
       default:
         // Zero initialization is fine for numeric types and bools
