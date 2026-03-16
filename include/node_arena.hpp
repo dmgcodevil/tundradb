@@ -601,7 +601,8 @@ class NodeArena {
 
       // Prepare value (convert raw types to arena-backed refs)
       Value storage_value = new_value;
-      if (new_value.type() == ValueType::STRING && new_value.holds_std_string()) {
+      if (new_value.type() == ValueType::STRING &&
+          new_value.holds_std_string()) {
         const StringRef str_ref =
             string_arena_->store_string_auto(new_value.as_string());
         storage_value = Value{str_ref, field_layout.type};
@@ -671,60 +672,8 @@ class NodeArena {
       return result.ok() && result.ValueOrDie();
     }
 
-    // ========================================================================
-    // NON-VERSIONED PATH: Direct write (in-place update)
-    // ========================================================================
-
-    // If the field currently contains a string, deallocate it first
-    if (is_string_type(field_layout->type) &&
-        is_field_set(static_cast<char*>(handle.ptr), field_layout->index)) {
-      const Value old_value = layout->get_field_value(
-          static_cast<char*>(handle.ptr), *field_layout);
-      if (!old_value.is_null() && old_value.type() != ValueType::NA) {
-        try {
-          const StringRef& old_str_ref = old_value.as_string_ref();
-          if (!old_str_ref.is_null()) {
-            string_arena_->mark_for_deletion(old_str_ref);
-          }
-        } catch (...) {
-          // Old value wasn't a StringRef, ignore
-        }
-      }
-    }
-
-    // If the field currently contains an array, mark it for deletion
-    if (is_array_type(field_layout->type) &&
-        is_field_set(static_cast<char*>(handle.ptr), field_layout->index)) {
-      const Value old_value = layout->get_field_value(
-          static_cast<char*>(handle.ptr), *field_layout);
-      if (!old_value.is_null() && old_value.holds_array_ref()) {
-        const ArrayRef& old_arr_ref = old_value.as_array_ref();
-        if (!old_arr_ref.is_null()) {
-          array_arena_->mark_for_deletion(old_arr_ref);
-        }
-      }
-    }
-
-    // Handle string storage
-    if (value.type() == ValueType::STRING) {
-      const std::string& str_content = value.as_string();
-      const StringRef str_ref = string_arena_->store_string_auto(str_content);
-      return layout->set_field_value(static_cast<char*>(handle.ptr),
-                                     *field_layout,
-                                     Value{str_ref, field_layout->type});
-    }
-
-    // Handle array storage: std::vector<Value> -> ArrayRef via arena
-    if (value.type() == ValueType::ARRAY && value.holds_raw_array()) {
-      ArrayRef arr_ref =
-          store_raw_array(field_layout->type_desc, value.as_raw_array());
-      return layout->set_field_value(static_cast<char*>(handle.ptr),
-                                     *field_layout, Value{std::move(arr_ref)});
-    }
-
-    // Value already holds arena-backed ref (StringRef / ArrayRef) or primitive
-    return layout->set_field_value(static_cast<char*>(handle.ptr),
-                                   *field_layout, value);
+    // NON-VERSIONED PATH: direct write via shared implementation
+    return set_field_value_internal(handle.ptr, layout, field_layout, value);
   }
 
   /** Reset arenas (keeps chunks). */

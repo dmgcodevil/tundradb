@@ -37,8 +37,8 @@ class NodeTest : public ::testing::Test {
     // Register a schema with array fields for array tests
     auto array_fields = std::vector<std::shared_ptr<arrow::Field>>{
         arrow::field("name", arrow::utf8(), false),
-        arrow::field("tags",
-                     arrow::list(arrow::field("item", arrow::utf8())), true),
+        arrow::field("tags", arrow::list(arrow::field("item", arrow::utf8())),
+                     true),
         arrow::field("scores",
                      arrow::list(arrow::field("item", arrow::int32())), true)};
     auto array_schema = arrow::schema(array_fields);
@@ -624,13 +624,11 @@ TEST_F(NodeTest, NodeManagerCreateNodeWithArray) {
   std::unordered_map<std::string, Value> node_data = {
       {"name", Value{"Alice"}},
       {"tags", Value{std::vector<Value>{Value{"a"}, Value{"b"}, Value{"c"}}}},
-      {"scores",
-       Value{std::vector<Value>{Value{static_cast<int32_t>(10)},
-                               Value{static_cast<int32_t>(20)},
-                               Value{static_cast<int32_t>(30)}}}}};
+      {"scores", Value{std::vector<Value>{Value{static_cast<int32_t>(10)},
+                                          Value{static_cast<int32_t>(20)},
+                                          Value{static_cast<int32_t>(30)}}}}};
 
-  auto node_result =
-      node_manager_->create_node("UserWithArrays", node_data);
+  auto node_result = node_manager_->create_node("UserWithArrays", node_data);
   ASSERT_TRUE(node_result.ok())
       << "Failed to create node: " << node_result.status().ToString();
 
@@ -648,8 +646,7 @@ TEST_F(NodeTest, NodeGetValueArray) {
       {"tags", Value{tags}},
   };
 
-  auto node_result =
-      node_manager_->create_node("UserWithArrays", node_data);
+  auto node_result = node_manager_->create_node("UserWithArrays", node_data);
   ASSERT_TRUE(node_result.ok());
   auto node = node_result.ValueOrDie();
 
@@ -682,8 +679,7 @@ TEST_F(NodeTest, NodeGetValueInt32Array) {
       {"scores", Value{scores}},
   };
 
-  auto node_result =
-      node_manager_->create_node("UserWithArrays", node_data);
+  auto node_result = node_manager_->create_node("UserWithArrays", node_data);
   ASSERT_TRUE(node_result.ok());
   auto node = node_result.ValueOrDie();
 
@@ -705,8 +701,7 @@ TEST_F(NodeTest, NodeSetValueArray) {
       {"tags", Value{std::vector<Value>{Value{"old1"}, Value{"old2"}}}},
   };
 
-  auto node_result =
-      node_manager_->create_node("UserWithArrays", node_data);
+  auto node_result = node_manager_->create_node("UserWithArrays", node_data);
   ASSERT_TRUE(node_result.ok());
   auto node = node_result.ValueOrDie();
 
@@ -731,8 +726,7 @@ TEST_F(NodeTest, NodeArrayEmpty) {
       {"tags", Value{std::vector<Value>{}}},
   };
 
-  auto node_result =
-      node_manager_->create_node("UserWithArrays", node_data);
+  auto node_result = node_manager_->create_node("UserWithArrays", node_data);
   ASSERT_TRUE(node_result.ok());
   auto node = node_result.ValueOrDie();
 
@@ -754,8 +748,7 @@ TEST_F(NodeTest, NodeArrayNullableOmitted) {
       // tags and scores not provided -> null
   };
 
-  auto node_result =
-      node_manager_->create_node("UserWithArrays", node_data);
+  auto node_result = node_manager_->create_node("UserWithArrays", node_data);
   ASSERT_TRUE(node_result.ok());
   auto node = node_result.ValueOrDie();
 
@@ -776,8 +769,7 @@ TEST_F(NodeTest, NodeArrayStorage) {
       {"tags", Value{tags}},
   };
 
-  auto node_result =
-      node_manager_->create_node("UserWithArrays", node_data);
+  auto node_result = node_manager_->create_node("UserWithArrays", node_data);
   ASSERT_TRUE(node_result.ok());
   auto node = node_result.ValueOrDie();
 
@@ -793,8 +785,10 @@ TEST_F(NodeTest, NodeArrayStorage) {
   EXPECT_EQ(ref.elem_type(), ValueType::STRING);
 
   // Read elements via Value::read_value_from_memory
-  auto elem0 = Value::read_value_from_memory(ref.element_ptr(0), ref.elem_type());
-  auto elem1 = Value::read_value_from_memory(ref.element_ptr(1), ref.elem_type());
+  auto elem0 =
+      Value::read_value_from_memory(ref.element_ptr(0), ref.elem_type());
+  auto elem1 =
+      Value::read_value_from_memory(ref.element_ptr(1), ref.elem_type());
   EXPECT_EQ(elem0.to_string(), "one");
   EXPECT_EQ(elem1.to_string(), "two");
 }

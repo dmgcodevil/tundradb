@@ -264,8 +264,8 @@ class GraphState {
     return node_ids_;
   }
 
-  /** @brief Returns the outgoing connections map (mutable). schema -> node_id ->
-   * [connections]. */
+  /** @brief Returns the outgoing connections map (mutable). schema -> node_id
+   * -> [connections]. */
   llvm::StringMap<
       llvm::DenseMap<int64_t, llvm::SmallVector<GraphConnection, 4>>>&
   get_outgoing_map() {
