@@ -210,6 +210,47 @@ arrow::Result<std::shared_ptr<arrow::Scalar>> value_ptr_to_arrow_scalar(
   }
 }
 
+arrow::Status append_array_to_list_builder(const ArrayRef& arr_ref,
+                                           arrow::ListBuilder* list_builder) {
+  if (arr_ref.is_null()) {
+    return list_builder->AppendNull();
+  }
+  ARROW_RETURN_NOT_OK(list_builder->Append());
+  auto* vb = list_builder->value_builder();
+  for (uint32_t j = 0; j < arr_ref.length(); ++j) {
+    const char* ep = arr_ref.element_ptr(j);
+    switch (arr_ref.elem_type()) {
+      case ValueType::INT32:
+        ARROW_RETURN_NOT_OK(static_cast<arrow::Int32Builder*>(vb)->Append(
+            *reinterpret_cast<const int32_t*>(ep)));
+        break;
+      case ValueType::INT64:
+        ARROW_RETURN_NOT_OK(static_cast<arrow::Int64Builder*>(vb)->Append(
+            *reinterpret_cast<const int64_t*>(ep)));
+        break;
+      case ValueType::DOUBLE:
+        ARROW_RETURN_NOT_OK(static_cast<arrow::DoubleBuilder*>(vb)->Append(
+            *reinterpret_cast<const double*>(ep)));
+        break;
+      case ValueType::BOOL:
+        ARROW_RETURN_NOT_OK(static_cast<arrow::BooleanBuilder*>(vb)->Append(
+            *reinterpret_cast<const bool*>(ep)));
+        break;
+      case ValueType::STRING: {
+        const auto& sr = *reinterpret_cast<const StringRef*>(ep);
+        ARROW_RETURN_NOT_OK(static_cast<arrow::StringBuilder*>(vb)->Append(
+            sr.data(), sr.length()));
+        break;
+      }
+      default:
+        return arrow::Status::NotImplemented(
+            "Unsupported array element type: ",
+            tundradb::to_string(arr_ref.elem_type()));
+    }
+  }
+  return arrow::Status::OK();
+}
+
 arrow::compute::Expression where_condition_to_expression(
     const WhereExpr& condition, bool strip_var) {
   return condition.to_arrow_expression(strip_var);
@@ -255,19 +296,32 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
       if (res.ok()) {
         auto value = res.ValueOrDie();
         if (value) {
-          auto scalar_result = value_ptr_to_arrow_scalar(value, field->type());
-          if (!scalar_result.ok()) {
-            log_error("Failed to convert value to scalar for field '{}': {}",
-                      field_name, scalar_result.status().ToString());
-            return scalar_result.status();
-          }
+          if (field->type() == ValueType::ARRAY) {
+            const auto& arr_ref = *reinterpret_cast<const ArrayRef*>(value);
+            auto* list_builder =
+                dynamic_cast<arrow::ListBuilder*>(builders[i].get());
+            if (!list_builder) {
+              return arrow::Status::Invalid(
+                  "Expected ListBuilder for array field: ", field_name);
+            }
+            ARROW_RETURN_NOT_OK(
+                append_array_to_list_builder(arr_ref, list_builder));
+          } else {
+            auto scalar_result =
+                value_ptr_to_arrow_scalar(value, field->type());
+            if (!scalar_result.ok()) {
+              log_error("Failed to convert value to scalar for field '{}': {}",
+                        field_name, scalar_result.status().ToString());
+              return scalar_result.status();
+            }
 
-          const auto& scalar = scalar_result.ValueOrDie();
-          auto status = builders[i]->AppendScalar(*scalar);
-          if (!status.ok()) {
-            log_error("Failed to append scalar for field '{}': {}", field_name,
-                      status.ToString());
-            return status;
+            const auto& scalar = scalar_result.ValueOrDie();
+            auto status = builders[i]->AppendScalar(*scalar);
+            if (!status.ok()) {
+              log_error("Failed to append scalar for field '{}': {}",
+                        field_name, status.ToString());
+              return status;
+            }
           }
         } else {
           IF_DEBUG_ENABLED {
@@ -341,6 +395,19 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_empty_table(
       case arrow::Type::BOOL: {
         arrow::BooleanBuilder builder;
         ARROW_RETURN_NOT_OK(builder.Finish(&empty_array));
+        break;
+      }
+      case arrow::Type::INT32: {
+        arrow::Int32Builder builder;
+        ARROW_RETURN_NOT_OK(builder.Finish(&empty_array));
+        break;
+      }
+      case arrow::Type::LIST:
+      case arrow::Type::FIXED_SIZE_LIST: {
+        std::unique_ptr<arrow::ArrayBuilder> builder;
+        ARROW_RETURN_NOT_OK(arrow::MakeBuilder(arrow::default_memory_pool(),
+                                               field->type(), &builder));
+        ARROW_RETURN_NOT_OK(builder->Finish(&empty_array));
         break;
       }
       default:

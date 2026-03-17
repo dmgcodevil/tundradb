@@ -132,6 +132,19 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_empty_table(
     const std::shared_ptr<arrow::Schema>& schema);
 
 /**
+ * @brief Appends an ArrayRef's contents to an Arrow ListBuilder.
+ *
+ * Handles null arrays (appends null), empty arrays (appends empty list),
+ * and populated arrays (appends each element based on elem_type).
+ *
+ * @param arr_ref The array reference to append.
+ * @param list_builder The Arrow ListBuilder to append into.
+ * @return OK on success, or an error if an element type is unsupported.
+ */
+arrow::Status append_array_to_list_builder(const ArrayRef& arr_ref,
+                                           arrow::ListBuilder* list_builder);
+
+/**
  * @brief Filters an Arrow table using a WhereExpr predicate.
  *
  * @param table The table to filter.
