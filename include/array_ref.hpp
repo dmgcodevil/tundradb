@@ -10,22 +10,22 @@
 
 namespace tundradb {
 
+class ArrayArena;  // forward declaration
+
 /**
  * Lightweight handle stored in the node's fixed-size slot (16 bytes).
  * Same footprint as StringRef.
  *
  * Memory layout in ArrayArena (FreeListArena):
- * ┌────────────┬────────┬──────────┬──────────┬─────────────────────────┐
- * │ ref_count  │ flags  │  length  │ capacity │  element data ...       │
- * │   (4B)     │ (4B)   │   (4B)   │  (4B)    │  (elem_size x capacity) │
- * └────────────┴────────┴──────────┴──────────┴─────────────────────────┘
- *       ↑                                      ↑
- *    ArrayHeader (16 bytes)                    data_ points here
+ * ┌────────────┬────────┬──────────┬──────────┬──────────┬───────────────┐
+ * │ ref_count  │ flags  │  length  │ capacity │  arena*  │ element data  │
+ * │   (4B)     │ (4B)   │   (4B)   │  (4B)    │  (8B)    │ (elem*cap)    │
+ * └────────────┴────────┴──────────┴──────────┴──────────┴───────────────┘
+ *       ↑                                                 ↑
+ *    ArrayHeader (24 bytes)                          data_ points here
  *
- * Length and capacity live in the header (shared arena memory) so that
- * every ArrayRef copy always sees the current state. This prevents
- * stale-length bugs when one caller mutates the array in-place
- * (history OFF) while another holds a copy of the handle.
+ * The owning ArrayArena pointer is stored in the header so that
+ * ArrayRef::release() can deallocate directly without a global registry.
  *
  * ArrayRef stored in the node slot:
  * ┌──────────┬────────────┬─────────┐
@@ -44,13 +44,14 @@ class ArrayRef {
   /**
    * Header stored in ArrayArena memory BEFORE the element data.
    * All mutable shared state lives here - ArrayRef delegates to it.
-   * Consistent with StringRef::StringHeader pattern.
+   * The arena pointer allows release() to deallocate without a registry.
    */
   struct ArrayHeader {
-    std::atomic<int32_t> ref_count;  // 4 bytes - shared reference count
+    std::atomic<int32_t> ref_count;  // 4 bytes
     uint32_t flags;                  // 4 bytes - bit 0: marked_for_deletion
     uint32_t length;                 // 4 bytes - current element count
     uint32_t capacity;               // 4 bytes - allocated element slots
+    ArrayArena* arena;               // 8 bytes - owning arena (for dealloc)
 
     [[nodiscard]] bool is_marked_for_deletion() const {
       return (flags & 0x1) != 0;
@@ -58,7 +59,7 @@ class ArrayRef {
     void mark_for_deletion() { flags |= 0x1; }
   };
 
-  static constexpr size_t HEADER_SIZE = sizeof(ArrayHeader);  // 16 bytes
+  static constexpr size_t HEADER_SIZE = sizeof(ArrayHeader);  // 24 bytes
 
   // ========================================================================
   // CONSTRUCTORS AND DESTRUCTOR
@@ -203,16 +204,13 @@ class ArrayRef {
   bool operator!=(const ArrayRef& other) const { return !(*this == other); }
 
  private:
-  void release() {
-    if (!data_) return;
-    if (auto* h = get_header()) {
-      const int32_t prev = h->ref_count.fetch_sub(1, std::memory_order_acq_rel);
-      // Actual deallocation is managed by ArrayArena (like StringArena)
-      (void)prev;
-    }
-    data_ = nullptr;
-    elem_type_ = ValueType::NA;
-  }
+  /**
+   * Release this reference.
+   * Decrements ref count; if this was the last reference AND the array
+   * is marked for deletion, deallocates via the arena stored in the header.
+   * Implementation in array_arena.hpp to avoid circular dependency.
+   */
+  void release();
 
   ArrayHeader* get_header() const {
     if (!data_) return nullptr;

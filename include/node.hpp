@@ -98,7 +98,9 @@ class Node {
   arrow::Result<bool> update(const std::shared_ptr<Field> &field, Value value,
                              UpdateType update_type) {
     if (arena_ != nullptr) {
-      return arena_->set_field_value(*handle_, layout_, field, value);
+      ARROW_RETURN_NOT_OK(
+          arena_->set_field_value(*handle_, layout_, field, value));
+      return true;
     }
 
     if (const auto it = data_.find(field->name()); it == data_.end()) {
@@ -277,10 +279,8 @@ class NodeManager {
 
       // Initial population of v0: write directly to base node
       // Use set_field_value_v0 for all fields (doesn't create versions)
-      if (!node_arena_->set_field_value_v0(
-              node_handle, layout_, schema_->get_field("id"), Value{id})) {
-        return arrow::Status::Invalid("Failed to set id field");
-      }
+      ARROW_RETURN_NOT_OK(node_arena_->set_field_value_v0(
+          node_handle, layout_, schema_->get_field("id"), Value{id}));
 
       for (const auto &field : schema_->fields()) {
         if (field->name() == "id") continue;
@@ -290,10 +290,8 @@ class NodeManager {
           value = data.find(field->name())->second;
         }  // else: Value() = NULL
 
-        if (!node_arena_->set_field_value_v0(node_handle, layout_, field,
-                                             value)) {
-          return arrow::Status::Invalid("Failed to set field ", field->name());
-        }
+        ARROW_RETURN_NOT_OK(node_arena_->set_field_value_v0(
+            node_handle, layout_, field, value));
       }
 
       auto node = std::make_shared<Node>(
