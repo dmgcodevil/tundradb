@@ -736,12 +736,27 @@ class UpdateQuery {
     explicit Builder(Query query) : match_query_(std::move(query)) {}
 
     /**
-     * @brief Add a field assignment.
+     * @brief Add a SET field assignment.
      *
      * - Mode 1: bare name  - set("age", Value(31))
      * - Mode 2: qualified  - set("u.age", Value(31))
      */
     Builder& set(std::string field_name, Value value) {
+      assignments_.emplace_back(std::move(field_name), std::move(value));
+      return *this;
+    }
+
+    /**
+     * @brief Add an APPEND assignment for an array field.
+     *
+     * Sets update_type to APPEND. The value is appended to the existing
+     * array rather than replacing it.
+     *
+     * - Mode 1: bare name  - append("tags", Value(std::vector<Value>{...}))
+     * - Mode 2: qualified  - append("u.tags", Value(std::vector<Value>{...}))
+     */
+    Builder& append(std::string field_name, Value value) {
+      update_type_ = UpdateType::APPEND;
       assignments_.emplace_back(std::move(field_name), std::move(value));
       return *this;
     }
@@ -756,7 +771,7 @@ class UpdateQuery {
     [[nodiscard]] UpdateQuery build() && {
       if (assignments_.empty()) {
         throw std::runtime_error(
-            "UpdateQuery must have at least one SET assignment");
+            "UpdateQuery must have at least one field assignment");
       }
       return UpdateQuery(std::move(schema_), std::move(assignments_), node_id_,
                          std::move(match_query_), update_type_);
@@ -766,7 +781,7 @@ class UpdateQuery {
     [[nodiscard]] UpdateQuery build() & {
       if (assignments_.empty()) {
         throw std::runtime_error(
-            "UpdateQuery must have at least one SET assignment");
+            "UpdateQuery must have at least one field assignment");
       }
       return UpdateQuery(schema_, assignments_, node_id_, match_query_,
                          update_type_);

@@ -136,6 +136,10 @@ class ArrayArena {
    *    append the new one, and mark the old array for deletion.
    *    -> Amortized O(1).
    *
+   * IMPORTANT: This mutates the array through `ref`. In versioned storage,
+   * the caller MUST first copy() the ArrayRef to avoid corrupting older
+   * versions that share the same underlying data (copy-on-write).
+   *
    * @param ref        ArrayRef to append to (updated in-place if reallocated)
    * @param element    Pointer to the element data to append
    * @return Ok on success; Error with reason if ref is null or allocation fails
@@ -180,12 +184,15 @@ class ArrayArena {
 
   /**
    * Create a copy of an existing array (for copy-on-write / versioning).
-   * The new array has the same length and capacity as the original.
    *
-   * @param src  Source ArrayRef to copy
+   * @param src            Source ArrayRef to copy
+   * @param extra_capacity Additional element slots beyond the original
+   * capacity. Use this when the caller knows it will append soon, to avoid a
+   * second reallocation inside append().
    * @return Ok(new ArrayRef) with independent data, or Error with reason
    */
-  arrow::Result<ArrayRef> copy(const ArrayRef& src) {
+  arrow::Result<ArrayRef> copy(const ArrayRef& src,
+                               uint32_t extra_capacity = 0) {
     if (src.is_null()) {
       return arrow::Status::Invalid(
           "ArrayArena::copy: source ArrayRef is null");
@@ -197,8 +204,9 @@ class ArrayArena {
           "ArrayArena::copy: invalid source ArrayRef (header is null)");
     }
 
+    const uint32_t new_capacity = header->capacity + extra_capacity;
     return allocate_with_data(src.elem_type(), src.data(), header->length,
-                              header->capacity);
+                              new_capacity);
   }
 
   /**
@@ -225,6 +233,8 @@ class ArrayArena {
 
     auto* header =
         reinterpret_cast<ArrayRef::ArrayHeader*>(data - ArrayRef::HEADER_SIZE);
+    if (!header->arena) return;  // already released
+    header->arena = nullptr;     // prevent double-free
 
     std::lock_guard<std::mutex> lock(arena_mutex_);
     arena_->deallocate(header);

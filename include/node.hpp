@@ -12,13 +12,9 @@
 #include "schema.hpp"
 #include "temporal_context.hpp"
 #include "types.hpp"
+#include "update_type.hpp"
 
 namespace tundradb {
-
-enum UpdateType {
-  SET,
-  // todo APPEND for List/Array
-};
 
 class Node {
  private:
@@ -98,8 +94,8 @@ class Node {
   arrow::Result<bool> update(const std::shared_ptr<Field> &field, Value value,
                              UpdateType update_type) {
     if (arena_ != nullptr) {
-      ARROW_RETURN_NOT_OK(
-          arena_->set_field_value(*handle_, layout_, field, value));
+      ARROW_RETURN_NOT_OK(arena_->set_field_value(*handle_, layout_, field,
+                                                  value, update_type));
       return true;
     }
 
@@ -108,9 +104,12 @@ class Node {
     }
 
     switch (update_type) {
-      case SET:
+      case UpdateType::SET:
         data_[field->name()] = std::move(value);
         break;
+      case UpdateType::APPEND:
+        return arrow::Status::NotImplemented(
+            "APPEND not supported in non-arena mode");
     }
 
     return true;
@@ -129,7 +128,8 @@ class Node {
     if (field_updates.empty()) return true;
 
     if (arena_ != nullptr) {
-      return arena_->update_fields(*handle_, layout_, field_updates);
+      return arena_->update_fields(*handle_, layout_, field_updates,
+                                   update_type);
     }
 
     // Non-arena fallback: update data_ map directly
@@ -138,9 +138,12 @@ class Node {
         return arrow::Status::KeyError("Field not found: ", field->name());
       }
       switch (update_type) {
-        case SET:
+        case UpdateType::SET:
           data_[field->name()] = value;
           break;
+        case UpdateType::APPEND:
+          return arrow::Status::NotImplemented(
+              "APPEND not supported in non-arena mode");
       }
     }
     return true;
@@ -149,12 +152,12 @@ class Node {
   [[deprecated]]
   arrow::Result<bool> set_value(const std::string &field, const Value &value) {
     log_warn("set_value by string is deprecated");
-    return update(schema_->get_field(field), value, SET);
+    return update(schema_->get_field(field), value, UpdateType::SET);
   }
 
   arrow::Result<bool> set_value(const std::shared_ptr<Field> &field,
                                 const Value &value) {
-    return update(field, value, SET);
+    return update(field, value, UpdateType::SET);
   }
 
   /**
