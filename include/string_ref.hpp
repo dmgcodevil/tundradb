@@ -33,11 +33,7 @@ class StringPool;
  *   // When last StringRef is destroyed, string is deallocated
  */
 class StringRef {
- private:
-  const char* data_;
-  uint32_t length_;
-  uint32_t pool_id_;
-
+ public:
   /**
    * String header stored in arena memory BEFORE the string data.
    * Layout: [ref_count:4][length:4][flags:4][padding:4] = 16 bytes total
@@ -49,21 +45,18 @@ class StringRef {
     uint32_t flags;    // 4 bytes - Bit 0: marked_for_deletion
     uint32_t padding;  // 4 bytes - Ensure 16-byte alignment
 
-    /**
-     * Check if string is marked for deletion.
-     * When marked, the string will be deallocated when ref_count reaches 0.
-     */
-    bool is_marked_for_deletion() const { return (flags & 0x1) != 0; }
-
-    /**
-     * Mark string for deletion.
-     * Called when a node field is updated - actual deallocation happens
-     * when the last StringRef is destroyed.
-     */
+    [[nodiscard]] bool is_marked_for_deletion() const {
+      return (flags & 0x1) != 0;
+    }
     void mark_for_deletion() { flags |= 0x1; }
   };
 
   static constexpr size_t HEADER_SIZE = sizeof(StringHeader);  // 16 bytes
+
+ private:
+  const char* data_;
+  uint32_t length_;
+  uint32_t pool_id_;
 
   __attribute__((always_inline)) StringHeader* get_header() const {
     if (!data_) return nullptr;
@@ -127,28 +120,15 @@ class StringRef {
 
   /**
    * Copy assignment - properly handles reference counting.
-   *
-   * Example: ref4 = ref1
-   * - Decrements ref4's OLD value's ref_count
-   * - Increments ref1's value's ref_count
-   * - ref4 now points to the same string as ref1
    */
   StringRef& operator=(const StringRef& other) {
     if (this != &other) {
-      // Step 1: Release THIS object's OLD value (before overwriting)
-      // Example: if ref4 pointed to "Goodbye", decrement "Goodbye" ref_count
-      // Note: release() also sets this->data_ = nullptr after decrementing
       release();
-
-      // Step 2: Copy OTHER object's values into THIS object
-      // Example: ref4 now gets ref1's pointer to "Hello"
+      // =======================================================================
       data_ = other.data_;
       length_ = other.length_;
       pool_id_ = other.pool_id_;
-
-      // Step 3: Increment the NEW value's ref_count
-      // Important: get_header() now uses the NEW data_ pointer (from step 2)
-      // Example: Increment "Hello" ref_count (not "Goodbye"!)
+      // =======================================================================
       if (data_) {
         auto* header = get_header();  // Uses NEW data_ pointer
         if (header) {

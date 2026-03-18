@@ -433,9 +433,7 @@ class StringArenaRegistry {
 
 inline void StringRef::release() {
   if (data_) {
-    auto* header = get_header();
-    if (header) {
-      // Decrement ref count atomically
+    if (auto* header = get_header()) {
       int32_t old_count =
           header->ref_count.fetch_sub(1, std::memory_order_acq_rel);
 

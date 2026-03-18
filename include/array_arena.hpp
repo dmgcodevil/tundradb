@@ -226,15 +226,21 @@ class ArrayArena {
    * Called by ArrayRef::release() when ref_count reaches 0 and the
    * array is marked for deletion.
    *
-   * @param data  Pointer to element data (NOT to header)
+   * For arrays of non-trivial types (STRING, ARRAY), element destructors
+   * are called first so that nested ref-counted objects are properly released.
+   *
+   * @param data      Pointer to element data (NOT to header)
+   * @param elem_type Element type (NA = skip element cleanup)
    */
-  void release_array(char* data) {
+  void release_array(char* data, ValueType elem_type = ValueType::NA) {
     if (!data) return;
 
     auto* header =
         reinterpret_cast<ArrayRef::ArrayHeader*>(data - ArrayRef::HEADER_SIZE);
     if (!header->arena) return;  // already released
     header->arena = nullptr;     // prevent double-free
+
+    destruct_elements(data, elem_type, header->length);
 
     std::lock_guard<std::mutex> lock(arena_mutex_);
     arena_->deallocate(header);
@@ -287,6 +293,50 @@ class ArrayArena {
   }
 
   /**
+   * Destruct non-trivial elements before freeing array memory.
+   *
+   * For STRING elements: marks each string for deletion, then calls
+   * the destructor. The destructor decrements ref_count; when it hits 0
+   * with the deletion flag set, the string memory is freed.
+   *
+   * For ARRAY elements: calls the destructor, which triggers the same
+   * release_array chain recursively.
+   *
+   * Primitives (INT32, DOUBLE, etc.) have trivial destructors - skip them.
+   */
+  static void destruct_elements(char* data, ValueType elem_type,
+                                uint32_t count) {
+    if (count == 0) return;
+
+    if (is_string_type(elem_type)) {
+      for (uint32_t i = 0; i < count; ++i) {
+        auto* sr = reinterpret_cast<StringRef*>(data + i * sizeof(StringRef));
+        if (!sr->is_null()) {
+          // Must mark for deletion first - StringRef::release() only
+          // frees memory when BOTH ref_count==0 AND marked_for_deletion.
+          auto* hdr = reinterpret_cast<StringRef::StringHeader*>(
+              const_cast<char*>(sr->data() - StringRef::HEADER_SIZE));
+          hdr->mark_for_deletion();
+        }
+        sr->~StringRef();
+      }
+    } else if (is_array_type(elem_type)) {
+      for (uint32_t i = 0; i < count; ++i) {
+        auto* ar = reinterpret_cast<ArrayRef*>(data + i * sizeof(ArrayRef));
+        if (!ar->is_null()) {
+          // ArrayRef destructor calls release() which calls release_array
+          // recursively if this was the last reference.
+          auto* hdr = reinterpret_cast<ArrayRef::ArrayHeader*>(
+              ar->data() - ArrayRef::HEADER_SIZE);
+          hdr->mark_for_deletion();
+        }
+        ar->~ArrayRef();
+      }
+    }
+    // Primitives: trivial destructors, nothing to do.
+  }
+
+  /**
    * Initialize element memory.
    * Uses placement-new for types with non-trivial constructors
    * (StringRef, ArrayRef); memset(0) for primitives.
@@ -320,7 +370,7 @@ inline void ArrayRef::release() {
     const int32_t old_count =
         h->ref_count.fetch_sub(1, std::memory_order_acq_rel);
     if (old_count == 1 && h->is_marked_for_deletion() && h->arena) {
-      h->arena->release_array(data_);
+      h->arena->release_array(data_, elem_type_);
     }
   }
   data_ = nullptr;
