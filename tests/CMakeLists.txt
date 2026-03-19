@@ -158,6 +158,10 @@ add_executable(update_query_join_test
 add_executable(array_query_test
         array_query_test.cpp)
 
+# Arena leak detection test
+add_executable(arena_leak_test
+        arena_leak_test.cpp)
+
 # Link against Arrow and GTest
 target_link_libraries(sharding_test
     PRIVATE
@@ -420,6 +424,19 @@ target_link_libraries(array_query_test
         LLVMSupport LLVMCore
 )
 
+target_link_libraries(arena_leak_test
+        PRIVATE
+        core
+        Arrow::arrow_shared
+        Parquet::parquet_shared
+        GTest::GTest
+        GTest::Main
+        pthread
+        TBB::tbb
+        spdlog::spdlog
+        LLVMSupport LLVMCore
+)
+
 # Apply sanitizer flags to all test targets if enabled
 if(ENABLE_SANITIZERS)
     target_compile_options(sharding_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
@@ -469,6 +486,9 @@ if(ENABLE_SANITIZERS)
 
     target_compile_options(array_query_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
     target_link_options(array_query_test PRIVATE ${SANITIZER_LINK_FLAGS})
+
+    target_compile_options(arena_leak_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
+    target_link_options(arena_leak_test PRIVATE ${SANITIZER_LINK_FLAGS})
 endif()
 
 # Simple test registration
@@ -493,6 +513,7 @@ add_test(NAME TemporalQueryTest COMMAND temporal_query_test)
 add_test(NAME UpdateQueryTest COMMAND update_query_test)
 add_test(NAME UpdateQueryJoinTest COMMAND update_query_join_test)
 add_test(NAME ArrayQueryTest COMMAND array_query_test)
+add_test(NAME ArenaLeakTest COMMAND arena_leak_test)
 
 # Set TSan options for tests after they've been registered
 if(ENABLE_SANITIZERS AND SANITIZER_TYPE STREQUAL "thread" AND EXISTS ${TSAN_SUPPRESSIONS_FILE})

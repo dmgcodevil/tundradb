@@ -6,6 +6,7 @@
 #include <tbb/concurrent_hash_map.h>
 
 #include <atomic>
+#include <cassert>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -106,6 +107,7 @@ class StringPool {
     data[str.length()] = '\0';
 
     StringRef ref(data, static_cast<uint32_t>(str.length()), pool_id);
+    active_allocs_.fetch_add(1, std::memory_order_relaxed);
 
     if (enable_deduplication_) {
       typename decltype(dedup_cache_)::accessor acc;
@@ -162,6 +164,8 @@ class StringPool {
     auto* header = reinterpret_cast<StringRef::StringHeader*>(
         const_cast<char*>(data - StringRef::HEADER_SIZE));
 
+    active_allocs_.fetch_sub(1, std::memory_order_relaxed);
+
     std::lock_guard<std::mutex> lock(arena_mutex_);
     arena_->deallocate(header);
   }
@@ -182,6 +186,11 @@ class StringPool {
   // ========================================================================
 
   size_t get_max_size() const { return max_size_; }
+
+  /** Number of live (allocated but not yet freed) strings in this pool. */
+  int64_t get_active_allocs() const {
+    return active_allocs_.load(std::memory_order_relaxed);
+  }
 
   size_t get_total_allocated() const { return arena_->get_total_allocated(); }
 
@@ -230,6 +239,7 @@ class StringPool {
   mutable std::mutex
       arena_mutex_;  // Protects arena_ (FreeListArena is NOT thread-safe)
   bool enable_deduplication_ = false;
+  std::atomic<int64_t> active_allocs_{0};
 
   // Deduplication cache: string content -> StringRef (holds one reference)
   // Thread-safe concurrent hash map from Intel TBB
@@ -338,6 +348,15 @@ class StringArena {
     }
   }
 
+  /** Total live (allocated but not freed) strings across all pools. */
+  int64_t get_active_allocs() const {
+    int64_t total = 0;
+    for (const auto& pool : pools_) {
+      total += pool->get_active_allocs();
+    }
+    return total;
+  }
+
   /**
    * Get pool by ID.
    */
@@ -441,16 +460,18 @@ inline void StringArena::register_pools() {
 inline void StringRef::release() {
   if (data_) {
     if (auto* header = get_header()) {
+      assert(header->ref_count.load(std::memory_order_relaxed) > 0 &&
+             "StringRef::release() called with ref_count already 0 — "
+             "double-release or missing ref-count increment");
+
       int32_t old_count =
           header->ref_count.fetch_sub(1, std::memory_order_acq_rel);
 
       if (old_count == 1 && header->is_marked_for_deletion()) {
-        // Last reference and marked for deletion - deallocate
         StringArenaRegistry::release_string(pool_id_, data_);
       }
     }
 
-    // Clear this reference
     data_ = nullptr;
     length_ = 0;
     pool_id_ = 0;
