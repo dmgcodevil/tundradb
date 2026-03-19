@@ -1594,7 +1594,8 @@ TEST(JoinTest, MultiPatternPathThroughFriends) {
 
     if ((u_name_str == "bob" && f_name_str == "alex" &&
          c_name_str == "google") ||
-        (u_name_str == "Bob" && f_name_str == "Alex" && c_name_str == "Google")) {
+        (u_name_str == "Bob" && f_name_str == "Alex" &&
+         c_name_str == "Google")) {
       found_bob_alex_google = true;
       std::cout << "  ✓ Found Bob->Alex->Google pattern" << std::endl;
     }
