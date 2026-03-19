@@ -441,6 +441,18 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_rows(
                 static_cast<arrow::BooleanBuilder*>(builders[i].get())
                     ->Append(value_ref.as_bool());
             break;
+          case ValueType::ARRAY: {
+            const auto& arr_ref = value_ref.as_array_ref();
+            auto* list_builder =
+                dynamic_cast<arrow::ListBuilder*>(builders[i].get());
+            if (!list_builder) {
+              append_status = arrow::Status::Invalid(
+                  "Expected ListBuilder for field: ", field_name);
+              break;
+            }
+            append_status = append_array_to_list_builder(arr_ref, list_builder);
+            break;
+          }
           default:
             append_status = builders[i]->AppendNull();
             break;

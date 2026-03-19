@@ -10,6 +10,7 @@
 #include <memory>
 #include <string>
 
+#include "array_arena.hpp"
 #include "clock.hpp"
 #include "free_list_arena.hpp"
 #include "mem_arena.hpp"
@@ -17,6 +18,7 @@
 #include "schema_layout.hpp"
 #include "string_arena.hpp"
 #include "types.hpp"
+#include "update_type.hpp"
 
 namespace tundradb {
 
@@ -336,6 +338,7 @@ class NodeArena {
         layout_registry_(std::move(layout_registry)),
         string_arena_(string_arena ? std::move(string_arena)
                                    : std::make_unique<StringArena>()),
+        array_arena_(std::make_unique<ArrayArena>()),
         versioning_enabled_(enable_versioning),
         version_counter_(0) {
     // Only allocate version arena if versioning is enabled
@@ -392,13 +395,12 @@ class NodeArena {
     return {node_data, node_size, layout->get_schema_name()};
   }
 
-  /** Deallocate node and its strings. */
+  /** Deallocate node and its strings/arrays. */
   void deallocate_node(const NodeHandle& handle) const {
     if (handle.is_null()) {
       return;
     }
 
-    // First, deallocate all string references from the node
     if (!handle.schema_name.empty()) {
       const std::shared_ptr<SchemaLayout> layout =
           layout_registry_->get_layout(handle.schema_name);
@@ -406,21 +408,23 @@ class NodeArena {
         const char* data_start =
             static_cast<const char*>(handle.ptr) + layout->get_data_offset();
         for (const auto& field : layout->get_fields()) {
-          if (is_string_type(field.type)) {
-            // Read the StringRef from the node memory (after data offset)
-            const char* field_ptr = data_start + field.offset;
-            const auto* str_ref = reinterpret_cast<const StringRef*>(field_ptr);
+          const char* field_ptr = data_start + field.offset;
 
-            // Deallocate the string if it's not null
+          if (is_string_type(field.type)) {
+            const auto* str_ref = reinterpret_cast<const StringRef*>(field_ptr);
             if (!str_ref->is_null()) {
               string_arena_->mark_for_deletion(*str_ref);
+            }
+          } else if (is_array_type(field.type)) {
+            const auto* arr_ref = reinterpret_cast<const ArrayRef*>(field_ptr);
+            if (!arr_ref->is_null()) {
+              array_arena_->mark_for_deletion(*arr_ref);
             }
           }
         }
       }
     }
 
-    // Then deallocate the node memory itself
     mem_arena_->deallocate(handle.ptr);
   }
 
@@ -484,7 +488,8 @@ class NodeArena {
   arrow::Result<bool> update_fields(
       NodeHandle& current_handle, const std::shared_ptr<SchemaLayout>& layout,
       const std::vector<std::pair<std::shared_ptr<Field>, Value>>&
-          field_updates) {
+          field_updates,
+      UpdateType update_type = UpdateType::SET) {
     // Convert Field pointers to indices
     std::vector<std::pair<uint16_t, Value>> indexed_updates;
     indexed_updates.reserve(field_updates.size());
@@ -497,7 +502,8 @@ class NodeArena {
       indexed_updates.emplace_back(field_layout->index, value);
     }
 
-    return update_fields_by_index(current_handle, layout, indexed_updates);
+    return update_fields_by_index(current_handle, layout, indexed_updates,
+                                  update_type);
   }
 
   /**
@@ -506,19 +512,21 @@ class NodeArena {
    */
   arrow::Result<bool> create_new_version(
       NodeHandle& current_handle, const std::shared_ptr<SchemaLayout>& layout,
-      uint16_t field_idx, const Value& new_value) {
+      uint16_t field_idx, const Value& new_value,
+      UpdateType update_type = UpdateType::SET) {
     if (field_idx >= layout->get_fields().size()) {
       return arrow::Status::IndexError("Field index out of bounds");
     }
     const std::vector<std::pair<uint16_t, Value>> updates = {
         {field_idx, new_value}};
-    return update_fields_by_index(current_handle, layout, updates);
+    return update_fields_by_index(current_handle, layout, updates, update_type);
   }
 
   /** Update multiple fields by index (internal, more efficient). */
   arrow::Result<bool> update_fields_by_index(
       NodeHandle& current_handle, const std::shared_ptr<SchemaLayout>& layout,
-      const std::vector<std::pair<uint16_t, Value>>& field_updates) {
+      const std::vector<std::pair<uint16_t, Value>>& field_updates,
+      UpdateType update_type = UpdateType::SET) {
     if (field_updates.empty()) return true;
 
     // Non-versioned: write directly to base node
@@ -528,10 +536,8 @@ class NodeArena {
           return arrow::Status::IndexError("Field index out of bounds");
         }
         const FieldLayout& field_layout = layout->get_fields()[field_idx];
-        if (!set_field_value_internal(current_handle.ptr, layout, &field_layout,
-                                      value)) {
-          return arrow::Status::Invalid("Failed to set field value");
-        }
+        ARROW_RETURN_NOT_OK(set_field_value_internal(
+            current_handle.ptr, layout, &field_layout, value, update_type));
       }
       return true;
     }
@@ -557,20 +563,23 @@ class NodeArena {
     size_t total_size = 0;
     size_t max_alignment = 1;
 
-    // First pass: calculate total size and max alignment
+    // For APPEND, we always need space for the ArrayRef slot
     for (const auto& [field_idx, new_value] : field_updates) {
       if (field_idx >= layout->get_fields().size()) {
         return arrow::Status::IndexError("Field index out of bounds");
       }
 
-      if (!new_value.is_null()) {  // NULL uses nullptr sentinel (no allocation)
-        const FieldLayout& field_layout = layout->get_fields()[field_idx];
+      const FieldLayout& field_layout = layout->get_fields()[field_idx];
+      if (update_type == UpdateType::APPEND || !new_value.is_null()) {
         total_size += field_layout.size;
         max_alignment = std::max(max_alignment, field_layout.alignment);
       }
     }
 
-    // Batch allocate memory for all non-null fields
+    // Batch allocate memory for all non-null fields.
+    // Zero-init so that write_value_to_memory's copy assignment on
+    // StringRef/ArrayRef slots sees null objects (release() is a no-op on
+    // null).
     char* batch_memory = nullptr;
     if (total_size > 0) {
       batch_memory = static_cast<char*>(
@@ -579,6 +588,7 @@ class NodeArena {
         return arrow::Status::OutOfMemory(
             "Failed to batch allocate field storage");
       }
+      std::memset(batch_memory, 0, total_size);
     }
 
     // Second pass: write values and assign pointers
@@ -586,26 +596,38 @@ class NodeArena {
     for (const auto& [field_idx, new_value] : field_updates) {
       const FieldLayout& field_layout = layout->get_fields()[field_idx];
 
-      // Handle NULL: use nullptr sentinel
-      if (new_value.is_null()) {
+      // Handle NULL SET: use nullptr sentinel
+      if (update_type == UpdateType::SET && new_value.is_null()) {
         new_version_info->updated_fields[field_idx] = nullptr;
-        continue;  // Skip batch_memory usage for NULL fields
+        continue;
       }
 
-      // At this point, field is non-NULL, so batch_memory must be allocated
-      // (because total_size > 0 when any field is non-NULL)
       assert(batch_memory != nullptr &&
              "Batch memory must be allocated for non-null fields");
 
-      // Prepare value (convert strings to StringRef)
       Value storage_value = new_value;
-      if (new_value.type() == ValueType::STRING) {
-        const StringRef str_ref =
-            string_arena_->store_string_auto(new_value.as_string());
-        storage_value = Value{str_ref, field_layout.type};
+
+      if (update_type == UpdateType::APPEND) {
+        ARROW_ASSIGN_OR_RAISE(storage_value,
+                              prepare_append_value(current_handle, layout,
+                                                   field_layout, new_value));
+      } else {
+        // SET: convert raw types to arena-backed refs
+        if (new_value.type() == ValueType::STRING &&
+            new_value.holds_std_string()) {
+          ARROW_ASSIGN_OR_RAISE(
+              StringRef str_ref,
+              string_arena_->store_string_auto(new_value.as_string()));
+          storage_value = Value{str_ref, field_layout.type};
+        } else if (new_value.type() == ValueType::ARRAY &&
+                   new_value.holds_raw_array()) {
+          ARROW_ASSIGN_OR_RAISE(ArrayRef arr_ref,
+                                store_raw_array(field_layout.type_desc,
+                                                new_value.as_raw_array()));
+          storage_value = Value{std::move(arr_ref)};
+        }
       }
 
-      // Use batch-allocated memory (safe because batch_memory != nullptr here)
       char* field_storage = batch_memory + offset;
       offset += field_layout.size;
 
@@ -624,18 +646,87 @@ class NodeArena {
   }
 
   /**
+   * Prepare a Value for the APPEND operation in versioned path.
+   * Reads the current ArrayRef (from version chain or base node),
+   * copies it (COW), appends the new element(s), and returns the new ArrayRef.
+   */
+  arrow::Result<Value> prepare_append_value(
+      const NodeHandle& handle, const std::shared_ptr<SchemaLayout>& layout,
+      const FieldLayout& field_layout, const Value& new_value) {
+    if (!is_array_type(field_layout.type)) {
+      return arrow::Status::TypeError(
+          "APPEND is only valid for array fields, got: ",
+          tundradb::to_string(field_layout.type));
+    }
+
+    // Read current ArrayRef from the version chain or base node
+    ArrayRef current_ref;
+    if (handle.is_versioned()) {
+      auto [found, ptr] = get_field_ptr_from_version_chain(handle.version_info_,
+                                                           field_layout.index);
+      if (found && ptr) {
+        current_ref = *reinterpret_cast<const ArrayRef*>(ptr);
+      } else if (!found) {
+        const char* base_ptr = layout->get_field_value_ptr(
+            static_cast<const char*>(handle.ptr), field_layout.index);
+        if (base_ptr) {
+          current_ref = *reinterpret_cast<const ArrayRef*>(base_ptr);
+        }
+      }
+    }
+
+    if (new_value.holds_raw_array()) {
+      const auto& elems = new_value.as_raw_array();
+      if (elems.empty()) {
+        if (current_ref.is_null()) return Value{ArrayRef{}};
+        ARROW_ASSIGN_OR_RAISE(ArrayRef copy, array_arena_->copy(current_ref));
+        return Value{std::move(copy)};
+      }
+      if (current_ref.is_null()) {
+        ARROW_ASSIGN_OR_RAISE(ArrayRef arr_ref,
+                              store_raw_array(field_layout.type_desc, elems));
+        return Value{std::move(arr_ref)};
+      }
+      const auto n = static_cast<uint32_t>(elems.size());
+      ARROW_ASSIGN_OR_RAISE(
+          ArrayRef new_ref,
+          array_arena_->copy(current_ref, grow_for_append(current_ref, n)));
+      for (const auto& elem : elems) {
+        ARROW_RETURN_NOT_OK(
+            append_single_element(new_ref, field_layout.type_desc, elem));
+      }
+      return Value{std::move(new_ref)};
+    }
+
+    // Single element
+    if (current_ref.is_null()) {
+      const std::vector<Value> elems = {new_value};
+      ARROW_ASSIGN_OR_RAISE(ArrayRef arr_ref,
+                            store_raw_array(field_layout.type_desc, elems));
+      return Value{std::move(arr_ref)};
+    }
+    ARROW_ASSIGN_OR_RAISE(
+        ArrayRef new_ref,
+        array_arena_->copy(current_ref, grow_for_append(current_ref, 1)));
+    ARROW_RETURN_NOT_OK(
+        append_single_element(new_ref, field_layout.type_desc, new_value));
+    return Value{std::move(new_ref)};
+  }
+
+  /**
    * Set field in v0 (initial population).
    * Writes to base node without creating versions.
    */
-  bool set_field_value_v0(NodeHandle& handle,
-                          const std::shared_ptr<SchemaLayout>& layout,
-                          const std::shared_ptr<Field>& field,
-                          const Value& value) {
+  arrow::Status set_field_value_v0(NodeHandle& handle,
+                                   const std::shared_ptr<SchemaLayout>& layout,
+                                   const std::shared_ptr<Field>& field,
+                                   const Value& value) {
     assert(!handle.is_null());
 
     const FieldLayout* field_layout = layout->get_field_layout(field);
     if (!field_layout) {
-      return false;
+      return arrow::Status::Invalid(
+          "set_field_value_v0: field not found in layout");
     }
 
     // Write directly to base node
@@ -646,56 +737,31 @@ class NodeArena {
    * Set field value.
    * Creates new version if versioning enabled, direct write otherwise.
    */
-  bool set_field_value(NodeHandle& handle,
-                       const std::shared_ptr<SchemaLayout>& layout,
-                       const std::shared_ptr<Field>& field,
-                       const Value& value) {
+  arrow::Status set_field_value(NodeHandle& handle,
+                                const std::shared_ptr<SchemaLayout>& layout,
+                                const std::shared_ptr<Field>& field,
+                                const Value& value,
+                                UpdateType update_type = UpdateType::SET) {
     assert(!handle.is_null());
 
     const FieldLayout* field_layout = layout->get_field_layout(field);
     if (!field_layout) {
-      return false;  // Invalid field
+      return arrow::Status::Invalid(
+          "set_field_value: field not found in layout");
     }
 
     // VERSIONED PATH: Create a new version
     if (versioning_enabled_ && handle.is_versioned()) {
-      auto result =
-          create_new_version(handle, layout, field_layout->index, value);
-      return result.ok() && result.ValueOrDie();
+      const std::vector<std::pair<uint16_t, Value>> updates = {
+          {field_layout->index, value}};
+      ARROW_RETURN_NOT_OK(
+          update_fields_by_index(handle, layout, updates, update_type));
+      return arrow::Status::OK();
     }
 
-    // ========================================================================
-    // NON-VERSIONED PATH: Direct write (in-place update)
-    // ========================================================================
-
-    // If the field currently contains a string, deallocate it first
-    if (is_string_type(field_layout->type) &&
-        is_field_set(static_cast<char*>(handle.ptr), field_layout->index)) {
-      const Value old_value = layout->get_field_value(
-          static_cast<char*>(handle.ptr), *field_layout);
-      if (!old_value.is_null() && old_value.type() != ValueType::NA) {
-        try {
-          const StringRef& old_str_ref = old_value.as_string_ref();
-          if (!old_str_ref.is_null()) {
-            string_arena_->mark_for_deletion(old_str_ref);
-          }
-        } catch (...) {
-          // Old value wasn't a StringRef, ignore
-        }
-      }
-    }
-
-    // Handle string storage
-    if (value.type() == ValueType::STRING) {
-      const std::string& str_content = value.as_string();
-      const StringRef str_ref = string_arena_->store_string_auto(str_content);
-      return layout->set_field_value(static_cast<char*>(handle.ptr),
-                                     *field_layout,
-                                     Value{str_ref, field_layout->type});
-    } else {
-      return layout->set_field_value(static_cast<char*>(handle.ptr),
-                                     *field_layout, value);
-    }
+    // NON-VERSIONED PATH: direct write via shared implementation
+    return set_field_value_internal(handle.ptr, layout, field_layout, value,
+                                    update_type);
   }
 
   /** Reset arenas (keeps chunks). */
@@ -712,6 +778,9 @@ class NodeArena {
 
   /** Get string arena. */
   StringArena* get_string_arena() const { return string_arena_.get(); }
+
+  /** Get array arena. */
+  ArrayArena* get_array_arena() const { return array_arena_.get(); }
 
   // Statistics and getters
   size_t get_total_allocated() const {
@@ -791,11 +860,15 @@ class NodeArena {
     return Clock::instance().now_nanos();
   }
 
-  /** Write field directly to node memory (handles strings). */
-  bool set_field_value_internal(void* node_ptr,
-                                const std::shared_ptr<SchemaLayout>& layout,
-                                const FieldLayout* field_layout,
-                                const Value& value) const {
+  /** Write field directly to node memory (handles strings/arrays). */
+  arrow::Status set_field_value_internal(
+      void* node_ptr, const std::shared_ptr<SchemaLayout>& layout,
+      const FieldLayout* field_layout, const Value& value,
+      UpdateType update_type = UpdateType::SET) {
+    if (update_type == UpdateType::APPEND) {
+      return append_to_array_field(node_ptr, layout, field_layout, value);
+    }
+
     // If the field currently contains a string, deallocate it first
     if (is_string_type(field_layout->type) &&
         is_field_set(static_cast<char*>(node_ptr), field_layout->index)) {
@@ -813,16 +886,174 @@ class NodeArena {
       }
     }
 
-    // Handle string storage
-    if (value.type() == ValueType::STRING) {
-      const std::string& str_content = value.as_string();
-      const StringRef str_ref = string_arena_->store_string_auto(str_content);
-      return layout->set_field_value(static_cast<char*>(node_ptr),
-                                     *field_layout,
-                                     Value{str_ref, field_layout->type});
+    // If the field currently contains an array, mark for deletion
+    if (is_array_type(field_layout->type) &&
+        is_field_set(static_cast<char*>(node_ptr), field_layout->index)) {
+      Value old_value =
+          layout->get_field_value(static_cast<char*>(node_ptr), *field_layout);
+      if (!old_value.is_null() && old_value.holds_array_ref()) {
+        const ArrayRef& old_arr_ref = old_value.as_array_ref();
+        if (!old_arr_ref.is_null()) {
+          array_arena_->mark_for_deletion(old_arr_ref);
+        }
+      }
     }
-    return layout->set_field_value(static_cast<char*>(node_ptr), *field_layout,
-                                   value);
+
+    // Handle string storage: std::string -> StringRef via arena
+    if (value.type() == ValueType::STRING && value.holds_std_string()) {
+      const std::string& str_content = value.as_string();
+      ARROW_ASSIGN_OR_RAISE(StringRef str_ref,
+                            string_arena_->store_string_auto(str_content));
+      if (!layout->set_field_value(static_cast<char*>(node_ptr), *field_layout,
+                                   Value{str_ref, field_layout->type})) {
+        return arrow::Status::Invalid("Failed to write string field value");
+      }
+      return arrow::Status::OK();
+    }
+
+    // Handle array storage: std::vector<Value> -> ArrayRef via arena
+    if (value.type() == ValueType::ARRAY && value.holds_raw_array()) {
+      ARROW_ASSIGN_OR_RAISE(
+          ArrayRef arr_ref,
+          store_raw_array(field_layout->type_desc, value.as_raw_array()));
+      if (!layout->set_field_value(static_cast<char*>(node_ptr), *field_layout,
+                                   Value{std::move(arr_ref)})) {
+        return arrow::Status::Invalid("Failed to write array field value");
+      }
+      return arrow::Status::OK();
+    }
+
+    // Value already holds arena-backed ref (StringRef / ArrayRef) or primitive
+    if (!layout->set_field_value(static_cast<char*>(node_ptr), *field_layout,
+                                 value)) {
+      return arrow::Status::Invalid("Failed to write field value");
+    }
+    return arrow::Status::OK();
+  }
+
+  /**
+   * APPEND implementation for array fields (non-versioned path).
+   *
+   * Reads the current ArrayRef, copies it (COW), appends the new element(s),
+   * marks the old array for deletion, and writes the new ref back.
+   */
+  arrow::Status append_to_array_field(
+      void* node_ptr, const std::shared_ptr<SchemaLayout>& layout,
+      const FieldLayout* field_layout, const Value& value) {
+    if (!is_array_type(field_layout->type)) {
+      return arrow::Status::TypeError(
+          "APPEND is only valid for array fields, got: ",
+          tundradb::to_string(field_layout->type));
+    }
+
+    auto* base = static_cast<char*>(node_ptr);
+    const bool field_is_set = is_field_set(base, field_layout->index);
+
+    ArrayRef current_ref;
+    if (field_is_set) {
+      Value old_value = layout->get_field_value(base, *field_layout);
+      if (!old_value.is_null() && old_value.holds_array_ref()) {
+        current_ref = old_value.as_array_ref();
+      }
+    }
+
+    if (value.holds_raw_array()) {
+      const auto& elems = value.as_raw_array();
+      if (elems.empty()) return arrow::Status::OK();
+
+      ArrayRef new_ref;
+      if (current_ref.is_null()) {
+        ARROW_ASSIGN_OR_RAISE(new_ref,
+                              store_raw_array(field_layout->type_desc, elems));
+      } else {
+        const auto n = static_cast<uint32_t>(elems.size());
+        ARROW_ASSIGN_OR_RAISE(
+            new_ref,
+            array_arena_->copy(current_ref, grow_for_append(current_ref, n)));
+        for (const auto& elem : elems) {
+          ARROW_RETURN_NOT_OK(
+              append_single_element(new_ref, field_layout->type_desc, elem));
+        }
+        array_arena_->mark_for_deletion(current_ref);
+      }
+
+      if (!layout->set_field_value(base, *field_layout,
+                                   Value{std::move(new_ref)})) {
+        return arrow::Status::Invalid(
+            "Failed to write array field after APPEND");
+      }
+      return arrow::Status::OK();
+    }
+
+    // Single element append
+    if (current_ref.is_null()) {
+      const std::vector<Value> elems = {value};
+      ARROW_ASSIGN_OR_RAISE(ArrayRef new_ref,
+                            store_raw_array(field_layout->type_desc, elems));
+      if (!layout->set_field_value(base, *field_layout,
+                                   Value{std::move(new_ref)})) {
+        return arrow::Status::Invalid(
+            "Failed to write array field after APPEND");
+      }
+      return arrow::Status::OK();
+    }
+
+    ARROW_ASSIGN_OR_RAISE(
+        ArrayRef new_ref,
+        array_arena_->copy(current_ref, grow_for_append(current_ref, 1)));
+    ARROW_RETURN_NOT_OK(
+        append_single_element(new_ref, field_layout->type_desc, value));
+    array_arena_->mark_for_deletion(current_ref);
+
+    if (!layout->set_field_value(base, *field_layout,
+                                 Value{std::move(new_ref)})) {
+      return arrow::Status::Invalid("Failed to write array field after APPEND");
+    }
+    return arrow::Status::OK();
+  }
+
+  /**
+   * How many extra slots copy() should pre-allocate so that the
+   * subsequent append() calls won't trigger a second reallocation.
+   * Returns 0 when the array already has enough spare capacity.
+   */
+  static uint32_t grow_for_append(const ArrayRef& ref, uint32_t n) {
+    const uint32_t spare = ref.capacity() - ref.length();
+    if (spare >= n) return 0;
+    return n - spare;
+  }
+
+  /** Append a single Value element to an ArrayRef via the arena. */
+  arrow::Status append_single_element(ArrayRef& ref,
+                                      const TypeDescriptor& type_desc,
+                                      const Value& elem) {
+    switch (type_desc.element_type) {
+      case ValueType::INT32: {
+        int32_t v = elem.as_int32();
+        return array_arena_->append(ref, &v);
+      }
+      case ValueType::INT64: {
+        int64_t v = elem.as_int64();
+        return array_arena_->append(ref, &v);
+      }
+      case ValueType::DOUBLE: {
+        double v = elem.as_double();
+        return array_arena_->append(ref, &v);
+      }
+      case ValueType::BOOL: {
+        bool v = elem.as_bool();
+        return array_arena_->append(ref, &v);
+      }
+      case ValueType::STRING: {
+        ARROW_ASSIGN_OR_RAISE(
+            StringRef sr, string_arena_->store_string_auto(elem.as_string()));
+        return array_arena_->append(ref, &sr);
+      }
+      default:
+        return arrow::Status::NotImplemented(
+            "APPEND: unsupported element type: ",
+            tundradb::to_string(type_desc.element_type));
+    }
   }
 
   /** Traverse the version chain to find field pointer. */
@@ -881,14 +1112,70 @@ class NodeArena {
         *reinterpret_cast<StringRef*>(ptr) = value.as_string_ref();
         return true;
 
+      case ValueType::ARRAY:
+        if (value.type() != ValueType::ARRAY) return false;
+        *reinterpret_cast<ArrayRef*>(ptr) = value.as_array_ref();
+        return true;
+
       default:
         return false;
     }
   }
 
+  /**
+   * Convert a raw array (std::vector<Value>) to an arena-backed ArrayRef.
+   * Mirrors what string_arena_->store_string_auto() does for strings.
+   *
+   * @param type_desc  Field's TypeDescriptor (carries element_type)
+   * @param elements   Raw element values
+   * @return Ok(ArrayRef) or Error with reason (e.g. allocation failure)
+   */
+  arrow::Result<ArrayRef> store_raw_array(const TypeDescriptor& type_desc,
+                                          const std::vector<Value>& elements) {
+    const ValueType elem_type = type_desc.element_type;
+    const auto count = static_cast<uint32_t>(elements.size());
+
+    uint32_t capacity = count;
+    if (type_desc.is_fixed_size_array() && type_desc.fixed_size > count) {
+      capacity = type_desc.fixed_size;
+    }
+
+    ARROW_ASSIGN_OR_RAISE(ArrayRef ref,
+                          array_arena_->allocate(elem_type, capacity));
+
+    // Empty array: allocate(0) returns null ArrayRef; nothing to fill
+    if (ref.is_null()) {
+      return ref;
+    }
+
+    const size_t elem_sz = get_type_size(elem_type);
+    auto* header = reinterpret_cast<ArrayRef::ArrayHeader*>(
+        ref.data() - ArrayRef::HEADER_SIZE);
+
+    for (uint32_t i = 0; i < count; ++i) {
+      char* dest = ref.mutable_element_ptr(i);
+      const Value& elem = elements[i];
+
+      // For string elements, store via string arena first
+      if (is_string_type(elem_type) && elem.holds_std_string()) {
+        ARROW_ASSIGN_OR_RAISE(
+            StringRef str_ref,
+            string_arena_->store_string_auto(elem.as_string()));
+        *reinterpret_cast<StringRef*>(dest) = std::move(str_ref);
+      } else {
+        // Write primitive or pre-allocated ref directly
+        write_value_to_memory(dest, elem_type, elem);
+      }
+    }
+
+    header->length = count;
+    return ref;
+  }
+
   std::unique_ptr<MemArena> mem_arena_;
   std::shared_ptr<LayoutRegistry> layout_registry_;
   std::unique_ptr<StringArena> string_arena_;
+  std::unique_ptr<ArrayArena> array_arena_;
 
   // Versioning (optional)
   bool versioning_enabled_;

@@ -6,47 +6,65 @@
 
 namespace tundradb {
 
-arrow::Result<Field> Field::from_arrow(
-    const std::shared_ptr<arrow::Field> &field) {
-  ValueType type;
-
-  switch (field->type()->id()) {
+/// Helper: convert an Arrow element DataType to our ValueType.
+static arrow::Result<ValueType> arrow_elem_to_value_type(
+    const std::shared_ptr<arrow::DataType> &dt) {
+  switch (dt->id()) {
     case arrow::Type::BOOL:
-      type = ValueType::BOOL;
-      break;
+      return ValueType::BOOL;
     case arrow::Type::INT8:
     case arrow::Type::INT16:
     case arrow::Type::INT32:
-      type = ValueType::INT32;
-      break;
+      return ValueType::INT32;
     case arrow::Type::INT64:
     case arrow::Type::UINT8:
     case arrow::Type::UINT16:
     case arrow::Type::UINT32:
     case arrow::Type::UINT64:
-      type = ValueType::INT64;
-      break;
+      return ValueType::INT64;
     case arrow::Type::FLOAT:
-      type = ValueType::FLOAT;
-      break;
+      return ValueType::FLOAT;
     case arrow::Type::DOUBLE:
-      type = ValueType::DOUBLE;
-      break;
+      return ValueType::DOUBLE;
     case arrow::Type::STRING:
     case arrow::Type::LARGE_STRING:
-      type = ValueType::STRING;
-      break;
+      return ValueType::STRING;
     default:
-      return arrow::Status::NotImplemented("Unsupported Arrow type: ",
-                                           field->type()->ToString());
+      return arrow::Status::NotImplemented("Unsupported Arrow element type: ",
+                                           dt->ToString());
+  }
+}
+
+arrow::Result<Field> Field::from_arrow(
+    const std::shared_ptr<arrow::Field> &field) {
+  const auto &dt = field->type();
+
+  // Handle list / fixed_size_list -> ARRAY
+  if (dt->id() == arrow::Type::LIST) {
+    auto list_type = std::static_pointer_cast<arrow::ListType>(dt);
+    ARROW_ASSIGN_OR_RAISE(auto elem_vt,
+                          arrow_elem_to_value_type(list_type->value_type()));
+    return Field(field->name(), TypeDescriptor::array(elem_vt),
+                 field->nullable());
+  }
+  if (dt->id() == arrow::Type::FIXED_SIZE_LIST) {
+    auto fsl_type = std::static_pointer_cast<arrow::FixedSizeListType>(dt);
+    ARROW_ASSIGN_OR_RAISE(auto elem_vt,
+                          arrow_elem_to_value_type(fsl_type->value_type()));
+    return Field(field->name(),
+                 TypeDescriptor::array(elem_vt, fsl_type->list_size()),
+                 field->nullable());
   }
 
-  return Field(field->name(), type, field->nullable());
+  // Scalar types
+  ARROW_ASSIGN_OR_RAISE(auto vt, arrow_elem_to_value_type(dt));
+  return Field(field->name(), vt, field->nullable());
 }
 
 [[nodiscard]] arrow::Result<std::shared_ptr<arrow::Field>> Field::to_arrow()
     const {
-  switch (type_) {
+  const auto base = type_desc_.base_type;
+  switch (base) {
     case ValueType::BOOL:
       return arrow::field(name_, arrow::boolean());
     case ValueType::INT32:
@@ -58,10 +76,50 @@ arrow::Result<Field> Field::from_arrow(
     case ValueType::DOUBLE:
       return arrow::field(name_, arrow::float64());
     case ValueType::STRING:
+    case ValueType::FIXED_STRING16:
+    case ValueType::FIXED_STRING32:
+    case ValueType::FIXED_STRING64:
       return arrow::field(name_, arrow::utf8());
+    case ValueType::ARRAY: {
+      // Convert element type to Arrow, then wrap in list
+      auto elem_arrow = TypeDescriptor{{type_desc_.element_type}};
+      // Map element ValueType to arrow type
+      std::shared_ptr<arrow::DataType> elem_dt;
+      switch (type_desc_.element_type) {
+        case ValueType::INT32:
+          elem_dt = arrow::int32();
+          break;
+        case ValueType::INT64:
+          elem_dt = arrow::int64();
+          break;
+        case ValueType::FLOAT:
+          elem_dt = arrow::float32();
+          break;
+        case ValueType::DOUBLE:
+          elem_dt = arrow::float64();
+          break;
+        case ValueType::BOOL:
+          elem_dt = arrow::boolean();
+          break;
+        case ValueType::STRING:
+          elem_dt = arrow::utf8();
+          break;
+        default:
+          return arrow::Status::NotImplemented(
+              "Unsupported array element type: ",
+              static_cast<int>(type_desc_.element_type));
+      }
+      if (type_desc_.fixed_size > 0) {
+        return arrow::field(name_,
+                            arrow::fixed_size_list(
+                                arrow::field("item", elem_dt),
+                                static_cast<int32_t>(type_desc_.fixed_size)));
+      }
+      return arrow::field(name_, arrow::list(arrow::field("item", elem_dt)));
+    }
     default:
       return arrow::Status::NotImplemented("Unsupported ValueType: ",
-                                           static_cast<int>(type_));
+                                           static_cast<int>(base));
   }
 }
 

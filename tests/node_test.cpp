@@ -34,6 +34,16 @@ class NodeTest : public ::testing::Test {
     auto result = schema_registry_->create("User", test_schema_);
     ASSERT_TRUE(result.ok());
 
+    // Register a schema with array fields for array tests
+    auto array_fields = std::vector<std::shared_ptr<arrow::Field>>{
+        arrow::field("name", arrow::utf8(), false),
+        arrow::field("tags", arrow::list(arrow::field("item", arrow::utf8())),
+                     true),
+        arrow::field("scores",
+                     arrow::list(arrow::field("item", arrow::int32())), true)};
+    auto array_schema = arrow::schema(array_fields);
+    ASSERT_TRUE(schema_registry_->create("UserWithArrays", array_schema).ok());
+
     // Create node manager
     node_manager_ = std::make_unique<NodeManager>(schema_registry_);
   }
@@ -603,4 +613,182 @@ TEST_F(NodeTest, MultipleNodesSharedString) {
 
   Logger::get_instance().debug(
       "=== MultipleNodesSharedString Test Complete ===");
+}
+
+// ---------------------------------------------------------------------------
+// Array field tests (schema: UserWithArrays with name, tags[], scores[])
+// ---------------------------------------------------------------------------
+
+// Test creating a node with array fields (list of strings, list of int32)
+TEST_F(NodeTest, NodeManagerCreateNodeWithArray) {
+  std::unordered_map<std::string, Value> node_data = {
+      {"name", Value{"Alice"}},
+      {"tags", Value{std::vector<Value>{Value{"a"}, Value{"b"}, Value{"c"}}}},
+      {"scores", Value{std::vector<Value>{Value{static_cast<int32_t>(10)},
+                                          Value{static_cast<int32_t>(20)},
+                                          Value{static_cast<int32_t>(30)}}}}};
+
+  auto node_result = node_manager_->create_node("UserWithArrays", node_data);
+  ASSERT_TRUE(node_result.ok())
+      << "Failed to create node: " << node_result.status().ToString();
+
+  auto node = node_result.ValueOrDie();
+  ASSERT_NE(node, nullptr);
+  EXPECT_EQ(node->schema_name, "UserWithArrays");
+  EXPECT_GE(node->id, 0);
+}
+
+// Test get_value for array field: storage returns arena-backed ArrayRef
+TEST_F(NodeTest, NodeGetValueArray) {
+  std::vector<Value> tags = {Value{"x"}, Value{"y"}, Value{"z"}};
+  std::unordered_map<std::string, Value> node_data = {
+      {"name", Value{"Bob"}},
+      {"tags", Value{tags}},
+  };
+
+  auto node_result = node_manager_->create_node("UserWithArrays", node_data);
+  ASSERT_TRUE(node_result.ok());
+  auto node = node_result.ValueOrDie();
+
+  auto tags_result = node->get_value("tags");
+  ASSERT_TRUE(tags_result.ok())
+      << "Failed to get tags: " << tags_result.status().ToString();
+  const Value& tags_value = tags_result.ValueOrDie();
+
+  EXPECT_EQ(tags_value.type(), ValueType::ARRAY);
+  EXPECT_TRUE(tags_value.holds_array_ref())
+      << "Arena should store array as ArrayRef";
+  const ArrayRef& arr = tags_value.as_array_ref();
+  EXPECT_FALSE(arr.is_null());
+  EXPECT_EQ(arr.length(), 3u);
+
+  // to_string() formats as "[x, y, z]"
+  std::string str = tags_value.to_string();
+  EXPECT_EQ(str, "[x, y, z]");
+}
+
+// Test get_value for int32 array field
+TEST_F(NodeTest, NodeGetValueInt32Array) {
+  std::vector<Value> scores = {
+      Value{static_cast<int32_t>(1)},
+      Value{static_cast<int32_t>(2)},
+      Value{static_cast<int32_t>(3)},
+  };
+  std::unordered_map<std::string, Value> node_data = {
+      {"name", Value{"Carol"}},
+      {"scores", Value{scores}},
+  };
+
+  auto node_result = node_manager_->create_node("UserWithArrays", node_data);
+  ASSERT_TRUE(node_result.ok());
+  auto node = node_result.ValueOrDie();
+
+  auto scores_result = node->get_value("scores");
+  ASSERT_TRUE(scores_result.ok());
+  const Value& scores_value = scores_result.ValueOrDie();
+
+  EXPECT_EQ(scores_value.type(), ValueType::ARRAY);
+  EXPECT_TRUE(scores_value.holds_array_ref());
+  const ArrayRef& arr = scores_value.as_array_ref();
+  EXPECT_EQ(arr.length(), 3u);
+  EXPECT_EQ(scores_value.to_string(), "[1, 2, 3]");
+}
+
+// Test set_value for array field (replace entire array)
+TEST_F(NodeTest, NodeSetValueArray) {
+  std::unordered_map<std::string, Value> node_data = {
+      {"name", Value{"Dave"}},
+      {"tags", Value{std::vector<Value>{Value{"old1"}, Value{"old2"}}}},
+  };
+
+  auto node_result = node_manager_->create_node("UserWithArrays", node_data);
+  ASSERT_TRUE(node_result.ok());
+  auto node = node_result.ValueOrDie();
+
+  auto get_before = node->get_value("tags");
+  ASSERT_TRUE(get_before.ok());
+  EXPECT_EQ(get_before.ValueOrDie().to_string(), "[old1, old2]");
+
+  std::vector<Value> new_tags = {Value{"new1"}, Value{"new2"}, Value{"new3"}};
+  auto set_result = node->set_value("tags", Value{new_tags});
+  ASSERT_TRUE(set_result.ok())
+      << "Failed to set tags: " << set_result.status().ToString();
+
+  auto get_after = node->get_value("tags");
+  ASSERT_TRUE(get_after.ok());
+  EXPECT_EQ(get_after.ValueOrDie().to_string(), "[new1, new2, new3]");
+}
+
+// Test node with empty array
+TEST_F(NodeTest, NodeArrayEmpty) {
+  std::unordered_map<std::string, Value> node_data = {
+      {"name", Value{"Eve"}},
+      {"tags", Value{std::vector<Value>{}}},
+  };
+
+  auto node_result = node_manager_->create_node("UserWithArrays", node_data);
+  ASSERT_TRUE(node_result.ok());
+  auto node = node_result.ValueOrDie();
+
+  auto tags_result = node->get_value("tags");
+  ASSERT_TRUE(tags_result.ok());
+  const Value& tags_value = tags_result.ValueOrDie();
+
+  EXPECT_EQ(tags_value.type(), ValueType::ARRAY);
+  EXPECT_TRUE(tags_value.holds_array_ref());
+  EXPECT_TRUE(tags_value.as_array_ref().empty());
+  EXPECT_EQ(tags_value.as_array_ref().length(), 0u);
+  EXPECT_EQ(tags_value.to_string(), "[]");
+}
+
+// Test nullable array field omitted (null)
+TEST_F(NodeTest, NodeArrayNullableOmitted) {
+  std::unordered_map<std::string, Value> node_data = {
+      {"name", Value{"Frank"}},
+      // tags and scores not provided -> null
+  };
+
+  auto node_result = node_manager_->create_node("UserWithArrays", node_data);
+  ASSERT_TRUE(node_result.ok());
+  auto node = node_result.ValueOrDie();
+
+  auto tags_result = node->get_value("tags");
+  ASSERT_TRUE(tags_result.ok());
+  EXPECT_TRUE(tags_result.ValueOrDie().is_null());
+
+  auto scores_result = node->get_value("scores");
+  ASSERT_TRUE(scores_result.ok());
+  EXPECT_TRUE(scores_result.ValueOrDie().is_null());
+}
+
+// Test array storage: verify ArrayRef ref count and element access
+TEST_F(NodeTest, NodeArrayStorage) {
+  std::vector<Value> tags = {Value{"one"}, Value{"two"}};
+  std::unordered_map<std::string, Value> node_data = {
+      {"name", Value{"Grace"}},
+      {"tags", Value{tags}},
+  };
+
+  auto node_result = node_manager_->create_node("UserWithArrays", node_data);
+  ASSERT_TRUE(node_result.ok());
+  auto node = node_result.ValueOrDie();
+
+  auto tags_result = node->get_value("tags");
+  ASSERT_TRUE(tags_result.ok());
+  const Value& v = tags_result.ValueOrDie();
+
+  EXPECT_TRUE(v.holds_array_ref());
+  ArrayRef ref = v.as_array_ref();
+  EXPECT_GT(ref.get_ref_count(), 0);
+  EXPECT_FALSE(ref.is_marked_for_deletion());
+  EXPECT_EQ(ref.length(), 2u);
+  EXPECT_EQ(ref.elem_type(), ValueType::STRING);
+
+  // Read elements via Value::read_value_from_memory
+  auto elem0 =
+      Value::read_value_from_memory(ref.element_ptr(0), ref.elem_type());
+  auto elem1 =
+      Value::read_value_from_memory(ref.element_ptr(1), ref.elem_type());
+  EXPECT_EQ(elem0.to_string(), "one");
+  EXPECT_EQ(elem1.to_string(), "two");
 }

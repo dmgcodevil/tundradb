@@ -15,6 +15,7 @@
 #include <string>
 #include <unordered_set>
 
+#include "arrow_utils.hpp"
 #include "logger.hpp"
 #include "node.hpp"
 #include "query.hpp"
@@ -252,6 +253,14 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
       case arrow::Type::BOOL:
         builders.push_back(std::make_unique<arrow::BooleanBuilder>());
         break;
+      case arrow::Type::LIST:
+      case arrow::Type::FIXED_SIZE_LIST: {
+        std::unique_ptr<arrow::ArrayBuilder> list_builder;
+        ARROW_RETURN_NOT_OK(arrow::MakeBuilder(arrow::default_memory_pool(),
+                                               field->type(), &list_builder));
+        builders.push_back(std::move(list_builder));
+        break;
+      }
       default:
         return arrow::Status::NotImplemented("Unsupported type: ",
                                              field->type()->ToString());
@@ -319,6 +328,19 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
               ARROW_RETURN_NOT_OK(
                   dynamic_cast<arrow::StringBuilder*>(builders[i].get())
                       ->Append(str_ref.to_string()));
+              break;
+            }
+            case ValueType::ARRAY: {
+              const auto& arr_ref =
+                  *reinterpret_cast<const ArrayRef*>(value_ptr);
+              auto* list_builder =
+                  dynamic_cast<arrow::ListBuilder*>(builders[i].get());
+              if (!list_builder) {
+                return arrow::Status::Invalid(
+                    "Expected ListBuilder for array field: ", field->name());
+              }
+              ARROW_RETURN_NOT_OK(
+                  append_array_to_list_builder(arr_ref, list_builder));
               break;
             }
             default:

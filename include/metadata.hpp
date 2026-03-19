@@ -13,6 +13,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "logger.hpp"
 #include "schema.hpp"
+#include "type_descriptor.hpp"
 #include "types.hpp"
 
 using namespace std::string_literals;
@@ -20,15 +21,72 @@ using namespace std::string_literals;
 namespace tundradb {
 
 /**
- * @brief A simplified representation of a field schema
+ * @brief A simplified representation of a field schema.
+ *
+ * For non-array types, only `name`, `type`, `nullable` are meaningful.
+ * For ARRAY types, `element_type` and `fixed_size` carry the array parameters.
+ * Old JSON files without these fields will deserialize cleanly (defaults).
  */
 struct FieldMetadata {
   std::string name;
-  ValueType type;
+  ValueType type = ValueType::NA;
   bool nullable = true;
+  ValueType element_type = ValueType::NA;  // for ARRAY
+  uint32_t fixed_size = 0;                 // for ARRAY: 0=dynamic
+  uint32_t max_string_size = 0;            // for STRING: 0=unlimited
 
-  // Allow JSON serialization/deserialization
-  NLOHMANN_DEFINE_TYPE_INTRUSIVE(FieldMetadata, name, type, nullable)
+  /// Build a TypeDescriptor from this metadata.
+  [[nodiscard]] TypeDescriptor to_type_descriptor() const {
+    if (type == ValueType::ARRAY) {
+      return TypeDescriptor::array(element_type, fixed_size);
+    }
+    auto td = TypeDescriptor::from_value_type(type);
+    td.max_string_size = max_string_size;
+    return td;
+  }
+
+  /// Build FieldMetadata from a TypeDescriptor.
+  static FieldMetadata from_type_descriptor(const std::string &field_name,
+                                            const TypeDescriptor &td,
+                                            bool is_nullable = true) {
+    FieldMetadata fm;
+    fm.name = field_name;
+    fm.type = td.base_type;
+    fm.nullable = is_nullable;
+    fm.element_type = td.element_type;
+    fm.fixed_size = td.fixed_size;
+    fm.max_string_size = td.max_string_size;
+    return fm;
+  }
+
+  // Custom JSON: write all fields; on read, missing array params default to
+  // 0/NA
+  friend void to_json(nlohmann::json &j, const FieldMetadata &fm) {
+    j = nlohmann::json{
+        {"name", fm.name}, {"type", fm.type}, {"nullable", fm.nullable}};
+    if (fm.type == ValueType::ARRAY) {
+      j["element_type"] = fm.element_type;
+      j["fixed_size"] = fm.fixed_size;
+    }
+    if (fm.max_string_size > 0) {
+      j["max_string_size"] = fm.max_string_size;
+    }
+  }
+
+  friend void from_json(const nlohmann::json &j, FieldMetadata &fm) {
+    j.at("name").get_to(fm.name);
+    j.at("type").get_to(fm.type);
+    j.at("nullable").get_to(fm.nullable);
+    if (j.contains("element_type")) {
+      fm.element_type = j.at("element_type").get<ValueType>();
+    }
+    if (j.contains("fixed_size")) {
+      fm.fixed_size = j.at("fixed_size").get<uint32_t>();
+    }
+    if (j.contains("max_string_size")) {
+      fm.max_string_size = j.at("max_string_size").get<uint32_t>();
+    }
+  }
 };
 
 /**
@@ -44,7 +102,7 @@ struct SchemaMetadata {
 };
 
 static std::shared_ptr<Field> from_metadata(const FieldMetadata &metadata) {
-  return std::make_shared<Field>(metadata.name, metadata.type,
+  return std::make_shared<Field>(metadata.name, metadata.to_type_descriptor(),
                                  metadata.nullable);
 }
 
@@ -71,7 +129,8 @@ inline arrow::Result<FieldMetadata> ArrowFieldToMetadata(
   result.name = field->name();
   result.nullable = field->nullable();
 
-  switch (field->type()->id()) {
+  const auto &dt = field->type();
+  switch (dt->id()) {
     case arrow::Type::BOOL:
       result.type = ValueType::BOOL;
       break;
@@ -93,9 +152,31 @@ inline arrow::Result<FieldMetadata> ArrowFieldToMetadata(
     case arrow::Type::LARGE_STRING:
       result.type = ValueType::STRING;
       break;
+    case arrow::Type::LIST: {
+      auto list_type = std::static_pointer_cast<arrow::ListType>(dt);
+      // Recursively determine element type
+      FieldMetadata elem_meta;
+      elem_meta.name = "item";
+      elem_meta.nullable = list_type->value_field()->nullable();
+      auto elem_result = ArrowFieldToMetadata(list_type->value_field());
+      if (!elem_result.ok()) return elem_result.status();
+      result.type = ValueType::ARRAY;
+      result.element_type = elem_result.ValueOrDie().type;
+      result.fixed_size = 0;
+      break;
+    }
+    case arrow::Type::FIXED_SIZE_LIST: {
+      auto fsl_type = std::static_pointer_cast<arrow::FixedSizeListType>(dt);
+      auto elem_result = ArrowFieldToMetadata(fsl_type->value_field());
+      if (!elem_result.ok()) return elem_result.status();
+      result.type = ValueType::ARRAY;
+      result.element_type = elem_result.ValueOrDie().type;
+      result.fixed_size = static_cast<uint32_t>(fsl_type->list_size());
+      break;
+    }
     default:
       return arrow::Status::NotImplemented("Unsupported Arrow type: ",
-                                           field->type()->ToString());
+                                           dt->ToString());
   }
 
   return result;
@@ -108,26 +189,52 @@ inline arrow::Result<FieldMetadata> ArrowFieldToMetadata(
  * @return arrow::Result<std::shared_ptr<arrow::Field>> The resulting Arrow
  * field
  */
+/// Helper: map a scalar ValueType to an Arrow DataType.
+inline std::shared_ptr<arrow::DataType> scalar_vt_to_arrow(ValueType vt) {
+  switch (vt) {
+    case ValueType::BOOL:
+      return arrow::boolean();
+    case ValueType::INT32:
+      return arrow::int32();
+    case ValueType::INT64:
+      return arrow::int64();
+    case ValueType::FLOAT:
+      return arrow::float32();
+    case ValueType::DOUBLE:
+      return arrow::float64();
+    case ValueType::STRING:
+    case ValueType::FIXED_STRING16:
+    case ValueType::FIXED_STRING32:
+    case ValueType::FIXED_STRING64:
+      return arrow::utf8();
+    default:
+      return nullptr;
+  }
+}
+
 inline arrow::Result<std::shared_ptr<arrow::Field>> metadata_to_arrow_field(
     const FieldMetadata &metadata) {
   std::shared_ptr<arrow::DataType> type;
 
-  switch (metadata.type) {
-    case ValueType::BOOL:
-      type = arrow::boolean();
-      break;
-    case ValueType::INT64:
-      type = arrow::int64();
-      break;
-    case ValueType::DOUBLE:
-      type = arrow::float64();
-      break;
-    case ValueType::STRING:
-      type = arrow::utf8();
-      break;
-    default:
+  if (metadata.type == ValueType::ARRAY) {
+    const auto elem_dt = scalar_vt_to_arrow(metadata.element_type);
+    if (!elem_dt) {
+      return arrow::Status::NotImplemented(
+          "Unsupported array element type: ",
+          static_cast<int>(metadata.element_type));
+    }
+    if (metadata.fixed_size > 0) {
+      type = arrow::fixed_size_list(arrow::field("item", elem_dt),
+                                    static_cast<int32_t>(metadata.fixed_size));
+    } else {
+      type = arrow::list(arrow::field("item", elem_dt));
+    }
+  } else {
+    type = scalar_vt_to_arrow(metadata.type);
+    if (!type) {
       return arrow::Status::NotImplemented("Unsupported ValueType: ",
                                            static_cast<int>(metadata.type));
+    }
   }
 
   return arrow::field(metadata.name, type, metadata.nullable);

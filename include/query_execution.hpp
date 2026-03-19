@@ -99,7 +99,7 @@ class SchemaContext {
       : schema_registry_(std::move(registry)) {}
 
   /**
-   * @brief Registers a schema alias (e.g. "u" → "User").
+   * @brief Registers a schema alias (e.g. "u" -> "User").
    *
    * @param schema_ref The schema reference containing alias and schema name.
    * @return The resolved concrete schema name, or an error if unknown.
@@ -117,7 +117,7 @@ class SchemaContext {
   /** @brief Returns the underlying SchemaRegistry. */
   std::shared_ptr<SchemaRegistry> registry() const { return schema_registry_; }
 
-  /** @brief Returns all registered alias→schema mappings. */
+  /** @brief Returns all registered alias->schema mappings. */
   const std::unordered_map<std::string, std::string>& get_aliases() const {
     return aliases_;
   }
@@ -233,7 +233,7 @@ class GraphState {
     node_ids_[schema_ref.value()].erase(node_id);
   }
 
-  /** @brief Returns the outgoing connections map (const). schema → node_id →
+  /** @brief Returns the outgoing connections map (const). schema -> node_id ->
    * [connections]. */
   const llvm::StringMap<
       llvm::DenseMap<int64_t, llvm::SmallVector<GraphConnection, 4>>>&
@@ -241,7 +241,7 @@ class GraphState {
     return outgoing_;
   }
 
-  /** @brief Returns the incoming connections map (const). target_id →
+  /** @brief Returns the incoming connections map (const). target_id ->
    * [connections]. */
   const llvm::DenseMap<int64_t, llvm::SmallVector<GraphConnection, 4>>&
   incoming() const {
@@ -256,7 +256,7 @@ class GraphState {
   /** @brief Returns the connection object pool. */
   ConnectionPool& connection_pool() const { return connection_pool_; }
 
-  /** @brief Returns the full node-ID map (schema alias → ID set). */
+  /** @brief Returns the full node-ID map (schema alias -> ID set). */
   llvm::StringMap<llvm::DenseSet<int64_t>>& get_ids() { return node_ids_; }
 
   /** @overload */
@@ -264,8 +264,8 @@ class GraphState {
     return node_ids_;
   }
 
-  /** @brief Returns the outgoing connections map (mutable). schema → node_id →
-   * [connections]. */
+  /** @brief Returns the outgoing connections map (mutable). schema -> node_id
+   * -> [connections]. */
   llvm::StringMap<
       llvm::DenseMap<int64_t, llvm::SmallVector<GraphConnection, 4>>>&
   get_outgoing_map() {
@@ -349,7 +349,7 @@ class FieldIndexer {
     return it != field_name_to_index_.end() ? it->second : -1;
   }
 
-  /** @brief Returns the field-ID → name map (const). */
+  /** @brief Returns the field-ID -> name map (const). */
   const llvm::SmallDenseMap<int, std::string, 64>& field_id_to_name() const {
     return field_id_to_name_;
   }
@@ -362,7 +362,7 @@ class FieldIndexer {
     return fq_field_names_.contains(schema_alias);
   }
 
-  /** @brief Returns the schema → field-indices map (mutable). */
+  /** @brief Returns the schema -> field-indices map (mutable). */
   llvm::StringMap<std::vector<int>>& get_schema_field_indices() {
     return schema_field_indices_;
   }
@@ -371,7 +371,7 @@ class FieldIndexer {
     return schema_field_indices_;
   }
 
-  /** @brief Returns the field-ID → name map (mutable). */
+  /** @brief Returns the field-ID -> name map (mutable). */
   llvm::SmallDenseMap<int, std::string, 64>& get_field_id_to_name() {
     return field_id_to_name_;
   }
@@ -457,12 +457,12 @@ struct QueryState {
     return schemas.registry();
   }
 
-  /** @brief Returns all alias→schema mappings. */
+  /** @brief Returns all alias->schema mappings. */
   const std::unordered_map<std::string, std::string>& aliases() const {
     return schemas.get_aliases();
   }
 
-  /** @brief Returns the full schema→ID-set map (mutable). */
+  /** @brief Returns the full schema->ID-set map (mutable). */
   llvm::StringMap<llvm::DenseSet<int64_t>>& ids() { return graph.get_ids(); }
 
   /** @overload */
@@ -493,7 +493,7 @@ struct QueryState {
     return graph.incoming();
   }
 
-  /** @brief Returns the schema → field-indices map (mutable). */
+  /** @brief Returns the schema -> field-indices map (mutable). */
   llvm::StringMap<std::vector<int>>& schema_field_indices() {
     return fields.get_schema_field_indices();
   }
@@ -502,7 +502,7 @@ struct QueryState {
     return fields.get_schema_field_indices();
   }
 
-  /** @brief Returns the field-ID → name map (mutable). */
+  /** @brief Returns the field-ID -> name map (mutable). */
   llvm::SmallDenseMap<int, std::string, 64>& field_id_to_name() {
     return fields.get_field_id_to_name();
   }

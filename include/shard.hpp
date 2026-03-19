@@ -22,7 +22,7 @@ namespace tundradb {
 class TemporalContext;
 
 // =========================================================================
-// Shard — a contiguous range of nodes for one schema
+// Shard - a contiguous range of nodes for one schema
 // =========================================================================
 
 class Shard {
@@ -84,7 +84,7 @@ class Shard {
 };
 
 // =========================================================================
-// ShardManager — manages per-schema shard collections
+// ShardManager - manages per-schema shard collections
 // =========================================================================
 
 class ShardManager {

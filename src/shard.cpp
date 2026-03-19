@@ -19,7 +19,7 @@ Shard::Shard(int64_t id, int64_t index, size_t capacity, int64_t min_id,
       max_id(max_id),
       capacity(capacity),
       chunk_size(chunk_size),
-      schema_name(move(schema_name)) {}
+      schema_name(std::move(schema_name)) {}
 
 Shard::Shard(int64_t id, int64_t index, const DatabaseConfig &config,
              int64_t min_id, int64_t max_id, std::string schema_name,
