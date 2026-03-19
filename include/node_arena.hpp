@@ -341,11 +341,17 @@ class NodeArena {
         array_arena_(std::make_unique<ArrayArena>()),
         versioning_enabled_(enable_versioning),
         version_counter_(0) {
-    // Only allocate version arena if versioning is enabled
     if (versioning_enabled_) {
-      // Use FreeListArena for versions (supports individual deallocation)
-      // Default 4MB - expect more versions than base nodes
       version_arena_ = std::make_unique<FreeListArena>(4 * 1024 * 1024);
+    }
+  }
+
+  ~NodeArena() {
+    // VersionInfo objects are placement-new'd into version_arena_ memory.
+    // Their SmallDenseMap members may heap-allocate, so we must call
+    // destructors before the arena frees the underlying memory.
+    for (auto* vi : version_infos_) {
+      vi->~VersionInfo();
     }
   }
 
@@ -385,6 +391,7 @@ class NodeArena {
       // Construct base version (v0)
       uint64_t now = get_current_timestamp_ns();
       auto* version_info = new (version_info_memory) VersionInfo();
+      version_infos_.push_back(version_info);
       version_info->version_id = 0;
       version_info->valid_from = now;
       version_info->valid_to = std::numeric_limits<uint64_t>::max();
@@ -556,6 +563,7 @@ class NodeArena {
     VersionInfo* old_version_info = current_handle.version_info_;
     VersionInfo* new_version_info = new (version_info_memory)
         VersionInfo(new_version_id, now, old_version_info);
+    version_infos_.push_back(new_version_info);
 
     // ========================================================================
     // BATCH ALLOCATION: Calculate total memory needed for all fields
@@ -1181,6 +1189,9 @@ class NodeArena {
   bool versioning_enabled_;
   std::unique_ptr<FreeListArena> version_arena_;
   std::atomic<uint64_t> version_counter_;
+  // Tracks all placement-new'd VersionInfo objects so we can call their
+  // destructors (SmallDenseMap may heap-allocate on grow).
+  std::vector<VersionInfo*> version_infos_;
 };
 
 /** Factory functions for creating NodeArenas. */
