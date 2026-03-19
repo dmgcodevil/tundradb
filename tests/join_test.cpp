@@ -1563,23 +1563,20 @@ TEST(JoinTest, MultiPatternPathThroughFriends) {
     auto f_name_col = result_table_custom->GetColumnByName("f.name");
     auto c_name_col = result_table_custom->GetColumnByName("c.name");
 
-    auto u_name = std::static_pointer_cast<arrow::StringScalar>(
-                      u_name_col->GetScalar(i).ValueOrDie())
-                      ->view();
-    auto f_name = std::static_pointer_cast<arrow::StringScalar>(
-                      f_name_col->GetScalar(i).ValueOrDie())
-                      ->view();
-    auto c_name = std::static_pointer_cast<arrow::StringScalar>(
-                      c_name_col->GetScalar(i).ValueOrDie())
-                      ->view();
+    auto u_scalar = std::static_pointer_cast<arrow::StringScalar>(
+        u_name_col->GetScalar(i).ValueOrDie());
+    auto f_scalar = std::static_pointer_cast<arrow::StringScalar>(
+        f_name_col->GetScalar(i).ValueOrDie());
+    auto c_scalar = std::static_pointer_cast<arrow::StringScalar>(
+        c_name_col->GetScalar(i).ValueOrDie());
 
-    std::cout << "Row " << i << ": User=" << u_name << ", Friend=" << f_name
-              << ", Company=" << c_name << std::endl;
+    std::string u_name_str(u_scalar->view());
+    std::string f_name_str(f_scalar->view());
+    std::string c_name_str(c_scalar->view());
 
-    // Use case-insensitive comparison
-    std::string u_name_str(u_name);
-    std::string f_name_str(f_name);
-    std::string c_name_str(c_name);
+    std::cout << "Row " << i << ": User=" << u_name_str
+              << ", Friend=" << f_name_str << ", Company=" << c_name_str
+              << std::endl;
 
     // Convert to lowercase for case-insensitive comparison
     std::transform(u_name_str.begin(), u_name_str.end(), u_name_str.begin(),
@@ -1590,14 +1587,15 @@ TEST(JoinTest, MultiPatternPathThroughFriends) {
                    [](unsigned char c) { return std::tolower(c); });
 
     if ((u_name_str == "alex" && f_name_str == "bob" && c_name_str == "ibm") ||
-        (u_name == "Alex" && f_name == "Bob" && c_name == "IBM")) {
+        (u_name_str == "Alex" && f_name_str == "Bob" && c_name_str == "IBM")) {
       found_alex_bob_ibm = true;
       std::cout << "  ✓ Found Alex->Bob->IBM pattern" << std::endl;
     }
 
     if ((u_name_str == "bob" && f_name_str == "alex" &&
          c_name_str == "google") ||
-        (u_name == "Bob" && f_name == "Alex" && c_name == "Google")) {
+        (u_name_str == "Bob" && f_name_str == "Alex" &&
+         c_name_str == "Google")) {
       found_bob_alex_google = true;
       std::cout << "  ✓ Found Bob->Alex->Google pattern" << std::endl;
     }

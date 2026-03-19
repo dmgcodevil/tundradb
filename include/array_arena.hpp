@@ -80,6 +80,7 @@ class ArrayArena {
     char* data = static_cast<char*>(raw) + ArrayRef::HEADER_SIZE;
     zero_init_elements(data, elem_type, capacity);
 
+    active_allocs_.fetch_add(1, std::memory_order_relaxed);
     return ArrayRef{data, elem_type};
   }
 
@@ -124,6 +125,7 @@ class ArrayArena {
       zero_init_elements(data + elem_sz * count, elem_type, capacity - count);
     }
 
+    active_allocs_.fetch_add(1, std::memory_order_relaxed);
     return ArrayRef{data, elem_type};
   }
 
@@ -244,6 +246,8 @@ class ArrayArena {
 
     destruct_elements(data, elem_type, header->length);
 
+    active_allocs_.fetch_sub(1, std::memory_order_relaxed);
+
     std::lock_guard<std::mutex> lock(arena_mutex_);
     arena_->deallocate(header);
   }
@@ -251,6 +255,11 @@ class ArrayArena {
   // ========================================================================
   // Statistics
   // ========================================================================
+
+  /** Number of live (allocated but not yet freed) arrays in this arena. */
+  int64_t get_active_allocs() const {
+    return active_allocs_.load(std::memory_order_relaxed);
+  }
 
   size_t get_total_allocated() const { return arena_->get_total_allocated(); }
 
@@ -404,6 +413,7 @@ class ArrayArena {
 
   std::unique_ptr<FreeListArena> arena_;
   mutable std::mutex arena_mutex_;
+  std::atomic<int64_t> active_allocs_{0};
 };
 
 // ============================================================================
@@ -413,6 +423,10 @@ class ArrayArena {
 inline void ArrayRef::release() {
   if (!data_) return;
   if (auto* h = get_header()) {
+    assert(h->ref_count.load(std::memory_order_relaxed) > 0 &&
+           "ArrayRef::release() called with ref_count already 0 — "
+           "double-release or missing ref-count increment");
+
     const int32_t old_count =
         h->ref_count.fetch_sub(1, std::memory_order_acq_rel);
     if (old_count == 1 && h->is_marked_for_deletion() && h->arena) {

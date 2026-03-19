@@ -5,6 +5,7 @@
 #include <cstring>
 #include <string>
 #include <string_view>
+#include <type_traits>
 
 namespace tundradb {
 
@@ -237,6 +238,12 @@ class StringRef {
   friend class StringPool;
   friend class StringArena;
 };
+
+// StringRef has custom copy/move/destructor for ref counting.
+// It MUST NOT be trivially copyable — using memcpy on it skips ref-count
+// updates and causes use-after-free. Always use copy/move constructors.
+static_assert(!std::is_trivially_copyable_v<StringRef>,
+              "StringRef must not be trivially copyable");
 
 }  // namespace tundradb
 
