@@ -37,8 +37,7 @@ class StringRefConcurrentTest : public ::testing::Test {
 // ============================================================================
 
 TEST_F(StringRefConcurrentTest, BasicAllocationAndDeallocation) {
-  // Allocate a string
-  StringRef ref = arena->store_string("Hello World");
+  StringRef ref = arena->store_string("Hello World").ValueOrDie();
 
   EXPECT_FALSE(ref.is_null());
   EXPECT_EQ(ref.length(), 11);
@@ -47,7 +46,7 @@ TEST_F(StringRefConcurrentTest, BasicAllocationAndDeallocation) {
 }
 
 TEST_F(StringRefConcurrentTest, CopyConstructorIncrementsRefCount) {
-  StringRef ref1 = arena->store_string("Test");
+  StringRef ref1 = arena->store_string("Test").ValueOrDie();
   EXPECT_EQ(ref1.get_ref_count(), 1);
 
   // Copy constructor should increment ref count
@@ -61,7 +60,7 @@ TEST_F(StringRefConcurrentTest, CopyConstructorIncrementsRefCount) {
 }
 
 TEST_F(StringRefConcurrentTest, MoveConstructorDoesNotChangeRefCount) {
-  StringRef ref1 = arena->store_string("Test");
+  StringRef ref1 = arena->store_string("Test").ValueOrDie();
   const char* original_data = ref1.data();
   EXPECT_EQ(ref1.get_ref_count(), 1);
 
@@ -75,8 +74,8 @@ TEST_F(StringRefConcurrentTest, MoveConstructorDoesNotChangeRefCount) {
 }
 
 TEST_F(StringRefConcurrentTest, CopyAssignmentIncrementsRefCount) {
-  StringRef ref1 = arena->store_string("First");
-  StringRef ref2 = arena->store_string("Second");
+  StringRef ref1 = arena->store_string("First").ValueOrDie();
+  StringRef ref2 = arena->store_string("Second").ValueOrDie();
 
   EXPECT_EQ(ref1.get_ref_count(), 1);
   EXPECT_EQ(ref2.get_ref_count(), 1);
@@ -90,7 +89,7 @@ TEST_F(StringRefConcurrentTest, CopyAssignmentIncrementsRefCount) {
 }
 
 TEST_F(StringRefConcurrentTest, DestructorDecrementsRefCount) {
-  StringRef ref1 = arena->store_string("Test");
+  StringRef ref1 = arena->store_string("Test").ValueOrDie();
   EXPECT_EQ(ref1.get_ref_count(), 1);
 
   {
@@ -108,7 +107,7 @@ TEST_F(StringRefConcurrentTest, DestructorDecrementsRefCount) {
 // ============================================================================
 
 TEST_F(StringRefConcurrentTest, MarkForDeletionWithMultipleRefs) {
-  StringRef ref1 = arena->store_string("ToDelete");
+  StringRef ref1 = arena->store_string("ToDelete").ValueOrDie();
   StringRef ref2 = ref1;  // ref_count = 2
 
   EXPECT_EQ(ref1.get_ref_count(), 2);
@@ -127,7 +126,8 @@ TEST_F(StringRefConcurrentTest, MarkForDeletionWithMultipleRefs) {
 }
 
 TEST_F(StringRefConcurrentTest, DeallocateWhenLastRefDestroyed) {
-  StringRef* ref1 = new StringRef(arena->store_string("Temporary"));
+  StringRef* ref1 =
+      new StringRef(arena->store_string("Temporary").ValueOrDie());
   const char* data_ptr = ref1->data();
 
   // Mark for deletion
@@ -142,7 +142,8 @@ TEST_F(StringRefConcurrentTest, DeallocateWhenLastRefDestroyed) {
 }
 
 TEST_F(StringRefConcurrentTest, NoDeallocateIfNotMarked) {
-  StringRef* ref1 = new StringRef(arena->store_string("NotMarked"));
+  StringRef* ref1 =
+      new StringRef(arena->store_string("NotMarked").ValueOrDie());
 
   // Do NOT mark for deletion
   EXPECT_FALSE(ref1->is_marked_for_deletion());
@@ -162,8 +163,8 @@ TEST_F(StringRefConcurrentTest, DeduplicationSharesMemory) {
   // Enable deduplication for this test
   arena->enable_deduplication(true);
 
-  StringRef ref1 = arena->store_string("Shared");
-  StringRef ref2 = arena->store_string("Shared");  // Same content
+  StringRef ref1 = arena->store_string("Shared").ValueOrDie();
+  StringRef ref2 = arena->store_string("Shared").ValueOrDie();
 
   // Both refs should point to the same memory
   EXPECT_EQ(ref1.data(), ref2.data());
@@ -176,14 +177,14 @@ TEST_F(StringRefConcurrentTest, MarkForDeletionRemovesFromDedup) {
   // Enable deduplication for this test
   arena->enable_deduplication(true);
 
-  StringRef ref1 = arena->store_string("DedupTest");
+  StringRef ref1 = arena->store_string("DedupTest").ValueOrDie();
   const char* original_data = ref1.data();
 
   // Mark for deletion - should remove from dedup cache
   arena->mark_for_deletion(ref1);
 
   // New string with same content should allocate NEW memory
-  StringRef ref2 = arena->store_string("DedupTest");
+  StringRef ref2 = arena->store_string("DedupTest").ValueOrDie();
   EXPECT_NE(ref1.data(), ref2.data());  // Different memory!
 }
 
@@ -195,7 +196,7 @@ TEST_F(StringRefConcurrentTest, CacheNotCorruptedByDeallocation) {
   arena->enable_deduplication(true);
 
   // Step 1: Create and mark old string for deletion
-  StringRef old_ref = arena->store_string("SharedString");
+  StringRef old_ref = arena->store_string("SharedString").ValueOrDie();
   const char* old_data = old_ref.data();
 
   // Mark for deletion - removes from cache
@@ -203,7 +204,7 @@ TEST_F(StringRefConcurrentTest, CacheNotCorruptedByDeallocation) {
 
   // Step 2: Create NEW string with same content
   // This should allocate new memory and add to cache
-  StringRef new_ref = arena->store_string("SharedString");
+  StringRef new_ref = arena->store_string("SharedString").ValueOrDie();
   const char* new_data = new_ref.data();
 
   // Different memory addresses
@@ -216,7 +217,7 @@ TEST_F(StringRefConcurrentTest, CacheNotCorruptedByDeallocation) {
   // Step 4: Try to get from cache - should hit!
   // If release_string() incorrectly removed from cache, this would allocate new
   // memory
-  StringRef cached = arena->store_string("SharedString");
+  StringRef cached = arena->store_string("SharedString").ValueOrDie();
 
   // ✅ Should be cache hit - same address as new_ref
   EXPECT_EQ(cached.data(), new_data);
@@ -234,7 +235,7 @@ TEST_F(StringRefConcurrentTest, ConcurrentCopying) {
   const int num_threads = 10;
   const int copies_per_thread = 1000;
 
-  StringRef original = arena->store_string("ConcurrentTest");
+  StringRef original = arena->store_string("ConcurrentTest").ValueOrDie();
   std::vector<std::thread> threads;
 
   // Each thread makes many copies
@@ -268,7 +269,7 @@ TEST_F(StringRefConcurrentTest, ConcurrentReadWhileMarkingForDeletion) {
   const int num_readers = 5;
   const int reads_per_thread = 10000;
 
-  StringRef shared = arena->store_string("SharedData");
+  StringRef shared = arena->store_string("SharedData").ValueOrDie();
   std::atomic<bool> start{false};
   std::atomic<bool> marked{false};
 
@@ -337,7 +338,7 @@ TEST_F(StringRefConcurrentTest, StressTestManyStrings) {
           for (int j = 0; j < num_strings; ++j) {
             std::string content =
                 "Thread" + std::to_string(i) + "_String" + std::to_string(j);
-            StringRef ref = arena->store_string(content);
+            StringRef ref = arena->store_string(content).ValueOrDie();
 
             // Verify immediately
             EXPECT_EQ(ref.view(), content);
@@ -372,7 +373,7 @@ TEST_F(StringRefConcurrentTest, StressTestManyStrings) {
 // ============================================================================
 
 TEST_F(StringRefConcurrentTest, EmptyString) {
-  StringRef ref = arena->store_string("");
+  StringRef ref = arena->store_string("").ValueOrDie();
 
   EXPECT_FALSE(ref.is_null());
   EXPECT_EQ(ref.length(), 0);
@@ -391,7 +392,7 @@ TEST_F(StringRefConcurrentTest, NullStringRef) {
 
 TEST_F(StringRefConcurrentTest, LargeString) {
   std::string large(10000, 'X');
-  StringRef ref = arena->store_string(large);
+  StringRef ref = arena->store_string(large).ValueOrDie();
 
   EXPECT_FALSE(ref.is_null());
   EXPECT_EQ(ref.length(), 10000);
@@ -400,7 +401,7 @@ TEST_F(StringRefConcurrentTest, LargeString) {
 }
 
 TEST_F(StringRefConcurrentTest, SelfAssignment) {
-  StringRef ref = arena->store_string("SelfAssign");
+  StringRef ref = arena->store_string("SelfAssign").ValueOrDie();
 
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wself-assign-overloaded"
@@ -417,13 +418,11 @@ TEST_F(StringRefConcurrentTest, SelfAssignment) {
 // ============================================================================
 
 TEST_F(StringRefConcurrentTest, AutoPoolSelection) {
-  StringRef small = arena->store_string_auto("X");  // Pool 0 (<=16)
+  StringRef small = arena->store_string_auto("X").ValueOrDie();
   StringRef medium =
-      arena->store_string_auto(std::string(20, 'Y'));  // Pool 1 (<=32)
-  StringRef large =
-      arena->store_string_auto(std::string(50, 'Z'));  // Pool 2 (<=64)
-  StringRef huge =
-      arena->store_string_auto(std::string(100, 'W'));  // Pool 3 (unlimited)
+      arena->store_string_auto(std::string(20, 'Y')).ValueOrDie();
+  StringRef large = arena->store_string_auto(std::string(50, 'Z')).ValueOrDie();
+  StringRef huge = arena->store_string_auto(std::string(100, 'W')).ValueOrDie();
 
   EXPECT_EQ(small.pool_id(), 0);
   EXPECT_EQ(medium.pool_id(), 1);
@@ -433,9 +432,9 @@ TEST_F(StringRefConcurrentTest, AutoPoolSelection) {
 
 TEST_F(StringRefConcurrentTest, ExplicitPoolSelection) {
   // Test explicit pool selection by pool_id
-  StringRef ref0 = arena->store_string("Test", 0);  // Pool 0 (<=16 bytes)
-  StringRef ref1 = arena->store_string("Test", 1);  // Pool 1 (<=32 bytes)
-  StringRef ref3 = arena->store_string("Test", 3);  // Pool 3 (unlimited)
+  StringRef ref0 = arena->store_string("Test", 0).ValueOrDie();
+  StringRef ref1 = arena->store_string("Test", 1).ValueOrDie();
+  StringRef ref3 = arena->store_string("Test", 3).ValueOrDie();
 
   EXPECT_EQ(ref0.pool_id(), 0);
   EXPECT_EQ(ref1.pool_id(), 1);

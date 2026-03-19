@@ -118,7 +118,8 @@ class ArrayArena {
     header->length = count;
 
     char* data = static_cast<char*>(raw) + ArrayRef::HEADER_SIZE;
-    std::memcpy(data, elements, elem_sz * count);
+    copy_init_elements(data, static_cast<const char*>(elements), elem_type,
+                       count);
     if (capacity > count) {
       zero_init_elements(data + elem_sz * count, elem_type, capacity - count);
     }
@@ -156,24 +157,25 @@ class ArrayArena {
           "ArrayArena::append: invalid ArrayRef (header is null)");
     }
 
-    const size_t elem_sz = ref.elem_size();
-
     if (header->length < header->capacity) {
       char* dest = ref.mutable_element_ptr(header->length);
-      std::memcpy(dest, element, elem_sz);
+      assign_element(dest, element, ref.elem_type());
       header->length++;
       return arrow::Status::OK();
     }
 
-    // Full - reallocate with 2 x capacity
+    // Full - reallocate with 2 x capacity using allocate_with_data
+    // which properly handles ref-counted element types.
     const uint32_t new_cap = header->capacity * 2;
     const uint32_t old_len = header->length;
 
-    ARROW_ASSIGN_OR_RAISE(ArrayRef new_ref, allocate(ref.elem_type(), new_cap));
+    ARROW_ASSIGN_OR_RAISE(
+        ArrayRef new_ref,
+        allocate_with_data(ref.elem_type(), ref.data(), old_len, new_cap));
 
+    assign_element(new_ref.mutable_element_ptr(old_len), element,
+                   ref.elem_type());
     auto* new_header = get_header(new_ref);
-    std::memcpy(new_ref.data(), ref.data(), elem_sz * old_len);
-    std::memcpy(new_ref.data() + elem_sz * old_len, element, elem_sz);
     new_header->length = old_len + 1;
 
     header->mark_for_deletion();
@@ -334,6 +336,50 @@ class ArrayArena {
       }
     }
     // Primitives: trivial destructors, nothing to do.
+  }
+
+  /**
+   * Copy-construct elements from src to raw (uninitialized) dst memory.
+   * Uses copy constructors for ref-counted types (StringRef, ArrayRef)
+   * to properly increment reference counts; memcpy for primitives.
+   *
+   * IMPORTANT: dst must be RAW uninitialized memory (no live objects).
+   */
+  static void copy_init_elements(char* dst, const char* src,
+                                 ValueType elem_type, uint32_t count) {
+    if (count == 0) return;
+    if (is_string_type(elem_type)) {
+      for (uint32_t i = 0; i < count; ++i) {
+        const auto* s =
+            reinterpret_cast<const StringRef*>(src + i * sizeof(StringRef));
+        new (dst + i * sizeof(StringRef)) StringRef(*s);
+      }
+    } else if (is_array_type(elem_type)) {
+      for (uint32_t i = 0; i < count; ++i) {
+        const auto* a =
+            reinterpret_cast<const ArrayRef*>(src + i * sizeof(ArrayRef));
+        new (dst + i * sizeof(ArrayRef)) ArrayRef(*a);
+      }
+    } else {
+      std::memcpy(dst, src, get_type_size(elem_type) * count);
+    }
+  }
+
+  /**
+   * Copy-assign a single element from src to an INITIALIZED dst slot.
+   * Uses copy assignment for ref-counted types (properly releases old,
+   * increments new); memcpy for primitives.
+   */
+  static void assign_element(char* dst, const void* src, ValueType elem_type) {
+    if (is_string_type(elem_type)) {
+      *reinterpret_cast<StringRef*>(dst) =
+          *reinterpret_cast<const StringRef*>(src);
+    } else if (is_array_type(elem_type)) {
+      *reinterpret_cast<ArrayRef*>(dst) =
+          *reinterpret_cast<const ArrayRef*>(src);
+    } else {
+      std::memcpy(dst, src, get_type_size(elem_type));
+    }
   }
 
   /**

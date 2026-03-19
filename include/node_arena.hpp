@@ -395,13 +395,12 @@ class NodeArena {
     return {node_data, node_size, layout->get_schema_name()};
   }
 
-  /** Deallocate node and its strings. */
+  /** Deallocate node and its strings/arrays. */
   void deallocate_node(const NodeHandle& handle) const {
     if (handle.is_null()) {
       return;
     }
 
-    // First, deallocate all string references from the node
     if (!handle.schema_name.empty()) {
       const std::shared_ptr<SchemaLayout> layout =
           layout_registry_->get_layout(handle.schema_name);
@@ -409,21 +408,23 @@ class NodeArena {
         const char* data_start =
             static_cast<const char*>(handle.ptr) + layout->get_data_offset();
         for (const auto& field : layout->get_fields()) {
-          if (is_string_type(field.type)) {
-            // Read the StringRef from the node memory (after data offset)
-            const char* field_ptr = data_start + field.offset;
-            const auto* str_ref = reinterpret_cast<const StringRef*>(field_ptr);
+          const char* field_ptr = data_start + field.offset;
 
-            // Deallocate the string if it's not null
+          if (is_string_type(field.type)) {
+            const auto* str_ref = reinterpret_cast<const StringRef*>(field_ptr);
             if (!str_ref->is_null()) {
               string_arena_->mark_for_deletion(*str_ref);
+            }
+          } else if (is_array_type(field.type)) {
+            const auto* arr_ref = reinterpret_cast<const ArrayRef*>(field_ptr);
+            if (!arr_ref->is_null()) {
+              array_arena_->mark_for_deletion(*arr_ref);
             }
           }
         }
       }
     }
 
-    // Then deallocate the node memory itself
     mem_arena_->deallocate(handle.ptr);
   }
 
@@ -575,7 +576,10 @@ class NodeArena {
       }
     }
 
-    // Batch allocate memory for all non-null fields
+    // Batch allocate memory for all non-null fields.
+    // Zero-init so that write_value_to_memory's copy assignment on
+    // StringRef/ArrayRef slots sees null objects (release() is a no-op on
+    // null).
     char* batch_memory = nullptr;
     if (total_size > 0) {
       batch_memory = static_cast<char*>(
@@ -584,6 +588,7 @@ class NodeArena {
         return arrow::Status::OutOfMemory(
             "Failed to batch allocate field storage");
       }
+      std::memset(batch_memory, 0, total_size);
     }
 
     // Second pass: write values and assign pointers
@@ -610,8 +615,9 @@ class NodeArena {
         // SET: convert raw types to arena-backed refs
         if (new_value.type() == ValueType::STRING &&
             new_value.holds_std_string()) {
-          const StringRef str_ref =
-              string_arena_->store_string_auto(new_value.as_string());
+          ARROW_ASSIGN_OR_RAISE(
+              StringRef str_ref,
+              string_arena_->store_string_auto(new_value.as_string()));
           storage_value = Value{str_ref, field_layout.type};
         } else if (new_value.type() == ValueType::ARRAY &&
                    new_value.holds_raw_array()) {
@@ -896,7 +902,8 @@ class NodeArena {
     // Handle string storage: std::string -> StringRef via arena
     if (value.type() == ValueType::STRING && value.holds_std_string()) {
       const std::string& str_content = value.as_string();
-      const StringRef str_ref = string_arena_->store_string_auto(str_content);
+      ARROW_ASSIGN_OR_RAISE(StringRef str_ref,
+                            string_arena_->store_string_auto(str_content));
       if (!layout->set_field_value(static_cast<char*>(node_ptr), *field_layout,
                                    Value{str_ref, field_layout->type})) {
         return arrow::Status::Invalid("Failed to write string field value");
@@ -1038,7 +1045,8 @@ class NodeArena {
         return array_arena_->append(ref, &v);
       }
       case ValueType::STRING: {
-        StringRef sr = string_arena_->store_string_auto(elem.as_string());
+        ARROW_ASSIGN_OR_RAISE(
+            StringRef sr, string_arena_->store_string_auto(elem.as_string()));
         return array_arena_->append(ref, &sr);
       }
       default:
@@ -1150,8 +1158,10 @@ class NodeArena {
 
       // For string elements, store via string arena first
       if (is_string_type(elem_type) && elem.holds_std_string()) {
-        StringRef str_ref = string_arena_->store_string_auto(elem.as_string());
-        *reinterpret_cast<StringRef*>(dest) = str_ref;
+        ARROW_ASSIGN_OR_RAISE(
+            StringRef str_ref,
+            string_arena_->store_string_auto(elem.as_string()));
+        *reinterpret_cast<StringRef*>(dest) = std::move(str_ref);
       } else {
         // Write primitive or pre-allocated ref directly
         write_value_to_memory(dest, elem_type, elem);
