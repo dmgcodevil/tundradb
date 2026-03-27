@@ -91,6 +91,51 @@ class Value {
     return get<std::vector<Value>>();
   }
 
+  std::vector<Value>& as_raw_array_mut() {
+    return std::get<std::vector<Value>>(data_);
+  }
+
+  arrow::Status append_element(Value element) {
+    if (element.holds_raw_array()) {
+      return append_all(std::move(element));
+    }
+    if (type_ == ValueType::NA) {
+      type_ = ValueType::ARRAY;
+      data_ = std::vector<Value>{std::move(element)};
+      return arrow::Status::OK();
+    }
+    if (!holds_raw_array()) {
+      return arrow::Status::TypeError(
+          "APPEND: target value is not a raw array");
+    }
+    as_raw_array_mut().push_back(std::move(element));
+    return arrow::Status::OK();
+  }
+
+  /** Concatenate: [1,2] + [3,4] -> [1,2,3,4]. */
+  arrow::Status append_all(Value array_value) {
+    if (!array_value.holds_raw_array()) {
+      return arrow::Status::TypeError(
+          "APPEND_ALL: source value is not a raw array");
+    }
+    auto& src = array_value.as_raw_array_mut();
+    if (type_ == ValueType::NA) {
+      type_ = ValueType::ARRAY;
+      data_ = std::move(src);
+      return arrow::Status::OK();
+    }
+    if (!holds_raw_array()) {
+      return arrow::Status::TypeError(
+          "APPEND_ALL: target value is not a raw array");
+    }
+    auto& dest = as_raw_array_mut();
+    dest.reserve(dest.size() + src.size());
+    for (auto& v : src) {
+      dest.push_back(std::move(v));
+    }
+    return arrow::Status::OK();
+  }
+
   // Convert the Value to its raw string representation (without quotes for
   // strings)
   [[nodiscard]] std::string to_string() const {

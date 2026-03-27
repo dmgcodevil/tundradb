@@ -2,40 +2,125 @@
 
 #include <algorithm>
 
+#include "json.hpp"
 #include "logger.hpp"
+#include "metadata.hpp"
+
 namespace tundradb {
+
+// --- Edge schema management ---
+
+arrow::Result<bool> EdgeStore::register_edge_schema(
+    const std::string& edge_type,
+    const std::vector<std::shared_ptr<Field>>& fields) {
+  if (edge_type.empty()) {
+    return arrow::Status::Invalid("Edge type cannot be empty");
+  }
+  if (edge_schemas_.contains(edge_type)) {
+    return arrow::Status::AlreadyExists("Edge schema already registered: " +
+                                        edge_type);
+  }
+
+  llvm::SmallVector<std::shared_ptr<Field>, 4> field_vec;
+  field_vec.reserve(fields.size());
+  for (const auto& f : fields) {
+    field_vec.push_back(f);
+  }
+
+  auto schema = std::make_shared<Schema>(edge_type, 0, field_vec);
+  edge_schemas_[edge_type] = schema;
+  edge_layout_registry_->create_layout(schema);
+
+  log_info("Registered edge schema for type '" + edge_type + "' with " +
+           std::to_string(fields.size()) + " fields");
+  return true;
+}
+
+bool EdgeStore::has_edge_schema(const std::string& edge_type) const {
+  return edge_schemas_.contains(edge_type);
+}
+
+std::shared_ptr<Schema> EdgeStore::get_edge_schema(
+    const std::string& edge_type) const {
+  auto it = edge_schemas_.find(edge_type);
+  return it != edge_schemas_.end() ? it->second : nullptr;
+}
+
+std::shared_ptr<SchemaLayout> EdgeStore::get_edge_layout(
+    const std::string& edge_type) const {
+  return edge_layout_registry_->get_layout(edge_type);
+}
+
+// --- Edge CRUD ---
 
 arrow::Result<std::shared_ptr<Edge>> EdgeStore::create_edge(
     int64_t source_id, const std::string& type, int64_t target_id,
-    std::unordered_map<std::string, std::shared_ptr<arrow::Array>> properties) {
+    std::unordered_map<std::string, Value> properties) {
+  auto schema = get_edge_schema(type);
+
+  if (schema) {
+    // Validate properties against registered schema
+    for (const auto& [prop_name, prop_value] : properties) {
+      auto field = schema->get_field(prop_name);
+      if (!field) {
+        return arrow::Status::Invalid("Unknown property '" + prop_name +
+                                      "' for edge type '" + type + "'");
+      }
+      if (!prop_value.is_null() && field->type() != prop_value.type()) {
+        return arrow::Status::Invalid(
+            "Type mismatch for edge property '" + prop_name + "': expected " +
+            to_string(field->type()) + ", got " + to_string(prop_value.type()));
+      }
+    }
+
+    // Allocate arena-backed property block
+    auto layout = get_edge_layout(type);
+    auto handle =
+        std::make_unique<NodeHandle>(edge_arena_->allocate_node(layout));
+    if (handle->is_null()) {
+      return arrow::Status::OutOfMemory(
+          "Failed to allocate edge property block");
+    }
+
+    // Write property values into the arena block
+    for (const auto& [prop_name, prop_value] : properties) {
+      auto field = schema->get_field(prop_name);
+      ARROW_RETURN_NOT_OK(
+          edge_arena_->set_field_value_v0(*handle, layout, field, prop_value));
+    }
+
+    int64_t id = edge_id_counter_.fetch_add(1, std::memory_order_acq_rel);
+    return std::make_shared<Edge>(id, source_id, target_id, type, now_millis(),
+                                  std::move(handle), edge_arena_, schema,
+                                  layout);
+  }
+
+  if (!properties.empty()) {
+    return arrow::Status::Invalid(
+        "Cannot set typed properties on edge type '" + type +
+        "': no schema registered. Call register_edge_schema() first.");
+  }
+
+  // Schema-less edge (no properties)
   int64_t id = edge_id_counter_.fetch_add(1, std::memory_order_acq_rel);
-  return std::make_shared<Edge>(id, source_id, target_id, type, properties,
-                                now_millis());
+  return std::make_shared<Edge>(id, source_id, target_id, type, now_millis());
 }
 
 arrow::Result<bool> EdgeStore::add(const std::shared_ptr<Edge>& edge) {
   std::unique_lock<std::shared_mutex> lock(edges_mutex_);
 
-  // Check if edge already exists
   if (this->edges.find(edge->get_id()) != this->edges.end()) {
     return arrow::Status::KeyError("Edge already exists with id=" +
                                    std::to_string(edge->get_id()));
   }
 
-  // Add edge to main edges map
   this->edges[edge->get_id()] = edge;
   edge_ids_.insert(edge->get_id());
 
-  // Add to edges_by_type
   this->edges_by_type_[edge->get_type()].insert(edge->get_id());
-
-  // Add to outgoing_edges
   this->outgoing_edges_[edge->get_source_id()].insert(edge->get_id());
-
-  // Add to incoming_edges
   this->incoming_edges_[edge->get_target_id()].insert(edge->get_id());
 
-  // Update version counter (atomic, no additional locking needed)
   auto version_it = this->versions_.find(edge->get_type());
   if (version_it == this->versions_.end()) {
     this->versions_[edge->get_type()].store(1);
@@ -52,29 +137,23 @@ arrow::Result<bool> EdgeStore::remove(int64_t edge_id) {
   auto edge_it = edges.find(edge_id);
   if (edge_it != edges.end()) {
     const auto edge = edge_it->second;
-
-    // Remove from main edges map
     edges.erase(edge_it);
 
-    // Remove from edges_by_type
     auto type_it = edges_by_type_.find(edge->get_type());
     if (type_it != edges_by_type_.end()) {
       type_it->second.erase(edge->get_id());
     }
 
-    // Remove from outgoing_edges
     auto outgoing_it = outgoing_edges_.find(edge->get_source_id());
     if (outgoing_it != outgoing_edges_.end()) {
       outgoing_it->second.erase(edge->get_id());
     }
 
-    // Remove from incoming_edges
     auto incoming_it = incoming_edges_.find(edge->get_target_id());
     if (incoming_it != incoming_edges_.end()) {
       incoming_it->second.erase(edge->get_id());
     }
 
-    // Update version counter (atomic, no additional locking needed)
     auto version_it = this->versions_.find(edge->get_type());
     if (version_it == this->versions_.end()) {
       this->versions_[edge->get_type()].store(1);
@@ -101,7 +180,6 @@ std::vector<std::shared_ptr<Edge>> EdgeStore::get(
   return res;
 }
 
-// Template overload for any iterable container (including LockedView)
 template <typename Container>
 std::vector<std::shared_ptr<Edge>> EdgeStore::get(const Container& ids) const {
   std::shared_lock<std::shared_mutex> lock(edges_mutex_);
@@ -138,17 +216,12 @@ arrow::Result<std::vector<std::shared_ptr<Edge>>> EdgeStore::get_edges_from_map(
 
   const auto& edge_ids = it->second;
   std::vector<std::shared_ptr<Edge>> result;
-
-  // Pre-allocate result vector to avoid reallocations
   result.reserve(edge_ids.size());
 
-  // Convert unordered_set to sorted vector for consistent ordering
   std::vector<int64_t> sorted_edge_ids(edge_ids.begin(), edge_ids.end());
   std::sort(sorted_edge_ids.begin(), sorted_edge_ids.end());
 
-  // Optimization: avoid string comparison if no type filter
   if (type.empty()) {
-    // Fast path: no type filtering needed
     for (const auto& edge_id : sorted_edge_ids) {
       auto edge_it = edges.find(edge_id);
       if (edge_it != edges.end()) {
@@ -156,7 +229,6 @@ arrow::Result<std::vector<std::shared_ptr<Edge>>> EdgeStore::get_edges_from_map(
       }
     }
   } else {
-    // Slow path: type filtering required - cache type for comparison
     for (const auto& edge_id : sorted_edge_ids) {
       auto edge_it = edges.find(edge_id);
       if (edge_it != edges.end()) {
@@ -193,7 +265,6 @@ arrow::Result<std::vector<std::shared_ptr<Edge>>> EdgeStore::get_by_type(
   std::vector<std::shared_ptr<Edge>> result;
   const auto& edge_ids = it->second;
 
-  // Convert unordered_set to sorted vector for consistent ordering
   std::vector<int64_t> sorted_edge_ids(edge_ids.begin(), edge_ids.end());
   std::sort(sorted_edge_ids.begin(), sorted_edge_ids.end());
 
@@ -221,10 +292,141 @@ std::set<std::string> EdgeStore::get_edge_types() const {
   std::shared_lock<std::shared_mutex> lock(edges_mutex_);
   std::set<std::string> result;
   for (auto it = edges_by_type_.begin(); it != edges_by_type_.end(); ++it) {
-    result.insert(std::string(it->first()));  // Convert StringRef to string
+    result.insert(std::string(it->first()));
   }
   return result;
 }
+
+// --- Helpers for property column building ---
+
+namespace {
+
+std::shared_ptr<arrow::DataType> value_type_to_arrow(ValueType vt) {
+  switch (vt) {
+    case ValueType::INT32:
+      return arrow::int32();
+    case ValueType::INT64:
+      return arrow::int64();
+    case ValueType::DOUBLE:
+      return arrow::float64();
+    case ValueType::FLOAT:
+      return arrow::float32();
+    case ValueType::STRING:
+    case ValueType::FIXED_STRING16:
+    case ValueType::FIXED_STRING32:
+    case ValueType::FIXED_STRING64:
+      return arrow::utf8();
+    case ValueType::BOOL:
+      return arrow::boolean();
+    default:
+      return nullptr;
+  }
+}
+
+arrow::Status append_value_to_builder(arrow::ArrayBuilder* builder,
+                                      ValueType type, const Value& value) {
+  if (value.is_null()) {
+    return builder->AppendNull();
+  }
+
+  switch (type) {
+    case ValueType::INT32:
+      return static_cast<arrow::Int32Builder*>(builder)->Append(
+          value.as_int32());
+    case ValueType::INT64:
+      return static_cast<arrow::Int64Builder*>(builder)->Append(
+          value.as_int64());
+    case ValueType::DOUBLE:
+      return static_cast<arrow::DoubleBuilder*>(builder)->Append(
+          value.as_double());
+    case ValueType::FLOAT:
+      return static_cast<arrow::FloatBuilder*>(builder)->Append(
+          value.as_float());
+    case ValueType::STRING:
+    case ValueType::FIXED_STRING16:
+    case ValueType::FIXED_STRING32:
+    case ValueType::FIXED_STRING64:
+      return static_cast<arrow::StringBuilder*>(builder)->Append(
+          value.as_string());
+    case ValueType::BOOL:
+      return static_cast<arrow::BooleanBuilder*>(builder)->Append(
+          value.as_bool());
+    default:
+      return arrow::Status::NotImplemented("Unsupported property type");
+  }
+}
+
+std::unique_ptr<arrow::ArrayBuilder> make_builder(ValueType type) {
+  switch (type) {
+    case ValueType::INT32:
+      return std::make_unique<arrow::Int32Builder>();
+    case ValueType::INT64:
+      return std::make_unique<arrow::Int64Builder>();
+    case ValueType::DOUBLE:
+      return std::make_unique<arrow::DoubleBuilder>();
+    case ValueType::FLOAT:
+      return std::make_unique<arrow::FloatBuilder>();
+    case ValueType::STRING:
+    case ValueType::FIXED_STRING16:
+    case ValueType::FIXED_STRING32:
+    case ValueType::FIXED_STRING64:
+      return std::make_unique<arrow::StringBuilder>();
+    case ValueType::BOOL:
+      return std::make_unique<arrow::BooleanBuilder>();
+    default:
+      return nullptr;
+  }
+}
+
+std::string properties_to_json(
+    const std::unordered_map<std::string, Value>& props) {
+  if (props.empty()) return {};
+  nlohmann::json j;
+  for (const auto& [k, v] : props) {
+    if (v.is_null()) {
+      j[k] = nullptr;
+    } else if (v.type() == ValueType::STRING || is_string_type(v.type())) {
+      j[k] = v.as_string();
+    } else if (v.type() == ValueType::INT32) {
+      j[k] = v.as_int32();
+    } else if (v.type() == ValueType::INT64) {
+      j[k] = v.as_int64();
+    } else if (v.type() == ValueType::DOUBLE) {
+      j[k] = v.as_double();
+    } else if (v.type() == ValueType::FLOAT) {
+      j[k] = static_cast<double>(v.as_float());
+    } else if (v.type() == ValueType::BOOL) {
+      j[k] = v.as_bool();
+    }
+  }
+  return j.dump();
+}
+
+std::unordered_map<std::string, Value> json_to_properties(
+    const std::string& json_str) {
+  std::unordered_map<std::string, Value> props;
+  if (json_str.empty()) return props;
+  auto j = nlohmann::json::parse(json_str, nullptr, false);
+  if (j.is_discarded() || !j.is_object()) return props;
+  for (auto& [k, v] : j.items()) {
+    if (v.is_null()) {
+      props[k] = Value{};
+    } else if (v.is_string()) {
+      props[k] = Value{v.get<std::string>()};
+    } else if (v.is_number_integer()) {
+      props[k] = Value{v.get<int64_t>()};
+    } else if (v.is_number_float()) {
+      props[k] = Value{v.get<double>()};
+    } else if (v.is_boolean()) {
+      props[k] = Value{v.get<bool>()};
+    }
+  }
+  return props;
+}
+
+}  // namespace
+
+// --- Table generation ---
 
 arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::generate_table(
     const std::string& edge_type) const {
@@ -238,158 +440,125 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::generate_table(
     } else {
       auto it = edges_by_type_.find(edge_type);
       if (it != edges_by_type_.end()) {
-        const auto& edge_ids = it->second;
-        // Convert unordered_set to sorted vector for consistent ordering
-        std::vector<int64_t> sorted_edge_ids(edge_ids.begin(), edge_ids.end());
+        const auto& eids = it->second;
+        std::vector<int64_t> sorted_edge_ids(eids.begin(), eids.end());
         std::sort(sorted_edge_ids.begin(), sorted_edge_ids.end());
         selected_edges = get(sorted_edge_ids);
       }
     }
   }
 
-  // Edges are already sorted by ID since we sorted the edge_ids before calling
-  // get()
+  // Build Arrow schema: structural + schema props + _properties (JSON)
+  std::vector<std::shared_ptr<arrow::Field>> arrow_fields = {
+      arrow::field("id", arrow::int64()),
+      arrow::field("source_id", arrow::int64()),
+      arrow::field("target_id", arrow::int64()),
+      arrow::field("created_ts", arrow::int64())};
+
+  auto edge_schema = get_edge_schema(edge_type);
+  if (edge_schema) {
+    for (const auto& field : edge_schema->fields()) {
+      auto arrow_type = value_type_to_arrow(field->type());
+      if (arrow_type) {
+        arrow_fields.push_back(
+            arrow::field(field->name(), arrow_type, field->nullable()));
+      }
+    }
+  }
+
+  // Implicit _properties column (always last, nullable)
+  arrow_fields.push_back(arrow::field("_properties", arrow::utf8(), true));
+
+  auto table_schema = arrow::schema(arrow_fields);
 
   if (selected_edges.empty()) {
     log_info("No edges found for type '" + edge_type +
              "', returning empty table");
-
-    std::vector fields = {arrow::field("id", arrow::int64()),
-                          arrow::field("source_id", arrow::int64()),
-                          arrow::field("target_id", arrow::int64()),
-                          arrow::field("created_ts", arrow::int64())};
-    auto schema = arrow::schema(fields);
-
-    std::shared_ptr<arrow::Array> empty_id_array;
-    std::shared_ptr<arrow::Array> empty_source_id_array;
-    std::shared_ptr<arrow::Array> empty_target_id_array;
-    std::shared_ptr<arrow::Array> empty_created_ts_array;
-
-    ARROW_ASSIGN_OR_RAISE(empty_id_array,
-                          arrow::MakeArrayOfNull(arrow::int64(), 0));
-    ARROW_ASSIGN_OR_RAISE(empty_source_id_array,
-                          arrow::MakeArrayOfNull(arrow::int64(), 0));
-    ARROW_ASSIGN_OR_RAISE(empty_target_id_array,
-                          arrow::MakeArrayOfNull(arrow::int64(), 0));
-    ARROW_ASSIGN_OR_RAISE(empty_created_ts_array,
-                          arrow::MakeArrayOfNull(arrow::int64(), 0));
-
-    return arrow::Table::Make(
-        schema, {empty_id_array, empty_source_id_array, empty_target_id_array,
-                 empty_created_ts_array});
+    std::vector<std::shared_ptr<arrow::Array>> empty_columns;
+    for (size_t i = 0; i < arrow_fields.size(); ++i) {
+      std::shared_ptr<arrow::Array> empty_arr;
+      ARROW_ASSIGN_OR_RAISE(empty_arr,
+                            arrow::MakeArrayOfNull(arrow_fields[i]->type(), 0));
+      empty_columns.push_back(std::move(empty_arr));
+    }
+    return arrow::Table::Make(table_schema, empty_columns);
   }
 
-  auto id_builder = arrow::Int64Builder();
-  auto source_id_builder = arrow::Int64Builder();
-  auto target_id_builder = arrow::Int64Builder();
-  auto created_ts_builder = arrow::Int64Builder();
+  // Structural builders
+  arrow::Int64Builder id_builder;
+  arrow::Int64Builder source_id_builder;
+  arrow::Int64Builder target_id_builder;
+  arrow::Int64Builder created_ts_builder;
 
-  // Process edges in chunks. todo make configurable
-  constexpr size_t CHUNK_SIZE = 1024;
+  // Schema property builders (one per schema field)
+  struct PropCol {
+    std::shared_ptr<Field> field;
+    ValueType type;
+    std::unique_ptr<arrow::ArrayBuilder> builder;
+  };
+  std::vector<PropCol> prop_cols;
+  if (edge_schema) {
+    for (const auto& field : edge_schema->fields()) {
+      auto builder = make_builder(field->type());
+      if (builder) {
+        prop_cols.push_back({field, field->type(), std::move(builder)});
+      }
+    }
+  }
 
-  std::vector<std::shared_ptr<arrow::Array>> id_chunks;
-  std::vector<std::shared_ptr<arrow::Array>> source_id_chunks;
-  std::vector<std::shared_ptr<arrow::Array>> target_id_chunks;
-  std::vector<std::shared_ptr<arrow::Array>> created_ts_chunks;
+  // Dynamic _properties builder (JSON string)
+  arrow::StringBuilder props_json_builder;
 
-  size_t current_chunk_size = 0;
   for (const auto& edge : selected_edges) {
     ARROW_RETURN_NOT_OK(id_builder.Append(edge->get_id()));
     ARROW_RETURN_NOT_OK(source_id_builder.Append(edge->get_source_id()));
     ARROW_RETURN_NOT_OK(target_id_builder.Append(edge->get_target_id()));
     ARROW_RETURN_NOT_OK(created_ts_builder.Append(edge->get_created_ts()));
 
-    current_chunk_size++;
+    for (auto& pc : prop_cols) {
+      auto val_result = edge->get_value(pc.field);
+      if (val_result.ok() && !val_result.ValueOrDie().is_null()) {
+        ARROW_RETURN_NOT_OK(append_value_to_builder(pc.builder.get(), pc.type,
+                                                    val_result.ValueOrDie()));
+      } else {
+        ARROW_RETURN_NOT_OK(pc.builder->AppendNull());
+      }
+    }
 
-    if (current_chunk_size >= CHUNK_SIZE) {
-      std::shared_ptr<arrow::Array> id_array;
-      std::shared_ptr<arrow::Array> source_id_array;
-      std::shared_ptr<arrow::Array> target_id_array;
-      std::shared_ptr<arrow::Array> type_array;
-      std::shared_ptr<arrow::Array> created_ts_array;
-
-      ARROW_RETURN_NOT_OK(id_builder.Finish(&id_array));
-      ARROW_RETURN_NOT_OK(source_id_builder.Finish(&source_id_array));
-      ARROW_RETURN_NOT_OK(target_id_builder.Finish(&target_id_array));
-      ARROW_RETURN_NOT_OK(created_ts_builder.Finish(&created_ts_array));
-
-      id_chunks.push_back(id_array);
-      source_id_chunks.push_back(source_id_array);
-      target_id_chunks.push_back(target_id_array);
-      created_ts_chunks.push_back(created_ts_array);
-
-      id_builder.Reset();
-      source_id_builder.Reset();
-      target_id_builder.Reset();
-      created_ts_builder.Reset();
-
-      current_chunk_size = 0;
+    // Serialize dynamic properties to JSON
+    const auto& dyn_props = edge->get_properties();
+    if (dyn_props.empty()) {
+      ARROW_RETURN_NOT_OK(props_json_builder.AppendNull());
+    } else {
+      ARROW_RETURN_NOT_OK(
+          props_json_builder.Append(properties_to_json(dyn_props)));
     }
   }
 
-  if (current_chunk_size > 0) {
-    std::shared_ptr<arrow::Array> id_array;
-    std::shared_ptr<arrow::Array> source_id_array;
-    std::shared_ptr<arrow::Array> target_id_array;
-    std::shared_ptr<arrow::Array> created_ts_array;
+  // Finish arrays
+  std::shared_ptr<arrow::Array> id_arr, src_arr, dst_arr, ts_arr;
+  ARROW_RETURN_NOT_OK(id_builder.Finish(&id_arr));
+  ARROW_RETURN_NOT_OK(source_id_builder.Finish(&src_arr));
+  ARROW_RETURN_NOT_OK(target_id_builder.Finish(&dst_arr));
+  ARROW_RETURN_NOT_OK(created_ts_builder.Finish(&ts_arr));
 
-    ARROW_RETURN_NOT_OK(id_builder.Finish(&id_array));
-    ARROW_RETURN_NOT_OK(source_id_builder.Finish(&source_id_array));
-    ARROW_RETURN_NOT_OK(target_id_builder.Finish(&target_id_array));
-    ARROW_RETURN_NOT_OK(created_ts_builder.Finish(&created_ts_array));
+  std::vector<std::shared_ptr<arrow::ChunkedArray>> columns = {
+      std::make_shared<arrow::ChunkedArray>(id_arr),
+      std::make_shared<arrow::ChunkedArray>(src_arr),
+      std::make_shared<arrow::ChunkedArray>(dst_arr),
+      std::make_shared<arrow::ChunkedArray>(ts_arr)};
 
-    id_chunks.push_back(id_array);
-    source_id_chunks.push_back(source_id_array);
-    target_id_chunks.push_back(target_id_array);
-    created_ts_chunks.push_back(created_ts_array);
+  for (auto& pc : prop_cols) {
+    std::shared_ptr<arrow::Array> prop_arr;
+    ARROW_RETURN_NOT_OK(pc.builder->Finish(&prop_arr));
+    columns.push_back(std::make_shared<arrow::ChunkedArray>(prop_arr));
   }
 
-  if (id_chunks.empty()) {
-    log_info("No chunks created for edge type '" + edge_type +
-             "', returning empty table");
+  std::shared_ptr<arrow::Array> props_json_arr;
+  ARROW_RETURN_NOT_OK(props_json_builder.Finish(&props_json_arr));
+  columns.push_back(std::make_shared<arrow::ChunkedArray>(props_json_arr));
 
-    std::vector fields = {arrow::field("id", arrow::int64()),
-                          arrow::field("source_id", arrow::int64()),
-                          arrow::field("target_id", arrow::int64()),
-                          arrow::field("created_ts", arrow::int64())};
-    auto schema = arrow::schema(fields);
-
-    std::shared_ptr<arrow::Array> empty_id_array;
-    std::shared_ptr<arrow::Array> empty_source_id_array;
-    std::shared_ptr<arrow::Array> empty_target_id_array;
-    std::shared_ptr<arrow::Array> empty_created_ts_array;
-
-    ARROW_ASSIGN_OR_RAISE(empty_id_array,
-                          arrow::MakeArrayOfNull(arrow::int64(), 0));
-    ARROW_ASSIGN_OR_RAISE(empty_source_id_array,
-                          arrow::MakeArrayOfNull(arrow::int64(), 0));
-    ARROW_ASSIGN_OR_RAISE(empty_target_id_array,
-                          arrow::MakeArrayOfNull(arrow::int64(), 0));
-    ARROW_ASSIGN_OR_RAISE(empty_created_ts_array,
-                          arrow::MakeArrayOfNull(arrow::int64(), 0));
-
-    return arrow::Table::Make(
-        schema, {empty_id_array, empty_source_id_array, empty_target_id_array,
-                 empty_created_ts_array});
-  }
-
-  auto id_chunked_array = std::make_shared<arrow::ChunkedArray>(id_chunks);
-  auto source_id_chunked_array =
-      std::make_shared<arrow::ChunkedArray>(source_id_chunks);
-  auto target_id_chunked_array =
-      std::make_shared<arrow::ChunkedArray>(target_id_chunks);
-  auto created_ts_chunked_array =
-      std::make_shared<arrow::ChunkedArray>(created_ts_chunks);
-
-  std::vector fields = {arrow::field("id", arrow::int64()),
-                        arrow::field("source_id", arrow::int64()),
-                        arrow::field("target_id", arrow::int64()),
-                        arrow::field("created_ts", arrow::int64())};
-  static auto schema = arrow::schema(fields);
-
-  return arrow::Table::Make(
-      schema, {id_chunked_array, source_id_chunked_array,
-               target_id_chunked_array, created_ts_chunked_array});
+  return arrow::Table::Make(table_schema, columns);
 }
 
 arrow::Result<int64_t> EdgeStore::get_version_snapshot(
@@ -430,13 +599,11 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::get_table(
     }
   }
 
-  // Generate new table
   auto table_res = generate_table(edge_type);
   if (!table_res.ok()) {
     return table_res.status();
   }
 
-  // Update cache
   auto latest_version_res = get_version_snapshot(edge_type);
   if (latest_version_res.ok()) {
     const int64_t latest_version = *latest_version_res;
@@ -444,13 +611,11 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::get_table(
     std::unique_lock<std::shared_mutex> tables_lock(tables_mutex_);
     auto cache_it = tables_.find(edge_type);
     if (cache_it == tables_.end()) {
-      // Create new cache entry
       auto table_cache = std::make_shared<TableCache>();
       table_cache->table = *table_res;
       table_cache->version.store(latest_version, std::memory_order_release);
       tables_[edge_type] = table_cache;
     } else {
-      // Update existing cache entry
       std::lock_guard<std::mutex> lock(cache_it->second->lock);
       cache_it->second->table = *table_res;
       cache_it->second->version.store(latest_version,

@@ -131,11 +131,30 @@ arrow::Result<bool> SnapshotManager::initialize() {
           }
         }
       }
+      // Restore edge schemas from metadata
+      log_info("Loading edge schemas");
+      for (const auto &es_meta : this->metadata_.edge_schemas) {
+        if (!edge_store_->has_edge_schema(es_meta.name)) {
+          std::vector<std::shared_ptr<Field>> fields;
+          fields.reserve(es_meta.fields.size());
+          for (const auto &fm : es_meta.fields) {
+            fields.push_back(from_metadata(fm));
+          }
+          auto reg_res =
+              edge_store_->register_edge_schema(es_meta.name, fields);
+          if (!reg_res.ok()) {
+            log_warn("Failed to register edge schema for '" + es_meta.name +
+                     "': " + reg_res.status().ToString());
+          }
+        }
+      }
+
       log_info("Load edges");
       for (const auto &edge_metadata : this->manifest_->edges) {
-        for (auto edges = storage_->read_edges(edge_metadata).ValueOrDie();
-             const auto &edge : edges) {
-          edge_store_->add(std::make_shared<Edge>(edge)).ValueOrDie();
+        auto loaded_edges = storage_->read_edges(edge_metadata).ValueOrDie();
+        for (auto &edge : loaded_edges) {
+          edge_store_->add(std::make_shared<Edge>(std::move(edge)))
+              .ValueOrDie();
         }
       }
       log_info("Edges have been loaded");
@@ -248,6 +267,11 @@ arrow::Result<Snapshot> SnapshotManager::commit() {
               .ValueOrDie();
       new_edge_metadata.record_count =
           edge_store_->get_count_by_type(edge_type);
+
+      if (auto es = edge_store_->get_edge_schema(edge_type)) {
+        new_edge_metadata.schema_version = static_cast<int32_t>(es->version());
+      }
+
       new_manifest.edges.push_back(new_edge_metadata);
     }
   }
@@ -294,6 +318,22 @@ arrow::Result<Snapshot> SnapshotManager::commit() {
   }
   log_info("schemas count {}", schemas.size());
   this->metadata_.schemas = schemas;
+
+  // Save edge schemas to metadata
+  std::vector<SchemaMetadata> edge_schemas;
+  for (const auto &edge_type : edge_store_->get_edge_types()) {
+    if (auto es = edge_store_->get_edge_schema(edge_type)) {
+      SchemaMetadata sm;
+      sm.name = es->name();
+      sm.version = es->version();
+      for (const auto &field : es->fields()) {
+        sm.fields.push_back(FieldMetadata::from_type_descriptor(
+            field->name(), field->type_descriptor(), field->nullable()));
+      }
+      edge_schemas.push_back(sm);
+    }
+  }
+  this->metadata_.edge_schemas = edge_schemas;
   std::string metadata_location =
       this->metadata_manager_->write_metadata(this->metadata_).ValueOrDie();
   log_info("Saved metadata to: " + metadata_location);

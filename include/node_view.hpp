@@ -3,6 +3,8 @@
 
 #include <arrow/api.h>
 
+#include <unordered_map>
+
 #include "node_arena.hpp"
 #include "schema.hpp"
 #include "temporal_context.hpp"
@@ -94,6 +96,17 @@ class NodeView {
    * - Node is versioned but didn't exist at the temporal snapshot
    */
   [[nodiscard]] bool is_visible() const;
+
+  /**
+   * Get dynamic properties at the resolved version.
+   *
+   * For non-versioned nodes, returns current properties.
+   * For versioned nodes, walks the version chain backward to find
+   * the most recent properties snapshot.  If none exists, returns
+   * an empty map (properties hadn't been set at that point in time).
+   */
+  [[nodiscard]] const std::unordered_map<std::string, Value>& get_properties()
+      const;
 
   /**
    * Get the resolved version info.

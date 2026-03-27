@@ -155,10 +155,26 @@ class Database {
     return shard_manager_->remove_node(schema_name, node_id);
   }
 
+  arrow::Result<bool> register_edge_schema(
+      const std::string &edge_type,
+      const std::vector<std::shared_ptr<Field>> &fields) {
+    return edge_store_->register_edge_schema(edge_type, fields);
+  }
+
   arrow::Result<bool> connect(const int64_t source_id, const std::string &type,
                               const int64_t target_id) {
     const auto edge =
         edge_store_->create_edge(source_id, type, target_id).ValueOrDie();
+    ARROW_RETURN_NOT_OK(edge_store_->add(edge));
+    return true;
+  }
+
+  arrow::Result<bool> connect(
+      const int64_t source_id, const std::string &type, const int64_t target_id,
+      std::unordered_map<std::string, Value> properties) {
+    ARROW_ASSIGN_OR_RAISE(const auto edge,
+                          edge_store_->create_edge(source_id, type, target_id,
+                                                   std::move(properties)));
     ARROW_RETURN_NOT_OK(edge_store_->add(edge));
     return true;
   }

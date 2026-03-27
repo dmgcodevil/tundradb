@@ -13,11 +13,13 @@
 
 #include "concurrency.hpp"
 #include "edge.hpp"
+#include "node_arena.hpp"
+#include "schema.hpp"
+#include "schema_layout.hpp"
 #include "utils.hpp"
 
 namespace tundradb {
 
-// todo rename to EdgeManager
 class EdgeStore {
   struct TableCache;
 
@@ -38,6 +40,11 @@ class EdgeStore {
   std::string data_file_;
   int64_t chunk_size_;
 
+  // Edge schema registries
+  std::unordered_map<std::string, std::shared_ptr<Schema>> edge_schemas_;
+  std::shared_ptr<LayoutRegistry> edge_layout_registry_;
+  std::shared_ptr<NodeArena> edge_arena_;
+
   arrow::Result<std::vector<std::shared_ptr<Edge>>> get_edges_from_map(
       const llvm::DenseMap<int64_t, std::unordered_set<int64_t>> &edge_map,
       int64_t id, const std::string &type) const;
@@ -57,7 +64,12 @@ class EdgeStore {
  public:
   explicit EdgeStore(const int64_t init_edge_id_counter,
                      const int64_t chunk_size = 1000)
-      : edge_id_counter_(init_edge_id_counter), chunk_size_(chunk_size) {}
+      : edge_id_counter_(init_edge_id_counter),
+        chunk_size_(chunk_size),
+        edge_layout_registry_(std::make_shared<LayoutRegistry>()),
+        edge_arena_(
+            node_arena_factory::create_free_list_arena(edge_layout_registry_)) {
+  }
 
   ~EdgeStore() {
     edges.clear();
@@ -71,10 +83,25 @@ class EdgeStore {
 
   int64_t get_edge_id_counter() const { return edge_id_counter_; }
 
+  // --- Edge schema management ---
+
+  arrow::Result<bool> register_edge_schema(
+      const std::string &edge_type,
+      const std::vector<std::shared_ptr<Field>> &fields);
+
+  [[nodiscard]] bool has_edge_schema(const std::string &edge_type) const;
+
+  [[nodiscard]] std::shared_ptr<Schema> get_edge_schema(
+      const std::string &edge_type) const;
+
+  [[nodiscard]] std::shared_ptr<SchemaLayout> get_edge_layout(
+      const std::string &edge_type) const;
+
+  // --- Edge CRUD ---
+
   arrow::Result<std::shared_ptr<Edge>> create_edge(
       int64_t source_id, const std::string &type, int64_t target_id,
-      std::unordered_map<std::string, std::shared_ptr<arrow::Array>>
-          properties = {});
+      std::unordered_map<std::string, Value> properties = {});
 
   arrow::Result<bool> add(const std::shared_ptr<Edge> &edge);
 

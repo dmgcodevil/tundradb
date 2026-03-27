@@ -4,6 +4,7 @@
 #include <arrow/result.h>
 
 #include <filesystem>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -308,6 +309,7 @@ struct Metadata {
   int current_snapshot_index = -1;
   std::vector<Snapshot> snapshots;
   std::vector<SchemaMetadata> schemas;
+  std::vector<SchemaMetadata> edge_schemas;
 
   Snapshot *get_current_snapshot() {
     if (current_snapshot_index >= 0 &&
@@ -327,6 +329,7 @@ struct Metadata {
 
   friend void to_json(nlohmann::json &j, const Metadata &m) {
     j = nlohmann::json{{"schemas", m.schemas},
+                       {"edge_schemas", m.edge_schemas},
                        {"snapshots", m.snapshots},
                        {"current_snapshot_index", m.current_snapshot_index}};
   }
@@ -334,6 +337,9 @@ struct Metadata {
   friend void from_json(const nlohmann::json &j, Metadata &m) {
     j.at("snapshots").get_to(m.snapshots);
     j.at("schemas").get_to(m.schemas);
+    if (j.contains("edge_schemas")) {
+      j.at("edge_schemas").get_to(m.edge_schemas);
+    }
     m.current_snapshot_index = j.value("current_snapshot_index", -1);
   }
 
@@ -410,9 +416,23 @@ struct EdgeMetadata {
   std::string edge_type;
   std::string data_file;
   int64_t record_count = 0;
+  int32_t schema_version = -1;  // -1 = schema-less
 
-  NLOHMANN_DEFINE_TYPE_INTRUSIVE(EdgeMetadata, edge_type, data_file,
-                                 record_count);
+  friend void to_json(nlohmann::json &j, const EdgeMetadata &em) {
+    j = nlohmann::json{{"edge_type", em.edge_type},
+                       {"data_file", em.data_file},
+                       {"record_count", em.record_count}};
+    if (em.schema_version >= 0) {
+      j["schema_version"] = em.schema_version;
+    }
+  }
+
+  friend void from_json(const nlohmann::json &j, EdgeMetadata &em) {
+    j.at("edge_type").get_to(em.edge_type);
+    j.at("data_file").get_to(em.data_file);
+    j.at("record_count").get_to(em.record_count);
+    em.schema_version = j.value("schema_version", -1);
+  }
 };
 
 struct Manifest {

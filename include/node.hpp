@@ -6,6 +6,7 @@
 #include <string>
 #include <unordered_map>
 
+#include "entity_ops.hpp"
 #include "logger.hpp"
 #include "node_arena.hpp"
 #include "node_view.hpp"
@@ -23,6 +24,9 @@ class Node {
   std::shared_ptr<NodeArena> arena_;
   std::shared_ptr<Schema> schema_;
   std::shared_ptr<SchemaLayout> layout_;
+
+  // Dynamic properties (ad-hoc key-value pairs, not in schema)
+  std::unordered_map<std::string, Value> properties_;
 
  public:
   int64_t id;
@@ -62,102 +66,68 @@ class Node {
     return {ptr, field->type()};
   }
 
+  // --- Unified field access (via entity_ops) ---
+
+  arrow::Result<Value> get_value(const std::shared_ptr<Field> &field) const {
+    return entity_ops::get_value(field, handle_.get(), arena_.get(), layout_,
+                                 data_, properties_);
+  }
+
   [[deprecated]]
   arrow::Result<Value> get_value(const std::string &field) const {
-    log_warn("get_value by string is deprecated");
     return get_value(schema_->get_field(field));
   }
 
-  arrow::Result<Value> get_value(const std::shared_ptr<Field> &field) const {
-    if (arena_ != nullptr) {
-      return arena_->get_field_value(*handle_, layout_, field);
-    }
+  [[nodiscard]] std::shared_ptr<Schema> get_schema() const { return schema_; }
+  [[nodiscard]] NodeHandle *get_handle() const { return handle_.get(); }
+  [[nodiscard]] NodeArena *get_arena() const { return arena_.get(); }
 
-    const auto it = data_.find(field->name());
-    if (it == data_.end()) {
-      return arrow::Status::KeyError("Field not found: ", field->name());
-    }
-    return it->second;
+  // --- Unified update (via entity_ops) ---
+
+  arrow::Result<bool> update_fields(const std::vector<FieldUpdate> &updates) {
+    return entity_ops::apply_updates(handle_.get(), arena_.get(), layout_,
+                                     data_, properties_, updates);
   }
 
-  [[nodiscard]] std::shared_ptr<Schema> get_schema() const { return schema_; }
+  arrow::Result<bool> update(const std::shared_ptr<Field> &field, Value value,
+                             UpdateType update_type = UpdateType::SET) {
+    return update_fields({{field, std::move(value), update_type}});
+  }
 
-  // Get node handle (for testing and internal use)
-  [[nodiscard]] NodeHandle *get_handle() const { return handle_.get(); }
+  // Legacy overload: pair-based batch with single UpdateType
+  arrow::Result<bool> update_fields(
+      const std::vector<std::pair<std::shared_ptr<Field>, Value>>
+          &field_updates,
+      const UpdateType update_type) {
+    std::vector<FieldUpdate> updates;
+    updates.reserve(field_updates.size());
+    for (const auto &[f, v] : field_updates) {
+      updates.push_back({f, v, update_type});
+    }
+    return update_fields(updates);
+  }
 
   [[deprecated]]
   arrow::Result<bool> update(const std::string &field, Value value,
                              UpdateType update_type) {
-    return update(schema_->get_field(field), value, update_type);
-  }
-
-  arrow::Result<bool> update(const std::shared_ptr<Field> &field, Value value,
-                             UpdateType update_type) {
-    if (arena_ != nullptr) {
-      ARROW_RETURN_NOT_OK(arena_->set_field_value(*handle_, layout_, field,
-                                                  value, update_type));
-      return true;
-    }
-
-    if (const auto it = data_.find(field->name()); it == data_.end()) {
-      return arrow::Status::KeyError("Field not found: ", field->name());
-    }
-
-    switch (update_type) {
-      case UpdateType::SET:
-        data_[field->name()] = std::move(value);
-        break;
-      case UpdateType::APPEND:
-        return arrow::Status::NotImplemented(
-            "APPEND not supported in non-arena mode");
-    }
-
-    return true;
-  }
-
-  /**
-   * @brief Batch-update multiple fields in a single version.
-   *
-   * When using the arena (versioned storage), this creates exactly ONE
-   * new version for all field updates instead of N versions.
-   */
-  arrow::Result<bool> update_fields(
-      const std::vector<std::pair<std::shared_ptr<Field>, Value>>
-          &field_updates,
-      UpdateType update_type) {
-    if (field_updates.empty()) return true;
-
-    if (arena_ != nullptr) {
-      return arena_->update_fields(*handle_, layout_, field_updates,
-                                   update_type);
-    }
-
-    // Non-arena fallback: update data_ map directly
-    for (const auto &[field, value] : field_updates) {
-      if (data_.find(field->name()) == data_.end()) {
-        return arrow::Status::KeyError("Field not found: ", field->name());
-      }
-      switch (update_type) {
-        case UpdateType::SET:
-          data_[field->name()] = value;
-          break;
-        case UpdateType::APPEND:
-          return arrow::Status::NotImplemented(
-              "APPEND not supported in non-arena mode");
-      }
-    }
-    return true;
+    return update(schema_->get_field(field), std::move(value), update_type);
   }
 
   [[deprecated]]
   arrow::Result<bool> set_value(const std::string &field, const Value &value) {
-    log_warn("set_value by string is deprecated");
     return update(schema_->get_field(field), value, UpdateType::SET);
   }
 
   arrow::Result<bool> set_value(const std::shared_ptr<Field> &field,
                                 const Value &value) {
     return update(field, value, UpdateType::SET);
+  }
+
+  // --- Properties ---
+
+  [[nodiscard]] const std::unordered_map<std::string, Value> &get_properties()
+      const {
+    return entity_ops::get_properties(handle_.get(), arena_.get(), properties_);
   }
 
   /**
@@ -412,8 +382,14 @@ inline arrow::Result<const char *> NodeView::get_value_ptr(
   assert(arena_ != nullptr && "NodeView created with null arena");
   assert(node_ != nullptr && "NodeView created with null node");
 
+  if (field->is_dynamic()) {
+    return arrow::Status::NotImplemented(
+        "get_value_ptr not supported for dynamic fields: dynamic values live "
+        "in a Value map, not the columnar byte buffer, so a raw char* pointer "
+        "is not meaningful; use get_value() instead");
+  }
+
   if (resolved_version_ == nullptr) {
-    // Non-versioned node -> delegate to Node
     return node_->get_value_ptr(field);
   }
 
@@ -426,19 +402,26 @@ inline arrow::Result<const char *> NodeView::get_value_ptr(
 
 inline arrow::Result<Value> NodeView::get_value(
     const std::shared_ptr<Field> &field) const {
-  assert(arena_ != nullptr && "NodeView created with null arena");
   assert(node_ != nullptr && "NodeView created with null node");
 
   if (resolved_version_ == nullptr) {
-    // Non-versioned node -> delegate to Node
     return node_->get_value(field);
   }
 
   const NodeHandle *handle = node_->get_handle();
   assert(handle != nullptr && "Versioned node must have a handle");
 
-  return arena_->get_field_value_from_version(*handle, resolved_version_,
-                                              layout_, field);
+  return entity_ops::get_value_at_version(field, *handle, resolved_version_,
+                                          layout_);
+}
+
+inline const std::unordered_map<std::string, Value> &NodeView::get_properties()
+    const {
+  if (resolved_version_ == nullptr) {
+    return node_->get_properties();
+  }
+  return entity_ops::get_properties_at_version(resolved_version_,
+                                               node_->get_properties());
 }
 
 inline bool NodeView::is_visible() const {

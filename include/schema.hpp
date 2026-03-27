@@ -24,6 +24,7 @@ struct Field {
   std::string name_;
   TypeDescriptor type_desc_;
   bool nullable_ = true;
+  bool dynamic_ = false;
 
   friend struct SchemaLayout;
   friend class SchemaLayout;
@@ -43,6 +44,13 @@ struct Field {
         type_desc_(TypeDescriptor::from_value_type(type)),
         nullable_(nullable) {}
 
+  /// Factory for dynamic (ad-hoc) fields not part of a schema layout.
+  static std::shared_ptr<Field> make_dynamic(std::string name) {
+    auto f = std::make_shared<Field>(std::move(name), ValueType::NA, true);
+    f->dynamic_ = true;
+    return f;
+  }
+
   [[nodiscard]] const std::string &name() const { return name_; }
 
   /// Returns the base ValueType for switch-based dispatch.
@@ -54,6 +62,7 @@ struct Field {
   }
 
   [[nodiscard]] bool nullable() const { return nullable_; }
+  [[nodiscard]] bool is_dynamic() const { return dynamic_; }
 
   /**
    * @brief Convert an Arrow field to Field
