@@ -23,7 +23,8 @@ enum class ValueType {
   FIXED_STRING32,  // Fixed-size string up to 32 bytes (uses StringArena pool 1)
   FIXED_STRING64,  // Fixed-size string up to 64 bytes (uses StringArena pool 2)
   BOOL,            // Boolean value
-  ARRAY            // Variable or fixed-size array (uses ArrayArena)
+  ARRAY,           // Variable or fixed-size array (uses ArrayArena)
+  MAP              // Key-value map / properties (uses MapArena)
 };
 
 /**
@@ -42,6 +43,12 @@ inline bool is_string_type(const ValueType type) {
 inline bool is_array_type(const ValueType type) {
   return type == ValueType::ARRAY;
 }
+
+/**
+ * Check if a ValueType represents a map type.
+ * Maps are stored using MapRef (16 bytes) in the node slot.
+ */
+inline bool is_map_type(const ValueType type) { return type == ValueType::MAP; }
 
 /**
  * Get the maximum size for fixed-size string types.
@@ -89,6 +96,8 @@ inline std::string to_string(const ValueType type) {
       return "Bool";
     case ValueType::ARRAY:
       return "Array";
+    case ValueType::MAP:
+      return "Map";
     default:
       return "Unknown";
   }
@@ -107,6 +116,10 @@ inline size_t get_type_size(const ValueType type) {
   // Array types are stored as ArrayRef (16 bytes)
   if (is_array_type(type)) {
     return 16;  // sizeof(ArrayRef) = 16 bytes
+  }
+  // Map types are stored as MapRef (16 bytes)
+  if (is_map_type(type)) {
+    return 16;  // sizeof(MapRef) = 16 bytes
   }
 
   switch (type) {
@@ -136,6 +149,10 @@ inline size_t get_type_alignment(const ValueType type) {
   // Array types are stored as ArrayRef (8-byte pointer alignment)
   if (is_array_type(type)) {
     return 8;  // alignof(ArrayRef) = 8 bytes (pointer alignment)
+  }
+  // Map types are stored as MapRef (8-byte pointer alignment)
+  if (is_map_type(type)) {
+    return 8;  // alignof(MapRef) = 8 bytes (pointer alignment)
   }
 
   switch (type) {

@@ -109,7 +109,7 @@ TEST_F(EdgeStoreTest, GetTable) {
   ASSERT_TRUE(table_res.ok());
   auto table = table_res.ValueOrDie();
 
-  ASSERT_EQ(table->num_columns(), 5);
+  ASSERT_EQ(table->num_columns(), 4);
   ASSERT_EQ(table->num_rows(), 3);
 
   auto id_array =
@@ -257,7 +257,6 @@ TEST_F(EdgePropertyTest, CreateEdgeWithPropertiesNoSchema) {
 TEST_F(EdgePropertyTest, SchemaLessEdgeNoProperties) {
   auto edge_res = store->create_edge(1, "friend", 2);
   ASSERT_TRUE(edge_res.ok());
-  ASSERT_TRUE(edge_res.ValueOrDie()->get_properties().empty());
 }
 
 TEST_F(EdgePropertyTest, GetTableWithProperties) {
@@ -285,8 +284,8 @@ TEST_F(EdgePropertyTest, GetTableWithProperties) {
   ASSERT_TRUE(table_res.ok());
   auto table = table_res.ValueOrDie();
 
-  // 4 structural + 2 property columns + _properties
-  ASSERT_EQ(table->num_columns(), 7);
+  // 4 structural + 2 property columns
+  ASSERT_EQ(table->num_columns(), 6);
   ASSERT_EQ(table->num_rows(), 3);
 
   // Verify schema field names
@@ -325,12 +324,12 @@ TEST_F(EdgePropertyTest, MixedSchemaAndSchemaLessEdges) {
   // works_at table has property columns
   auto works_at_table = store->get_table("works_at");
   ASSERT_TRUE(works_at_table.ok());
-  ASSERT_EQ(works_at_table.ValueOrDie()->num_columns(), 6);
+  ASSERT_EQ(works_at_table.ValueOrDie()->num_columns(), 5);
 
-  // friend table has structural columns + _properties
+  // friend table has structural columns only (no schema fields)
   auto friend_table = store->get_table("friend");
   ASSERT_TRUE(friend_table.ok());
-  ASSERT_EQ(friend_table.ValueOrDie()->num_columns(), 5);
+  ASSERT_EQ(friend_table.ValueOrDie()->num_columns(), 4);
 }
 
 TEST_F(EdgePropertyTest, NullableProperties) {
@@ -385,7 +384,7 @@ TEST_F(EdgePropertyTest, AllPropertyTypes) {
   auto table = table_res.ValueOrDie();
 
   ASSERT_EQ(table->num_columns(),
-            10);  // 4 structural + 5 property + _properties
+            9);  // 4 structural + 5 property
 
   auto str_col =
       std::static_pointer_cast<arrow::StringArray>(table->column(4)->chunk(0));

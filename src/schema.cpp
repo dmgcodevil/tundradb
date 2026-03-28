@@ -56,6 +56,12 @@ arrow::Result<Field> Field::from_arrow(
                  field->nullable());
   }
 
+  // Handle map -> MAP
+  if (dt->id() == arrow::Type::MAP) {
+    return Field(field->name(), TypeDescriptor::properties(),
+                 field->nullable());
+  }
+
   // Scalar types
   ARROW_ASSIGN_OR_RAISE(auto vt, arrow_elem_to_value_type(dt));
   return Field(field->name(), vt, field->nullable());
@@ -117,6 +123,10 @@ arrow::Result<Field> Field::from_arrow(
       }
       return arrow::field(name_, arrow::list(arrow::field("item", elem_dt)));
     }
+    case ValueType::MAP:
+      // MAP (properties) → Arrow map<utf8, binary> for serialization
+      return arrow::field(name_, arrow::map(arrow::utf8(), arrow::binary()),
+                          nullable_);
     default:
       return arrow::Status::NotImplemented("Unsupported ValueType: ",
                                            static_cast<int>(base));

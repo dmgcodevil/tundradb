@@ -14,6 +14,7 @@
 #include <arrow/type.h>
 
 #include "array_ref.hpp"
+#include "map_ref.hpp"
 #include "string_arena.hpp"
 
 namespace tundradb {
@@ -36,6 +37,9 @@ class Value {
 
   // Arena-backed array (already allocated in ArrayArena)
   explicit Value(ArrayRef v) : type_(ValueType::ARRAY), data_(std::move(v)) {}
+
+  // Arena-backed map (already allocated in MapArena)
+  explicit Value(MapRef v) : type_(ValueType::MAP), data_(std::move(v)) {}
 
   // Raw array data - will be converted to ArrayRef by NodeArena
   // (same pattern as std::string -> StringRef for strings)
@@ -63,6 +67,7 @@ class Value {
     return get<StringRef>();
   }
   [[nodiscard]] const ArrayRef& as_array_ref() const { return get<ArrayRef>(); }
+  [[nodiscard]] const MapRef& as_map_ref() const { return get<MapRef>(); }
   [[nodiscard]] bool as_bool() const { return get<bool>(); }
   [[nodiscard]] bool is_null() const { return type_ == ValueType::NA; }
 
@@ -79,6 +84,11 @@ class Value {
   // Check if the Value contains an ArrayRef (arena-backed)
   [[nodiscard]] bool holds_array_ref() const {
     return type_ == ValueType::ARRAY && std::holds_alternative<ArrayRef>(data_);
+  }
+
+  // Check if the Value contains a MapRef (arena-backed)
+  [[nodiscard]] bool holds_map_ref() const {
+    return type_ == ValueType::MAP && std::holds_alternative<MapRef>(data_);
   }
 
   // Check if the Value contains a raw array (std::vector<Value>)
@@ -170,6 +180,24 @@ class Value {
         }
         return "[]";
       }
+      case ValueType::MAP: {
+        if (holds_map_ref()) {
+          const auto& m = as_map_ref();
+          std::string result = "{";
+          for (uint32_t i = 0; i < m.count(); ++i) {
+            if (i > 0) result += ", ";
+            const auto* e = m.entry_ptr(i);
+            result += e->key.to_string();
+            result += ": ";
+            auto val = Value::read_value_from_memory(
+                e->value, static_cast<ValueType>(e->value_type));
+            result += val.to_string();
+          }
+          result += "}";
+          return result;
+        }
+        return "{}";
+      }
       default:
         return "";
     }
@@ -197,6 +225,8 @@ class Value {
         return Value{*reinterpret_cast<const StringRef*>(ptr), type};
       case ValueType::ARRAY:
         return Value{*reinterpret_cast<const ArrayRef*>(ptr)};
+      case ValueType::MAP:
+        return Value{*reinterpret_cast<const MapRef*>(ptr)};
       case ValueType::NA:
       default:
         return Value{};
@@ -216,7 +246,7 @@ class Value {
  private:
   ValueType type_;
   std::variant<std::monostate, int32_t, int64_t, float, double, std::string,
-               StringRef, ArrayRef, std::vector<Value>, bool>
+               StringRef, ArrayRef, MapRef, std::vector<Value>, bool>
       data_;
 };
 
@@ -260,6 +290,10 @@ struct ValueRef {
     return *reinterpret_cast<const ArrayRef*>(data);
   }
 
+  [[nodiscard]] const MapRef& as_map_ref() const {
+    return *reinterpret_cast<const MapRef*>(data);
+  }
+
   arrow::Result<std::shared_ptr<arrow::Scalar>> as_scalar() const {
     switch (type) {
       case ValueType::INT32:
@@ -277,6 +311,9 @@ struct ValueRef {
       case ValueType::ARRAY:
         return arrow::Status::NotImplemented(
             "Array scalar conversion not yet implemented");
+      case ValueType::MAP:
+        return arrow::Status::NotImplemented(
+            "Map scalar conversion not yet implemented");
       default:
         return arrow::Status::NotImplemented(
             "Unsupported Value type for Arrow scalar conversion: ",
@@ -338,6 +375,12 @@ struct ValueRef {
         return arr1 == arr2;
       }
 
+      case ValueType::MAP: {
+        const MapRef& m1 = *reinterpret_cast<const MapRef*>(data);
+        const MapRef& m2 = *reinterpret_cast<const MapRef*>(other.data);
+        return m1 == m2;
+      }
+
       default:
         return false;  // Unknown type
     }
@@ -396,6 +439,22 @@ struct ValueRef {
           result += elem.to_string();
         }
         result += "]";
+        return result;
+      }
+      case ValueType::MAP: {
+        const MapRef& m = as_map_ref();
+        if (m.is_null()) return "NULL";
+        std::string result = "{";
+        for (uint32_t i = 0; i < m.count(); ++i) {
+          if (i > 0) result += ", ";
+          const auto* e = m.entry_ptr(i);
+          result += e->key.to_string();
+          result += ": ";
+          auto val = Value::read_value_from_memory(
+              e->value, static_cast<ValueType>(e->value_type));
+          result += val.to_string();
+        }
+        result += "}";
         return result;
       }
       default:

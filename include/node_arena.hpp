@@ -15,13 +15,13 @@
 #include "clock.hpp"
 #include "field_update.hpp"
 #include "free_list_arena.hpp"
+#include "map_arena.hpp"
 #include "mem_arena.hpp"
 #include "memory_arena.hpp"
 #include "schema_layout.hpp"
 #include "string_arena.hpp"
 #include "types.hpp"
 #include "update_type.hpp"
-#include "value_map_ops.hpp"
 
 namespace tundradb {
 
@@ -55,10 +55,6 @@ struct VersionInfo {
 
   // Changed fields: field_idx -> value pointer (nullptr = explicit NULL)
   llvm::SmallDenseMap<uint16_t, char*> updated_fields;
-
-  // Dynamic properties snapshot (nullptr = no change in this version).
-  // Owned by version_arena_ when non-null.
-  std::unordered_map<std::string, Value>* properties_snapshot = nullptr;
 
   // Lazy-populated cache: field_idx -> effective value pointer
   mutable llvm::SmallDenseMap<uint16_t, char*> field_cache_;
@@ -346,6 +342,7 @@ class NodeArena {
         string_arena_(string_arena ? std::move(string_arena)
                                    : std::make_unique<StringArena>()),
         array_arena_(std::make_unique<ArrayArena>()),
+        map_arena_(std::make_unique<MapArena>()),
         versioning_enabled_(enable_versioning),
         version_counter_(0) {
     if (versioning_enabled_) {
@@ -357,9 +354,7 @@ class NodeArena {
     // VersionInfo objects are placement-new'd into version_arena_ memory.
     // Their SmallDenseMap members may heap-allocate, so we must call
     // destructors before the arena frees the underlying memory.
-    // properties_snapshot maps are heap-allocated and must be deleted.
     for (auto* vi : version_infos_) {
-      delete vi->properties_snapshot;
       vi->~VersionInfo();
     }
   }
@@ -436,6 +431,11 @@ class NodeArena {
             if (!arr_ref->is_null()) {
               array_arena_->mark_for_deletion(*arr_ref);
             }
+          } else if (is_map_type(field.type)) {
+            const auto* map_ref = reinterpret_cast<const MapRef*>(field_ptr);
+            if (!map_ref->is_null()) {
+              map_arena_->mark_for_deletion(*map_ref);
+            }
           }
         }
       }
@@ -445,9 +445,9 @@ class NodeArena {
   }
 
   /** Get field value pointer. */
-  static const char* get_field_value_ptr(
-      const NodeHandle& handle, const std::shared_ptr<SchemaLayout>& layout,
-      const std::shared_ptr<Field>& field) {
+  static const char* get_value_ptr(const NodeHandle& handle,
+                                   const std::shared_ptr<SchemaLayout>& layout,
+                                   const std::shared_ptr<Field>& field) {
     // Logger::get_instance().debug("get_field_value: {}.{}", schema_name,
     //                              field_name);
     if (handle.is_null()) {
@@ -455,13 +455,12 @@ class NodeArena {
       return nullptr;  // null value for invalid handle
     }
 
-    return layout->get_field_value_ptr(static_cast<const char*>(handle.ptr),
-                                       field);
+    return layout->get_value_ptr(static_cast<const char*>(handle.ptr), field);
   }
 
-  static Value get_field_value(const NodeHandle& handle,
-                               const std::shared_ptr<SchemaLayout>& layout,
-                               const std::shared_ptr<Field>& field) {
+  static Value get_value(const NodeHandle& handle,
+                         const std::shared_ptr<SchemaLayout>& layout,
+                         const std::shared_ptr<Field>& field) {
     if (handle.is_null()) {
       return Value{};  // null value for invalid handle
     }
@@ -492,203 +491,11 @@ class NodeArena {
       }
 
       // Not found in version chain, read from base node
-      return layout->get_field_value(static_cast<const char*>(handle.ptr),
-                                     field);
+      return layout->get_value(static_cast<const char*>(handle.ptr), field);
     }
 
     // Non-versioned: direct read from base node
-    return layout->get_field_value(static_cast<const char*>(handle.ptr), field);
-  }
-
-  /** Update multiple fields atomically (creates one version).
-   *  Handles both schema fields (by layout index) and dynamic fields
-   *  (by mutating live_properties and snapshotting) in a single version.
-   */
-  arrow::Result<bool> update_fields(
-      NodeHandle& current_handle, const std::shared_ptr<SchemaLayout>& layout,
-      const std::vector<std::pair<std::shared_ptr<Field>, Value>>&
-          field_updates,
-      UpdateType update_type = UpdateType::SET,
-      std::unordered_map<std::string, Value>* live_properties = nullptr) {
-    std::vector<std::pair<uint16_t, Value>> indexed_updates;
-    indexed_updates.reserve(field_updates.size());
-    bool has_dynamic = false;
-
-    for (const auto& [field, value] : field_updates) {
-      if (field->is_dynamic()) {
-        has_dynamic = true;
-        if (live_properties) {
-          if (value.is_null()) {
-            live_properties->erase(field->name());
-          } else {
-            (*live_properties)[field->name()] = value;
-          }
-        }
-      } else {
-        const FieldLayout* field_layout = layout->get_field_layout(field);
-        if (!field_layout) {
-          return arrow::Status::Invalid("Invalid field in update_fields");
-        }
-        indexed_updates.emplace_back(field_layout->index, value);
-      }
-    }
-
-    const auto* snapshot =
-        (has_dynamic && live_properties) ? live_properties : nullptr;
-    return update_fields_by_index(current_handle, layout, indexed_updates,
-                                  update_type, snapshot);
-  }
-
-  /**
-   * Create new version by updating a single field.
-   * For multiple fields, use update_fields() instead.
-   */
-  arrow::Result<bool> create_new_version(
-      NodeHandle& current_handle, const std::shared_ptr<SchemaLayout>& layout,
-      uint16_t field_idx, const Value& new_value,
-      UpdateType update_type = UpdateType::SET) {
-    if (field_idx >= layout->get_fields().size()) {
-      return arrow::Status::IndexError("Field index out of bounds");
-    }
-    const std::vector<std::pair<uint16_t, Value>> updates = {
-        {field_idx, new_value}};
-    return update_fields_by_index(current_handle, layout, updates, update_type);
-  }
-
-  /** Update multiple fields by index (internal, more efficient).
-   *  If properties_snapshot_source is non-null, the new VersionInfo also
-   *  gets a copy of that map as its properties_snapshot (for dynamic fields).
-   */
-  arrow::Result<bool> update_fields_by_index(
-      NodeHandle& current_handle, const std::shared_ptr<SchemaLayout>& layout,
-      const std::vector<std::pair<uint16_t, Value>>& field_updates,
-      UpdateType update_type = UpdateType::SET,
-      const std::unordered_map<std::string, Value>* properties_snapshot_source =
-          nullptr) {
-    if (field_updates.empty() && properties_snapshot_source == nullptr)
-      return true;
-
-    // Non-versioned: write directly to base node
-    if (!versioning_enabled_ || !current_handle.is_versioned()) {
-      for (const auto& [field_idx, value] : field_updates) {
-        if (field_idx >= layout->get_fields().size()) {
-          return arrow::Status::IndexError("Field index out of bounds");
-        }
-        const FieldLayout& field_layout = layout->get_fields()[field_idx];
-        ARROW_RETURN_NOT_OK(set_field_value_internal(
-            current_handle.ptr, layout, &field_layout, value, update_type));
-      }
-      return true;
-    }
-
-    const uint64_t now = get_current_timestamp_ns();
-
-    // Allocate new VersionInfo
-    void* version_info_memory =
-        version_arena_->allocate(sizeof(VersionInfo), alignof(VersionInfo));
-    if (!version_info_memory) {
-      return arrow::Status::OutOfMemory("Failed to allocate VersionInfo");
-    }
-
-    uint64_t new_version_id =
-        version_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
-    VersionInfo* old_version_info = current_handle.version_info_;
-    VersionInfo* new_version_info = new (version_info_memory)
-        VersionInfo(new_version_id, now, old_version_info);
-    version_infos_.push_back(new_version_info);
-
-    // ========================================================================
-    // BATCH ALLOCATION: Calculate total memory needed for all fields
-    // ========================================================================
-    size_t total_size = 0;
-    size_t max_alignment = 1;
-
-    // For APPEND, we always need space for the ArrayRef slot
-    for (const auto& [field_idx, new_value] : field_updates) {
-      if (field_idx >= layout->get_fields().size()) {
-        return arrow::Status::IndexError("Field index out of bounds");
-      }
-
-      const FieldLayout& field_layout = layout->get_fields()[field_idx];
-      if (update_type == UpdateType::APPEND || !new_value.is_null()) {
-        total_size += field_layout.size;
-        max_alignment = std::max(max_alignment, field_layout.alignment);
-      }
-    }
-
-    // Batch allocate memory for all non-null fields.
-    // Zero-init so that write_value_to_memory's copy assignment on
-    // StringRef/ArrayRef slots sees null objects (release() is a no-op on
-    // null).
-    char* batch_memory = nullptr;
-    if (total_size > 0) {
-      batch_memory = static_cast<char*>(
-          version_arena_->allocate(total_size, max_alignment));
-      if (!batch_memory) {
-        return arrow::Status::OutOfMemory(
-            "Failed to batch allocate field storage");
-      }
-      std::memset(batch_memory, 0, total_size);
-    }
-
-    // Second pass: write values and assign pointers
-    size_t offset = 0;
-    for (const auto& [field_idx, new_value] : field_updates) {
-      const FieldLayout& field_layout = layout->get_fields()[field_idx];
-
-      // Handle NULL SET: use nullptr sentinel
-      if (update_type == UpdateType::SET && new_value.is_null()) {
-        new_version_info->updated_fields[field_idx] = nullptr;
-        continue;
-      }
-
-      assert(batch_memory != nullptr &&
-             "Batch memory must be allocated for non-null fields");
-
-      Value storage_value = new_value;
-
-      if (update_type == UpdateType::APPEND) {
-        ARROW_ASSIGN_OR_RAISE(storage_value,
-                              prepare_append_value(current_handle, layout,
-                                                   field_layout, new_value));
-      } else {
-        // SET: convert raw types to arena-backed refs
-        if (new_value.type() == ValueType::STRING &&
-            new_value.holds_std_string()) {
-          ARROW_ASSIGN_OR_RAISE(
-              StringRef str_ref,
-              string_arena_->store_string_auto(new_value.as_string()));
-          storage_value = Value{str_ref, field_layout.type};
-        } else if (new_value.type() == ValueType::ARRAY &&
-                   new_value.holds_raw_array()) {
-          ARROW_ASSIGN_OR_RAISE(ArrayRef arr_ref,
-                                store_raw_array(field_layout.type_desc,
-                                                new_value.as_raw_array()));
-          storage_value = Value{std::move(arr_ref)};
-        }
-      }
-
-      char* field_storage = batch_memory + offset;
-      offset += field_layout.size;
-
-      if (!write_value_to_memory(field_storage, field_layout.type,
-                                 storage_value)) {
-        return arrow::Status::TypeError("Type mismatch writing field value");
-      }
-
-      new_version_info->updated_fields[field_idx] = field_storage;
-    }
-
-    if (properties_snapshot_source != nullptr) {
-      new_version_info->properties_snapshot =
-          new std::unordered_map<std::string, Value>(
-              *properties_snapshot_source);
-    }
-
-    old_version_info->valid_to = now;
-    current_handle.version_info_ = new_version_info;
-
-    return true;
+    return layout->get_value(static_cast<const char*>(handle.ptr), field);
   }
 
   /**
@@ -713,7 +520,7 @@ class NodeArena {
       if (found && ptr) {
         current_ref = *reinterpret_cast<const ArrayRef*>(ptr);
       } else if (!found) {
-        const char* base_ptr = layout->get_field_value_ptr(
+        const char* base_ptr = layout->get_value_ptr(
             static_cast<const char*>(handle.ptr), field_layout.index);
         if (base_ptr) {
           current_ref = *reinterpret_cast<const ArrayRef*>(base_ptr);
@@ -779,88 +586,6 @@ class NodeArena {
     return set_field_value_internal(handle.ptr, layout, field_layout, value);
   }
 
-  /**
-   * Set field value.
-   * Creates new version if versioning enabled, direct write otherwise.
-   */
-  arrow::Status set_field_value(NodeHandle& handle,
-                                const std::shared_ptr<SchemaLayout>& layout,
-                                const std::shared_ptr<Field>& field,
-                                const Value& value,
-                                UpdateType update_type = UpdateType::SET) {
-    assert(!handle.is_null());
-
-    const FieldLayout* field_layout = layout->get_field_layout(field);
-    if (!field_layout) {
-      return arrow::Status::Invalid(
-          "set_field_value: field not found in layout");
-    }
-
-    // VERSIONED PATH: Create a new version
-    if (versioning_enabled_ && handle.is_versioned()) {
-      const std::vector<std::pair<uint16_t, Value>> updates = {
-          {field_layout->index, value}};
-      ARROW_RETURN_NOT_OK(
-          update_fields_by_index(handle, layout, updates, update_type));
-      return arrow::Status::OK();
-    }
-
-    // NON-VERSIONED PATH: direct write via shared implementation
-    return set_field_value_internal(handle.ptr, layout, field_layout, value,
-                                    update_type);
-  }
-
-  /**
-   * Walk the version chain backward from `version` to find the most recent
-   * properties snapshot.  Returns nullptr when no property mutation has ever
-   * been recorded (i.e. properties were empty throughout).
-   */
-  static const std::unordered_map<std::string, Value>* get_properties_snapshot(
-      const VersionInfo* version) {
-    const VersionInfo* cur = version;
-    while (cur != nullptr) {
-      if (cur->properties_snapshot != nullptr) {
-        return cur->properties_snapshot;
-      }
-      cur = cur->prev;
-    }
-    return nullptr;
-  }
-
-  // =========================================================================
-  // Dynamic field reads (Mode A — versioning enabled)
-  // =========================================================================
-
-  static Value get_dynamic_field_value(const NodeHandle& handle,
-                                       const std::string& field_name) {
-    auto* snap = get_properties_snapshot(handle.version_info_);
-    if (snap) {
-      auto it = snap->find(field_name);
-      if (it != snap->end()) return it->second;
-    }
-    return Value{};
-  }
-
-  static Value get_dynamic_field_value_from_version(
-      const VersionInfo* version, const std::string& field_name) {
-    auto* snap = get_properties_snapshot(version);
-    if (snap) {
-      auto it = snap->find(field_name);
-      if (it != snap->end()) return it->second;
-    }
-    return Value{};
-  }
-
-  static const std::unordered_map<std::string, Value>* get_properties(
-      const NodeHandle& handle) {
-    return get_properties_snapshot(handle.version_info_);
-  }
-
-  static const std::unordered_map<std::string, Value>*
-  get_properties_from_version(const VersionInfo* version) {
-    return get_properties_snapshot(version);
-  }
-
   // =========================================================================
   // apply_updates — single public write entry point
   // =========================================================================
@@ -868,9 +593,8 @@ class NodeArena {
   arrow::Result<bool> apply_updates(NodeHandle& handle,
                                     const std::shared_ptr<SchemaLayout>& layout,
                                     const std::vector<FieldUpdate>& updates) {
-    ARROW_ASSIGN_OR_RAISE(auto classified, classify_updates(layout, updates));
-    auto& schema_updates = classified.first;
-    auto& dynamic_updates = classified.second;
+    ARROW_ASSIGN_OR_RAISE(auto schema_updates,
+                          resolve_field_indices(layout, updates));
 
     if (!versioning_enabled_ || !handle.is_versioned()) {
       ARROW_RETURN_NOT_OK(
@@ -878,11 +602,7 @@ class NodeArena {
       return true;
     }
 
-    ARROW_ASSIGN_OR_RAISE(
-        auto snapshot,
-        clone_and_apply_dynamic_updates(handle.version_info_, dynamic_updates));
-
-    if (schema_updates.empty() && !snapshot) {
+    if (schema_updates.empty()) {
       return true;
     }
 
@@ -892,13 +612,148 @@ class NodeArena {
     ARROW_RETURN_NOT_OK(materialize_versioned_schema_fields(
         handle, layout, schema_updates, new_vi));
 
-    if (snapshot) {
-      new_vi->properties_snapshot = snapshot.release();
-    }
-
     handle.version_info_->valid_to = now;
     handle.version_info_ = new_vi;
     return true;
+  }
+
+  // =========================================================================
+  // Map (properties) helpers
+  // =========================================================================
+
+  /**
+   * Allocate an empty MapRef in the map arena.
+   * Use this to create the initial MapRef for a MAP field.
+   */
+  arrow::Result<MapRef> allocate_map(
+      uint32_t capacity = MapArena::DEFAULT_CAPACITY) {
+    return map_arena_->allocate(capacity);
+  }
+
+  /**
+   * Set a key-value pair in a MapRef.
+   * Handles COW growth when the map is full.
+   *
+   * @param ref       MapRef to set entry in (may be reallocated)
+   * @param key       Key string (stored in string_arena)
+   * @param value     Value to store
+   * @return Ok on success
+   */
+  arrow::Status set_map_entry(MapRef& ref, const std::string& key,
+                              const Value& value) {
+    if (ref.is_null()) {
+      ARROW_ASSIGN_OR_RAISE(ref, map_arena_->allocate());
+    }
+
+    ARROW_ASSIGN_OR_RAISE(StringRef key_ref,
+                          string_arena_->store_string_auto(key));
+
+    ValueType vtype = value.type();
+    const void* value_ptr = nullptr;
+    StringRef value_str_ref;
+    ArrayRef value_arr_ref;
+    MapRef value_map_ref;
+
+    switch (vtype) {
+      case ValueType::INT32: {
+        static int32_t tmp;
+        tmp = value.as_int32();
+        value_ptr = &tmp;
+        break;
+      }
+      case ValueType::INT64: {
+        static int64_t tmp;
+        tmp = value.as_int64();
+        value_ptr = &tmp;
+        break;
+      }
+      case ValueType::DOUBLE: {
+        static double tmp;
+        tmp = value.as_double();
+        value_ptr = &tmp;
+        break;
+      }
+      case ValueType::FLOAT: {
+        static float tmp;
+        tmp = value.as_float();
+        value_ptr = &tmp;
+        break;
+      }
+      case ValueType::BOOL: {
+        static bool tmp;
+        tmp = value.as_bool();
+        value_ptr = &tmp;
+        break;
+      }
+      case ValueType::STRING:
+      case ValueType::FIXED_STRING16:
+      case ValueType::FIXED_STRING32:
+      case ValueType::FIXED_STRING64: {
+        if (value.holds_string_ref()) {
+          value_str_ref = value.as_string_ref();
+        } else {
+          ARROW_ASSIGN_OR_RAISE(value_str_ref, string_arena_->store_string_auto(
+                                                   value.as_string()));
+        }
+        value_ptr = &value_str_ref;
+        vtype = ValueType::STRING;
+        break;
+      }
+      case ValueType::ARRAY: {
+        if (value.holds_array_ref()) {
+          value_arr_ref = value.as_array_ref();
+        } else {
+          return arrow::Status::Invalid(
+              "set_map_entry: raw arrays must be converted to ArrayRef first");
+        }
+        value_ptr = &value_arr_ref;
+        break;
+      }
+      case ValueType::MAP: {
+        if (value.holds_map_ref()) {
+          value_map_ref = value.as_map_ref();
+        } else {
+          return arrow::Status::Invalid(
+              "set_map_entry: maps must be converted to MapRef first");
+        }
+        value_ptr = &value_map_ref;
+        break;
+      }
+      default:
+        return arrow::Status::Invalid("set_map_entry: unsupported value type");
+    }
+
+    auto status = MapArena::set_entry(ref, key_ref, vtype, value_ptr);
+    if (status.IsCapacityError()) {
+      ARROW_ASSIGN_OR_RAISE(MapRef grown,
+                            map_arena_->copy(ref, ref.capacity()));
+      map_arena_->mark_for_deletion(ref);
+      ref = std::move(grown);
+      return MapArena::set_entry(ref, key_ref, vtype, value_ptr);
+    }
+    return status;
+  }
+
+  /** @deprecated Use MapRef::get_value(key) directly. */
+  [[deprecated("Use MapRef::get_value(key) directly")]]
+  static Value get_value(const MapRef& ref, const std::string& key) {
+    return ref.get_value(key);
+  }
+
+  /**
+   * Remove a key from a MapRef.
+   * Returns true if found and removed.
+   */
+  static bool remove_map_entry(MapRef& ref, const std::string& key) {
+    return MapArena::remove_entry(ref, key);
+  }
+
+  /**
+   * COW-copy a MapRef for versioning. The new ref has independent storage.
+   */
+  arrow::Result<MapRef> copy_map(const MapRef& src,
+                                 uint32_t extra_capacity = 0) {
+    return map_arena_->copy(src, extra_capacity);
   }
 
   /** Reset arenas (keeps chunks). */
@@ -918,6 +773,9 @@ class NodeArena {
 
   /** Get array arena. */
   ArrayArena* get_array_arena() const { return array_arena_.get(); }
+
+  /** Get map arena. */
+  MapArena* get_map_arena() const { return map_arena_.get(); }
 
   // Statistics and getters
   size_t get_total_allocated() const {
@@ -940,7 +798,7 @@ class NodeArena {
    * @param field Field to read
    * @return Pointer to field data or error if not found
    */
-  static const char* get_field_value_ptr_from_version(
+  static const char* get_value_ptr_at_version(
       const NodeHandle& handle, const VersionInfo* version,
       const std::shared_ptr<SchemaLayout>& layout,
       const std::shared_ptr<Field>& field) {
@@ -957,15 +815,15 @@ class NodeArena {
     }
 
     // Not in version chain, read from base node
-    return layout->get_field_value_ptr(static_cast<const char*>(handle.ptr),
-                                       field_layout->index);
+    return layout->get_value_ptr(static_cast<const char*>(handle.ptr),
+                                 field_layout->index);
   }
 
   /**
    * Get field value starting from a specific version.
    * Used by NodeView for temporal queries.
    */
-  static arrow::Result<Value> get_field_value_from_version(
+  static arrow::Result<Value> get_value_at_version(
       const NodeHandle& handle, const VersionInfo* version,
       const std::shared_ptr<SchemaLayout>& layout,
       const std::shared_ptr<Field>& field) {
@@ -984,12 +842,12 @@ class NodeArena {
         return Value{};
       }
       // Read value from version chain
-      return layout->get_field_value_from_ptr(field_ptr, *field_layout);
+      return layout->get_value_from_ptr(field_ptr, *field_layout);
     }
 
     // Not in version chain, read from base node
-    return layout->get_field_value(static_cast<const char*>(handle.ptr),
-                                   *field_layout);
+    return layout->get_value(static_cast<const char*>(handle.ptr),
+                             *field_layout);
   }
 
  private:
@@ -999,28 +857,21 @@ class NodeArena {
 
   // ---- apply_updates helpers ------------------------------------------------
 
-  using PropertiesMap = std::unordered_map<std::string, Value>;
-
-  /** Partition FieldUpdates into schema (with resolved index) and dynamic. */
-  arrow::Result<
-      std::pair<std::vector<IndexedFieldUpdate>, std::vector<FieldUpdate>>>
-  classify_updates(const std::shared_ptr<SchemaLayout>& layout,
-                   const std::vector<FieldUpdate>& updates) const {
-    std::vector<IndexedFieldUpdate> schema;
-    std::vector<FieldUpdate> dynamic;
+  /** Resolve FieldUpdates to IndexedFieldUpdates using the schema layout. */
+  static arrow::Result<std::vector<IndexedFieldUpdate>> resolve_field_indices(
+      const std::shared_ptr<SchemaLayout>& layout,
+      const std::vector<FieldUpdate>& updates) {
+    std::vector<IndexedFieldUpdate> result;
+    result.reserve(updates.size());
     for (const auto& upd : updates) {
-      if (upd.field->is_dynamic()) {
-        dynamic.push_back(upd);
-      } else {
-        const FieldLayout* fl = layout->get_field_layout(upd.field);
-        if (!fl) {
-          return arrow::Status::Invalid("Invalid field in apply_updates: ",
-                                        upd.field->name());
-        }
-        schema.push_back({static_cast<uint16_t>(fl->index), upd.value, upd.op});
+      const FieldLayout* fl = layout->get_field_layout(upd.field);
+      if (!fl) {
+        return arrow::Status::Invalid("Invalid field in apply_updates: ",
+                                      upd.field->name());
       }
+      result.push_back({static_cast<uint16_t>(fl->index), upd.value, upd.op});
     }
-    return std::make_pair(std::move(schema), std::move(dynamic));
+    return result;
   }
 
   /** Non-versioned path: write schema fields directly to base node memory. */
@@ -1038,32 +889,16 @@ class NodeArena {
     return arrow::Status::OK();
   }
 
-  /**
-   * COW-clone the current properties snapshot and apply dynamic field updates.
-   * Returns nullptr (via unique_ptr) when there are no dynamic updates.
-   */
-  arrow::Result<std::unique_ptr<PropertiesMap>> clone_and_apply_dynamic_updates(
-      VersionInfo* current_vi,
-      const std::vector<FieldUpdate>& dynamic_updates) {
-    if (dynamic_updates.empty()) {
-      return std::unique_ptr<PropertiesMap>(nullptr);
-    }
-    auto* current_snap = get_properties_snapshot(current_vi);
-    auto clone = current_snap ? std::make_unique<PropertiesMap>(*current_snap)
-                              : std::make_unique<PropertiesMap>();
-    ARROW_RETURN_NOT_OK(value_map_ops::apply(*clone, dynamic_updates));
-    return clone;
-  }
-
   /** Allocate and construct a new VersionInfo, chained after the current. */
-  arrow::Result<VersionInfo*> allocate_version(NodeHandle& handle,
-                                               uint64_t now) {
+  arrow::Result<VersionInfo*> allocate_version(const NodeHandle& handle,
+                                               const uint64_t now) {
     void* vi_mem =
         version_arena_->allocate(sizeof(VersionInfo), alignof(VersionInfo));
     if (!vi_mem) {
       return arrow::Status::OutOfMemory("Failed to allocate VersionInfo");
     }
-    uint64_t vid = version_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
+    const uint64_t vid =
+        version_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
     auto* new_vi = new (vi_mem) VersionInfo(vid, now, handle.version_info_);
     version_infos_.push_back(new_vi);
     return new_vi;
@@ -1155,7 +990,7 @@ class NodeArena {
     if (is_string_type(field_layout->type) &&
         is_field_set(static_cast<char*>(node_ptr), field_layout->index)) {
       Value old_value =
-          layout->get_field_value(static_cast<char*>(node_ptr), *field_layout);
+          layout->get_value(static_cast<char*>(node_ptr), *field_layout);
       if (!old_value.is_null() && old_value.type() != ValueType::NA) {
         try {
           const StringRef& old_str_ref = old_value.as_string_ref();
@@ -1172,11 +1007,24 @@ class NodeArena {
     if (is_array_type(field_layout->type) &&
         is_field_set(static_cast<char*>(node_ptr), field_layout->index)) {
       Value old_value =
-          layout->get_field_value(static_cast<char*>(node_ptr), *field_layout);
+          layout->get_value(static_cast<char*>(node_ptr), *field_layout);
       if (!old_value.is_null() && old_value.holds_array_ref()) {
         const ArrayRef& old_arr_ref = old_value.as_array_ref();
         if (!old_arr_ref.is_null()) {
           array_arena_->mark_for_deletion(old_arr_ref);
+        }
+      }
+    }
+
+    // If the field currently contains a map, mark for deletion
+    if (is_map_type(field_layout->type) &&
+        is_field_set(static_cast<char*>(node_ptr), field_layout->index)) {
+      Value old_value =
+          layout->get_value(static_cast<char*>(node_ptr), *field_layout);
+      if (!old_value.is_null() && old_value.holds_map_ref()) {
+        const MapRef& old_map_ref = old_value.as_map_ref();
+        if (!old_map_ref.is_null()) {
+          map_arena_->mark_for_deletion(old_map_ref);
         }
       }
     }
@@ -1233,7 +1081,7 @@ class NodeArena {
 
     ArrayRef current_ref;
     if (field_is_set) {
-      Value old_value = layout->get_field_value(base, *field_layout);
+      Value old_value = layout->get_value(base, *field_layout);
       if (!old_value.is_null() && old_value.holds_array_ref()) {
         current_ref = old_value.as_array_ref();
       }
@@ -1399,6 +1247,11 @@ class NodeArena {
         *reinterpret_cast<ArrayRef*>(ptr) = value.as_array_ref();
         return true;
 
+      case ValueType::MAP:
+        if (value.type() != ValueType::MAP) return false;
+        *reinterpret_cast<MapRef*>(ptr) = value.as_map_ref();
+        return true;
+
       default:
         return false;
     }
@@ -1458,10 +1311,16 @@ class NodeArena {
   std::shared_ptr<LayoutRegistry> layout_registry_;
   std::unique_ptr<StringArena> string_arena_;
   std::unique_ptr<ArrayArena> array_arena_;
+  std::unique_ptr<MapArena> map_arena_;
 
   // Versioning (optional)
   bool versioning_enabled_;
   std::unique_ptr<FreeListArena> version_arena_;
+  // Global (arena-wide) monotonic counter, NOT per-node.  This gives every
+  // VersionInfo a unique id that establishes a total ordering of all mutations
+  // across all nodes in the arena - useful for cross-node temporal comparisons
+  // without relying on timestamp resolution.  Per-node ids would only give a
+  // local ordering with no way to relate versions of different nodes.
   std::atomic<uint64_t> version_counter_;
   // Tracks all placement-new'd VersionInfo objects so we can call their
   // destructors (SmallDenseMap may heap-allocate on grow).

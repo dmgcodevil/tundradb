@@ -28,9 +28,6 @@ class EdgeView {
 
   arrow::Result<Value> get_value(const std::shared_ptr<Field>& field) const;
 
-  [[nodiscard]] const std::unordered_map<std::string, Value>& get_properties()
-      const;
-
   [[nodiscard]] bool is_visible() const;
 
   [[nodiscard]] const VersionInfo* get_resolved_version() const {

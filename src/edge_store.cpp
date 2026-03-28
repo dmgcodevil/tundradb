@@ -466,9 +466,6 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::generate_table(
     }
   }
 
-  // Implicit _properties column (always last, nullable)
-  arrow_fields.push_back(arrow::field("_properties", arrow::utf8(), true));
-
   auto table_schema = arrow::schema(arrow_fields);
 
   if (selected_edges.empty()) {
@@ -506,9 +503,6 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::generate_table(
     }
   }
 
-  // Dynamic _properties builder (JSON string)
-  arrow::StringBuilder props_json_builder;
-
   for (const auto& edge : selected_edges) {
     ARROW_RETURN_NOT_OK(id_builder.Append(edge->get_id()));
     ARROW_RETURN_NOT_OK(source_id_builder.Append(edge->get_source_id()));
@@ -523,15 +517,6 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::generate_table(
       } else {
         ARROW_RETURN_NOT_OK(pc.builder->AppendNull());
       }
-    }
-
-    // Serialize dynamic properties to JSON
-    const auto& dyn_props = edge->get_properties();
-    if (dyn_props.empty()) {
-      ARROW_RETURN_NOT_OK(props_json_builder.AppendNull());
-    } else {
-      ARROW_RETURN_NOT_OK(
-          props_json_builder.Append(properties_to_json(dyn_props)));
     }
   }
 
@@ -553,10 +538,6 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::generate_table(
     ARROW_RETURN_NOT_OK(pc.builder->Finish(&prop_arr));
     columns.push_back(std::make_shared<arrow::ChunkedArray>(prop_arr));
   }
-
-  std::shared_ptr<arrow::Array> props_json_arr;
-  ARROW_RETURN_NOT_OK(props_json_builder.Finish(&props_json_arr));
-  columns.push_back(std::make_shared<arrow::ChunkedArray>(props_json_arr));
 
   return arrow::Table::Make(table_schema, columns);
 }

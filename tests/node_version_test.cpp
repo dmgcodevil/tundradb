@@ -3,6 +3,7 @@
 #include <memory>
 #include <thread>
 
+#include "../include/map_arena.hpp"
 #include "../include/node_arena.hpp"
 #include "../include/schema.hpp"
 #include "../include/schema_layout.hpp"
@@ -21,6 +22,8 @@ class NodeVersionTest : public ::testing::Test {
     fields.push_back(std::make_shared<Field>("score", ValueType::DOUBLE));
     fields.push_back(std::make_shared<Field>("active", ValueType::BOOL));
     fields.push_back(std::make_shared<Field>("description", ValueType::STRING));
+    fields.push_back(
+        std::make_shared<Field>("props", TypeDescriptor::properties()));
 
     // Create schema (need to move the fields vector)
     schema_ = std::make_shared<Schema>(std::string("TestNode"), 1u,
@@ -32,6 +35,7 @@ class NodeVersionTest : public ::testing::Test {
     score_field_ = schema_->get_field("score");
     active_field_ = schema_->get_field("active");
     desc_field_ = schema_->get_field("description");
+    props_field_ = schema_->get_field("props");
 
     // Create layout from schema
     auto layout = std::make_unique<SchemaLayout>(schema_);
@@ -63,6 +67,7 @@ class NodeVersionTest : public ::testing::Test {
   std::shared_ptr<Field> score_field_;
   std::shared_ptr<Field> active_field_;
   std::shared_ptr<Field> desc_field_;
+  std::shared_ptr<Field> props_field_;
 };
 
 // =============================================================================
@@ -104,14 +109,13 @@ TEST_F(NodeVersionTest, CreateSingleVersion) {
   ASSERT_EQ(handle.count_versions(), 1);
 
   // Get value back
-  Value id_value =
-      node_arena_versioned_->get_field_value(handle, layout_, id_field_);
+  Value id_value = node_arena_versioned_->get_value(handle, layout_, id_field_);
   ASSERT_EQ(id_value.as_int64(), 100);
 
   // Update value (creates version 1)
   std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  node_arena_versioned_->set_field_value(handle, layout_, id_field_,
-                                         Value(int64_t(200)));
+  node_arena_versioned_->apply_updates(handle, layout_,
+                                       {{id_field_, Value(int64_t(200))}});
 
   // Verify version chain
   ASSERT_EQ(handle.count_versions(), 2);  // v0 + v1
@@ -119,7 +123,7 @@ TEST_F(NodeVersionTest, CreateSingleVersion) {
 
   // Verify new value
   Value new_id_value =
-      node_arena_versioned_->get_field_value(handle, layout_, id_field_);
+      node_arena_versioned_->get_value(handle, layout_, id_field_);
   ASSERT_EQ(new_id_value.as_int64(), 200);
 }
 
@@ -132,8 +136,8 @@ TEST_F(NodeVersionTest, CreateMultipleVersions) {
 
   // Create 4 more versions (v1, v2, v3, v4)
   for (int64_t i = 1; i <= 4; i++) {
-    node_arena_versioned_->set_field_value(handle, layout_, id_field_,
-                                           Value(i * 100));
+    node_arena_versioned_->apply_updates(handle, layout_,
+                                         {{id_field_, Value(i * 100)}});
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
 
@@ -143,7 +147,7 @@ TEST_F(NodeVersionTest, CreateMultipleVersions) {
 
   // Verify final value
   Value final_value =
-      node_arena_versioned_->get_field_value(handle, layout_, id_field_);
+      node_arena_versioned_->get_value(handle, layout_, id_field_);
   ASSERT_EQ(final_value.as_int64(), 400);
 }
 
@@ -169,8 +173,8 @@ TEST_F(NodeVersionTest, FieldLevelCopyOnWrite) {
 
   // Update only ONE field (should only store that field in new version)
   std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  node_arena_versioned_->set_field_value(handle, layout_, count_field_,
-                                         Value(int32_t(20)));
+  node_arena_versioned_->apply_updates(handle, layout_,
+                                       {{count_field_, Value(int32_t(20))}});
 
   // Check new version
   ASSERT_EQ(handle.get_version_id(), 1);
@@ -183,12 +187,11 @@ TEST_F(NodeVersionTest, FieldLevelCopyOnWrite) {
   ASSERT_EQ(v1->prev->version_id, 0);  // Linked to v0
 
   // Verify values
-  Value id_value =
-      node_arena_versioned_->get_field_value(handle, layout_, id_field_);
+  Value id_value = node_arena_versioned_->get_value(handle, layout_, id_field_);
   Value count_value =
-      node_arena_versioned_->get_field_value(handle, layout_, count_field_);
+      node_arena_versioned_->get_value(handle, layout_, count_field_);
   Value score_value =
-      node_arena_versioned_->get_field_value(handle, layout_, score_field_);
+      node_arena_versioned_->get_value(handle, layout_, score_field_);
 
   ASSERT_EQ(id_value.as_int64(), 100);             // From v0 (base)
   ASSERT_EQ(count_value.as_int32(), 20);           // From v1 (updated)
@@ -210,16 +213,16 @@ TEST_F(NodeVersionTest, TemporalValidityIntervals) {
 
   std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
-  node_arena_versioned_->set_field_value(handle, layout_, id_field_,
-                                         Value(int64_t(200)));
+  node_arena_versioned_->apply_updates(handle, layout_,
+                                       {{id_field_, Value(int64_t(200))}});
 
   VersionInfo* v1 = handle.get_version_info();
   uint64_t t1 = v1->valid_from;
 
   std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
-  node_arena_versioned_->set_field_value(handle, layout_, id_field_,
-                                         Value(int64_t(300)));
+  node_arena_versioned_->apply_updates(handle, layout_,
+                                       {{id_field_, Value(int64_t(300))}});
 
   VersionInfo* v2 = handle.get_version_info();
   uint64_t t2 = v2->valid_from;
@@ -248,15 +251,15 @@ TEST_F(NodeVersionTest, FindVersionAtTime) {
 
   std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
-  node_arena_versioned_->set_field_value(handle, layout_, id_field_,
-                                         Value(int64_t(200)));
+  node_arena_versioned_->apply_updates(handle, layout_,
+                                       {{id_field_, Value(int64_t(200))}});
   VersionInfo* v1 = handle.get_version_info();
   uint64_t t1 = v1->valid_from;
 
   std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
-  node_arena_versioned_->set_field_value(handle, layout_, id_field_,
-                                         Value(int64_t(300)));
+  node_arena_versioned_->apply_updates(handle, layout_,
+                                       {{id_field_, Value(int64_t(300))}});
   VersionInfo* v2 = handle.get_version_info();
   uint64_t t2 = v2->valid_from;
 
@@ -284,15 +287,15 @@ TEST_F(NodeVersionTest, StringVersioning) {
                                             Value("Alice"));
 
   Value v0_value =
-      node_arena_versioned_->get_field_value(handle, layout_, desc_field_);
+      node_arena_versioned_->get_value(handle, layout_, desc_field_);
   ASSERT_EQ(v0_value.as_string(), "Alice");
 
   std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  node_arena_versioned_->set_field_value(handle, layout_, desc_field_,
-                                         Value("Alicia"));
+  node_arena_versioned_->apply_updates(handle, layout_,
+                                       {{desc_field_, Value("Alicia")}});
 
   Value v1_value =
-      node_arena_versioned_->get_field_value(handle, layout_, desc_field_);
+      node_arena_versioned_->get_value(handle, layout_, desc_field_);
   ASSERT_EQ(v1_value.as_string(), "Alicia");
 
   ASSERT_EQ(handle.count_versions(), 2);
@@ -307,17 +310,17 @@ TEST_F(NodeVersionTest, NonVersionedUpdateNoVersionCreated) {
 
   ASSERT_FALSE(handle.is_versioned());
 
-  node_arena_non_versioned_->set_field_value(handle, layout_, id_field_,
-                                             Value(int64_t(100)));
+  node_arena_non_versioned_->apply_updates(handle, layout_,
+                                           {{id_field_, Value(int64_t(100))}});
 
-  node_arena_non_versioned_->set_field_value(handle, layout_, id_field_,
-                                             Value(int64_t(200)));
+  node_arena_non_versioned_->apply_updates(handle, layout_,
+                                           {{id_field_, Value(int64_t(200))}});
 
   ASSERT_EQ(handle.count_versions(), 1);
   ASSERT_FALSE(handle.is_versioned());
 
   Value value =
-      node_arena_non_versioned_->get_field_value(handle, layout_, id_field_);
+      node_arena_non_versioned_->get_value(handle, layout_, id_field_);
   ASSERT_EQ(value.as_int64(), 200);
 }
 
@@ -337,13 +340,12 @@ TEST_F(NodeVersionTest, BatchUpdateMultipleFields) {
 
   ASSERT_EQ(handle.get_version_id(), 0);
 
-  std::vector<std::pair<std::shared_ptr<Field>, Value>> updates = {
-      {id_field_, Value(int64_t(200))},
-      {count_field_, Value(int32_t(20))},
-      {score_field_, Value(double(2.5))}};
+  std::vector<FieldUpdate> updates = {{id_field_, Value(int64_t(200))},
+                                      {count_field_, Value(int32_t(20))},
+                                      {score_field_, Value(double(2.5))}};
 
   std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  auto result = node_arena_versioned_->update_fields(handle, layout_, updates);
+  auto result = node_arena_versioned_->apply_updates(handle, layout_, updates);
   ASSERT_TRUE(result.ok()) << "Update failed: " << result.status().message();
 
   ASSERT_EQ(handle.get_version_id(), 1);
@@ -352,11 +354,9 @@ TEST_F(NodeVersionTest, BatchUpdateMultipleFields) {
   VersionInfo* v1 = handle.get_version_info();
   ASSERT_EQ(v1->updated_fields.size(), 3);
 
-  Value id = node_arena_versioned_->get_field_value(handle, layout_, id_field_);
-  Value count =
-      node_arena_versioned_->get_field_value(handle, layout_, count_field_);
-  Value score =
-      node_arena_versioned_->get_field_value(handle, layout_, score_field_);
+  Value id = node_arena_versioned_->get_value(handle, layout_, id_field_);
+  Value count = node_arena_versioned_->get_value(handle, layout_, count_field_);
+  Value score = node_arena_versioned_->get_value(handle, layout_, score_field_);
 
   ASSERT_EQ(id.as_int64(), 200);
   ASSERT_EQ(count.as_int32(), 20);
@@ -373,19 +373,17 @@ TEST_F(NodeVersionTest, NullValueHandling) {
   node_arena_versioned_->set_field_value_v0(handle, layout_, id_field_,
                                             Value(int64_t(100)));
 
-  Value v0_value =
-      node_arena_versioned_->get_field_value(handle, layout_, id_field_);
+  Value v0_value = node_arena_versioned_->get_value(handle, layout_, id_field_);
   ASSERT_FALSE(v0_value.is_null());
   ASSERT_EQ(v0_value.as_int64(), 100);
 
   std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  node_arena_versioned_->set_field_value(handle, layout_, id_field_, Value{});
+  node_arena_versioned_->apply_updates(handle, layout_, {{id_field_, Value{}}});
 
   ASSERT_EQ(handle.get_version_id(), 1);
   ASSERT_EQ(handle.count_versions(), 2);
 
-  Value v1_value =
-      node_arena_versioned_->get_field_value(handle, layout_, id_field_);
+  Value v1_value = node_arena_versioned_->get_value(handle, layout_, id_field_);
   ASSERT_TRUE(v1_value.is_null());
 
   VersionInfo* v1 = handle.get_version_info();
@@ -402,17 +400,15 @@ TEST_F(NodeVersionTest, NullToNonNullTransition) {
   node_arena_versioned_->set_field_value_v0(handle, layout_, id_field_,
                                             Value{});
 
-  Value v0_value =
-      node_arena_versioned_->get_field_value(handle, layout_, id_field_);
+  Value v0_value = node_arena_versioned_->get_value(handle, layout_, id_field_);
   ASSERT_TRUE(v0_value.is_null());
 
   std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  node_arena_versioned_->set_field_value(handle, layout_, id_field_,
-                                         Value(int64_t(100)));
+  node_arena_versioned_->apply_updates(handle, layout_,
+                                       {{id_field_, Value(int64_t(100))}});
 
   ASSERT_EQ(handle.get_version_id(), 1);
-  Value v1_value =
-      node_arena_versioned_->get_field_value(handle, layout_, id_field_);
+  Value v1_value = node_arena_versioned_->get_value(handle, layout_, id_field_);
   ASSERT_FALSE(v1_value.is_null());
   ASSERT_EQ(v1_value.as_int64(), 100);
 }
@@ -429,8 +425,8 @@ TEST_F(NodeVersionTest, VersionCounterIncreases) {
                                             Value(int64_t(0)));
 
   for (int i = 1; i <= 10; i++) {
-    node_arena_versioned_->set_field_value(handle, layout_, id_field_,
-                                           Value(int64_t(i)));
+    node_arena_versioned_->apply_updates(handle, layout_,
+                                         {{id_field_, Value(int64_t(i))}});
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
 
@@ -441,230 +437,125 @@ TEST_F(NodeVersionTest, VersionCounterIncreases) {
 }
 
 // =============================================================================
-// Dynamic Property Versioning Tests
+// MAP Property Tests (arena-backed via MapRef/MapArena)
 // =============================================================================
 
-TEST_F(NodeVersionTest, DynamicPropertySingleUpdate) {
+TEST_F(NodeVersionTest, MapPropertySetAndGet) {
   NodeHandle handle = node_arena_versioned_->allocate_node("TestNode");
 
-  auto weight = Field::make_dynamic("weight");
+  // Allocate an empty MapRef and store it in the props field (v0)
+  auto map_res = node_arena_versioned_->allocate_map();
+  ASSERT_TRUE(map_res.ok());
+  MapRef map = std::move(*map_res);
 
-  // Live properties map (simulates Node::properties_)
-  std::unordered_map<std::string, Value> props;
+  ASSERT_TRUE(
+      node_arena_versioned_->set_map_entry(map, "weight", Value(1.5)).ok());
 
-  // Set dynamic property via the unified update_fields path
-  std::vector<std::pair<std::shared_ptr<Field>, Value>> updates = {
-      {weight, Value(1.5)}};
-  auto res = node_arena_versioned_->update_fields(handle, layout_, updates,
-                                                  UpdateType::SET, &props);
-  ASSERT_TRUE(res.ok());
+  node_arena_versioned_->set_field_value_v0(handle, layout_, props_field_,
+                                            Value(map));
 
-  // Live map should have the value
-  ASSERT_EQ(props.size(), 1);
-  ASSERT_EQ(props["weight"].as_double(), 1.5);
-
-  // A new version should have been created with a properties snapshot
-  ASSERT_EQ(handle.count_versions(), 2);  // v0 + v1
-  VersionInfo* v1 = handle.get_version_info();
-  ASSERT_NE(v1->properties_snapshot, nullptr);
-  ASSERT_EQ(v1->properties_snapshot->size(), 1);
-  ASSERT_EQ((*v1->properties_snapshot)["weight"].as_double(), 1.5);
+  // Read back via get_value
+  Value v = node_arena_versioned_->get_value(handle, layout_, props_field_);
+  ASSERT_TRUE(v.holds_map_ref());
+  ASSERT_EQ(v.as_map_ref().get_value("weight").as_double(), 1.5);
 }
 
-TEST_F(NodeVersionTest, DynamicPropertyRemoveViaNull) {
+TEST_F(NodeVersionTest, MapPropertyVersioned) {
   NodeHandle handle = node_arena_versioned_->allocate_node("TestNode");
 
-  auto weight = Field::make_dynamic("weight");
-  std::unordered_map<std::string, Value> props;
-
-  // Set it
-  std::vector<std::pair<std::shared_ptr<Field>, Value>> set_updates = {
-      {weight, Value(1.5)}};
-  ASSERT_TRUE(
-      node_arena_versioned_
-          ->update_fields(handle, layout_, set_updates, UpdateType::SET, &props)
-          .ok());
-  ASSERT_EQ(props.size(), 1);
-
-  // Remove it (null = erase)
-  std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  std::vector<std::pair<std::shared_ptr<Field>, Value>> rm_updates = {
-      {weight, Value{}}};
-  ASSERT_TRUE(
-      node_arena_versioned_
-          ->update_fields(handle, layout_, rm_updates, UpdateType::SET, &props)
-          .ok());
-  ASSERT_TRUE(props.empty());
-
-  ASSERT_EQ(handle.count_versions(), 3);  // v0, v1 (set), v2 (remove)
-  VersionInfo* v2 = handle.get_version_info();
-  ASSERT_NE(v2->properties_snapshot, nullptr);
-  ASSERT_TRUE(v2->properties_snapshot->empty());
-}
-
-TEST_F(NodeVersionTest, MixedSchemaAndDynamicBulkUpdate) {
-  NodeHandle handle = node_arena_versioned_->allocate_node("TestNode");
-
-  // Set initial schema field
+  // v0: set count=10 and props={score: 3.14}
   node_arena_versioned_->set_field_value_v0(handle, layout_, count_field_,
                                             Value(int32_t(10)));
+  auto map_res = node_arena_versioned_->allocate_map();
+  ASSERT_TRUE(map_res.ok());
+  MapRef map = std::move(*map_res);
+  ASSERT_TRUE(
+      node_arena_versioned_->set_map_entry(map, "score", Value(3.14)).ok());
+  node_arena_versioned_->set_field_value_v0(handle, layout_, props_field_,
+                                            Value(map));
 
-  auto tag = Field::make_dynamic("tag");
-  std::unordered_map<std::string, Value> props;
-
-  // Bulk update: schema field + dynamic field in ONE version
-  std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  std::vector<std::pair<std::shared_ptr<Field>, Value>> updates = {
-      {count_field_, Value(int32_t(20))},
-      {tag, Value(std::string("important"))}};
-  auto res = node_arena_versioned_->update_fields(handle, layout_, updates,
-                                                  UpdateType::SET, &props);
-  ASSERT_TRUE(res.ok());
-
-  // Exactly ONE new version (v1), not two
-  ASSERT_EQ(handle.count_versions(), 2);  // v0 + v1
-  VersionInfo* v1 = handle.get_version_info();
-
-  // Schema field delta
-  ASSERT_EQ(v1->updated_fields.size(), 1);
-
-  // Dynamic property snapshot
-  ASSERT_NE(v1->properties_snapshot, nullptr);
-  ASSERT_EQ(v1->properties_snapshot->size(), 1);
-  ASSERT_EQ((*v1->properties_snapshot)["tag"].as_string(), "important");
-
-  // Verify schema field via arena
-  Value count =
-      node_arena_versioned_->get_field_value(handle, layout_, count_field_);
-  ASSERT_EQ(count.as_int32(), 20);
-
-  // Verify dynamic field via live map
-  ASSERT_EQ(props["tag"].as_string(), "important");
-}
-
-TEST_F(NodeVersionTest, DynamicPropertyTemporalConsistency) {
-  // The core test: schema A + dynamic B, update both, verify old versions
-  NodeHandle handle = node_arena_versioned_->allocate_node("TestNode");
-
-  node_arena_versioned_->set_field_value_v0(handle, layout_, count_field_,
-                                            Value(int32_t(0)));
-
-  auto dyn_b = Field::make_dynamic("B");
-  std::unordered_map<std::string, Value> props;
-
-  // v0: A=0, B not set
   VersionInfo* v0 = handle.get_version_info();
   uint64_t t0 = v0->valid_from;
 
-  // v1: A=1, B=1
+  // v1: update count=20 and COW-copy map, set score=6.28
   std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  std::vector<std::pair<std::shared_ptr<Field>, Value>> updates_v1 = {
-      {count_field_, Value(int32_t(1))}, {dyn_b, Value(int64_t(1))}};
+  Value cur_props =
+      node_arena_versioned_->get_value(handle, layout_, props_field_);
+  auto copy_res = node_arena_versioned_->copy_map(cur_props.as_map_ref());
+  ASSERT_TRUE(copy_res.ok());
+  MapRef new_map = std::move(*copy_res);
   ASSERT_TRUE(
-      node_arena_versioned_
-          ->update_fields(handle, layout_, updates_v1, UpdateType::SET, &props)
-          .ok());
-  VersionInfo* v1 = handle.get_version_info();
-  uint64_t t1 = v1->valid_from;
+      node_arena_versioned_->set_map_entry(new_map, "score", Value(6.28)).ok());
 
-  // v2: A=2, B=2
-  std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  std::vector<std::pair<std::shared_ptr<Field>, Value>> updates_v2 = {
-      {count_field_, Value(int32_t(2))}, {dyn_b, Value(int64_t(2))}};
+  std::vector<FieldUpdate> updates = {
+      {count_field_, Value(int32_t(20))},
+      {props_field_, Value(std::move(new_map))}};
   ASSERT_TRUE(
-      node_arena_versioned_
-          ->update_fields(handle, layout_, updates_v2, UpdateType::SET, &props)
-          .ok());
-  VersionInfo* v2 = handle.get_version_info();
-  uint64_t t2 = v2->valid_from;
-
-  ASSERT_EQ(handle.count_versions(), 3);  // v0 + v1 + v2
-
-  // --- Read current (v2): A=2, B=2 ---
-  Value curr_a =
-      node_arena_versioned_->get_field_value(handle, layout_, count_field_);
-  ASSERT_EQ(curr_a.as_int32(), 2);
-  ASSERT_EQ(props["B"].as_int64(), 2);
-
-  // --- Read v1 via version chain: A=1, B=1 ---
-  const VersionInfo* ver_at_t1 = handle.find_version_at_time(t1);
-  ASSERT_NE(ver_at_t1, nullptr);
-  ASSERT_EQ(ver_at_t1->version_id, 1);
-
-  // Schema field A at v1
-  auto a_at_v1 = NodeArena::get_field_value_from_version(handle, ver_at_t1,
-                                                         layout_, count_field_);
-  ASSERT_TRUE(a_at_v1.ok());
-  ASSERT_EQ(a_at_v1.ValueOrDie().as_int32(), 1);
-
-  // Dynamic field B at v1
-  auto* snap_v1 = NodeArena::get_properties_snapshot(ver_at_t1);
-  ASSERT_NE(snap_v1, nullptr);
-  ASSERT_EQ(snap_v1->at("B").as_int64(), 1);
-
-  // --- Read v0: A=0, B not set ---
-  const VersionInfo* ver_at_t0 = handle.find_version_at_time(t0);
-  ASSERT_NE(ver_at_t0, nullptr);
-  ASSERT_EQ(ver_at_t0->version_id, 0);
-
-  // Schema field A at v0
-  auto a_at_v0 = NodeArena::get_field_value_from_version(handle, ver_at_t0,
-                                                         layout_, count_field_);
-  ASSERT_TRUE(a_at_v0.ok());
-  ASSERT_EQ(a_at_v0.ValueOrDie().as_int32(), 0);
-
-  // Dynamic field B at v0: no snapshot yet → nullptr
-  auto* snap_v0 = NodeArena::get_properties_snapshot(ver_at_t0);
-  ASSERT_EQ(snap_v0, nullptr);  // B didn't exist at v0
-}
-
-TEST_F(NodeVersionTest, DynamicOnlyVersionDoesNotAffectSchemaFields) {
-  NodeHandle handle = node_arena_versioned_->allocate_node("TestNode");
-
-  node_arena_versioned_->set_field_value_v0(handle, layout_, count_field_,
-                                            Value(int32_t(42)));
-
-  auto tag = Field::make_dynamic("tag");
-  std::unordered_map<std::string, Value> props;
-
-  // Update ONLY dynamic field
-  std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  std::vector<std::pair<std::shared_ptr<Field>, Value>> updates = {
-      {tag, Value(std::string("hello"))}};
-  ASSERT_TRUE(
-      node_arena_versioned_
-          ->update_fields(handle, layout_, updates, UpdateType::SET, &props)
-          .ok());
+      node_arena_versioned_->apply_updates(handle, layout_, updates).ok());
 
   ASSERT_EQ(handle.count_versions(), 2);
 
-  // Schema field should still be readable (unchanged)
-  Value count =
-      node_arena_versioned_->get_field_value(handle, layout_, count_field_);
-  ASSERT_EQ(count.as_int32(), 42);
+  // Current: count=20, score=6.28
+  Value curr_count =
+      node_arena_versioned_->get_value(handle, layout_, count_field_);
+  ASSERT_EQ(curr_count.as_int32(), 20);
 
-  // New version has no schema field deltas
-  VersionInfo* v1 = handle.get_version_info();
-  ASSERT_TRUE(v1->updated_fields.empty());
-  ASSERT_NE(v1->properties_snapshot, nullptr);
-  ASSERT_EQ((*v1->properties_snapshot)["tag"].as_string(), "hello");
+  Value curr_props =
+      node_arena_versioned_->get_value(handle, layout_, props_field_);
+  ASSERT_EQ(curr_props.as_map_ref().get_value("score").as_double(), 6.28);
+
+  // v0: count=10, score=3.14
+  const VersionInfo* ver_at_t0 = handle.find_version_at_time(t0);
+  ASSERT_NE(ver_at_t0, nullptr);
+  auto a_at_v0 =
+      NodeArena::get_value_at_version(handle, ver_at_t0, layout_, count_field_);
+  ASSERT_TRUE(a_at_v0.ok());
+  ASSERT_EQ(a_at_v0.ValueOrDie().as_int32(), 10);
+
+  auto p_at_v0 =
+      NodeArena::get_value_at_version(handle, ver_at_t0, layout_, props_field_);
+  ASSERT_TRUE(p_at_v0.ok());
+  ASSERT_EQ(p_at_v0.ValueOrDie().as_map_ref().get_value("score").as_double(),
+            3.14);
 }
 
-TEST_F(NodeVersionTest, NonVersionedDynamicPropertyDirectMutation) {
-  // When versioning is OFF, dynamic fields still work — just no snapshots
+TEST_F(NodeVersionTest, MapPropertyRemoveEntry) {
+  NodeHandle handle = node_arena_versioned_->allocate_node("TestNode");
+
+  auto map_res = node_arena_versioned_->allocate_map();
+  ASSERT_TRUE(map_res.ok());
+  MapRef map = std::move(*map_res);
+  ASSERT_TRUE(
+      node_arena_versioned_->set_map_entry(map, "a", Value(int32_t(1))).ok());
+  ASSERT_TRUE(
+      node_arena_versioned_->set_map_entry(map, "b", Value(int32_t(2))).ok());
+
+  ASSERT_EQ(map.count(), 2);
+
+  ASSERT_TRUE(NodeArena::remove_map_entry(map, "a"));
+  ASSERT_EQ(map.count(), 1);
+  ASSERT_TRUE(map.get_value("a").is_null());
+  ASSERT_EQ(map.get_value("b").as_int32(), 2);
+}
+
+TEST_F(NodeVersionTest, MapPropertyNonVersioned) {
+  // With versioning OFF, MAP field is written directly to base node
   NodeHandle handle = node_arena_non_versioned_->allocate_node("TestNode");
-  std::unordered_map<std::string, Value> props;
 
-  auto weight = Field::make_dynamic("weight");
+  auto map_res = node_arena_non_versioned_->allocate_map();
+  ASSERT_TRUE(map_res.ok());
+  MapRef map = std::move(*map_res);
+  ASSERT_TRUE(
+      node_arena_non_versioned_->set_map_entry(map, "weight", Value(3.14))
+          .ok());
 
-  std::vector<std::pair<std::shared_ptr<Field>, Value>> updates = {
-      {weight, Value(3.14)}};
-  auto res = node_arena_non_versioned_->update_fields(handle, layout_, updates,
-                                                      UpdateType::SET, &props);
-  ASSERT_TRUE(res.ok());
+  node_arena_non_versioned_->set_field_value_v0(handle, layout_, props_field_,
+                                                Value(map));
 
-  ASSERT_EQ(props["weight"].as_double(), 3.14);
-  ASSERT_EQ(handle.count_versions(), 1);  // no new version created
+  Value v = node_arena_non_versioned_->get_value(handle, layout_, props_field_);
+  ASSERT_TRUE(v.holds_map_ref());
+  ASSERT_EQ(v.as_map_ref().get_value("weight").as_double(), 3.14);
+  ASSERT_EQ(handle.count_versions(), 1);
 }
 
 int main(int argc, char** argv) {

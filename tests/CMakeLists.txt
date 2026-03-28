@@ -158,6 +158,14 @@ add_executable(update_query_join_test
 add_executable(array_query_test
         array_query_test.cpp)
 
+# Map arena + node/edge MAP field tests
+add_executable(map_arena_test
+        map_arena_test.cpp)
+
+# Type conversion round-trip tests (TundraDB <-> Arrow)
+add_executable(type_conversion_test
+        type_conversion_test.cpp)
+
 # Arena leak detection test
 add_executable(arena_leak_test
         arena_leak_test.cpp)
@@ -424,6 +432,28 @@ target_link_libraries(array_query_test
         LLVMSupport LLVMCore
 )
 
+target_link_libraries(map_arena_test
+        PRIVATE
+        core
+        Arrow::arrow_shared
+        GTest::GTest
+        GTest::Main
+        pthread
+        TBB::tbb
+        spdlog::spdlog
+        LLVMSupport LLVMCore
+)
+
+target_link_libraries(type_conversion_test
+        PRIVATE
+        core
+        Arrow::arrow_shared
+        GTest::GTest
+        GTest::Main
+        spdlog::spdlog
+        LLVMSupport LLVMCore
+)
+
 target_link_libraries(arena_leak_test
         PRIVATE
         core
@@ -487,6 +517,12 @@ if(ENABLE_SANITIZERS)
     target_compile_options(array_query_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
     target_link_options(array_query_test PRIVATE ${SANITIZER_LINK_FLAGS})
 
+    target_compile_options(map_arena_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
+    target_link_options(map_arena_test PRIVATE ${SANITIZER_LINK_FLAGS})
+
+    target_compile_options(type_conversion_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
+    target_link_options(type_conversion_test PRIVATE ${SANITIZER_LINK_FLAGS})
+
     target_compile_options(arena_leak_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
     target_link_options(arena_leak_test PRIVATE ${SANITIZER_LINK_FLAGS})
 endif()
@@ -513,6 +549,8 @@ add_test(NAME TemporalQueryTest COMMAND temporal_query_test)
 add_test(NAME UpdateQueryTest COMMAND update_query_test)
 add_test(NAME UpdateQueryJoinTest COMMAND update_query_join_test)
 add_test(NAME ArrayQueryTest COMMAND array_query_test)
+add_test(NAME MapArenaTest COMMAND map_arena_test)
+add_test(NAME TypeConversionTest COMMAND type_conversion_test)
 add_test(NAME ArenaLeakTest COMMAND arena_leak_test)
 
 # Set TSan options for tests after they've been registered

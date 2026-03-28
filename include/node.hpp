@@ -25,9 +25,6 @@ class Node {
   std::shared_ptr<Schema> schema_;
   std::shared_ptr<SchemaLayout> layout_;
 
-  // Dynamic properties (ad-hoc key-value pairs, not in schema)
-  std::unordered_map<std::string, Value> properties_;
-
  public:
   int64_t id;
   std::string schema_name;
@@ -55,14 +52,14 @@ class Node {
   arrow::Result<const char *> get_value_ptr(
       const std::shared_ptr<Field> &field) const {
     if (arena_ != nullptr) {
-      return arena_->get_field_value_ptr(*handle_, layout_, field);
+      return arena_->get_value_ptr(*handle_, layout_, field);
     }
     return arrow::Status::NotImplemented("");
   }
 
   [[nodiscard]] ValueRef get_value_ref(
       const std::shared_ptr<Field> &field) const {
-    const char *ptr = arena_->get_field_value_ptr(*handle_, layout_, field);
+    const char *ptr = arena_->get_value_ptr(*handle_, layout_, field);
     return {ptr, field->type()};
   }
 
@@ -70,7 +67,7 @@ class Node {
 
   arrow::Result<Value> get_value(const std::shared_ptr<Field> &field) const {
     return entity_ops::get_value(field, handle_.get(), arena_.get(), layout_,
-                                 data_, properties_);
+                                 data_);
   }
 
   [[deprecated]]
@@ -86,7 +83,7 @@ class Node {
 
   arrow::Result<bool> update_fields(const std::vector<FieldUpdate> &updates) {
     return entity_ops::apply_updates(handle_.get(), arena_.get(), layout_,
-                                     data_, properties_, updates);
+                                     data_, updates);
   }
 
   arrow::Result<bool> update(const std::shared_ptr<Field> &field, Value value,
@@ -121,13 +118,6 @@ class Node {
   arrow::Result<bool> set_value(const std::shared_ptr<Field> &field,
                                 const Value &value) {
     return update(field, value, UpdateType::SET);
-  }
-
-  // --- Properties ---
-
-  [[nodiscard]] const std::unordered_map<std::string, Value> &get_properties()
-      const {
-    return entity_ops::get_properties(handle_.get(), arena_.get(), properties_);
   }
 
   /**
@@ -382,13 +372,6 @@ inline arrow::Result<const char *> NodeView::get_value_ptr(
   assert(arena_ != nullptr && "NodeView created with null arena");
   assert(node_ != nullptr && "NodeView created with null node");
 
-  if (field->is_dynamic()) {
-    return arrow::Status::NotImplemented(
-        "get_value_ptr not supported for dynamic fields: dynamic values live "
-        "in a Value map, not the columnar byte buffer, so a raw char* pointer "
-        "is not meaningful; use get_value() instead");
-  }
-
   if (resolved_version_ == nullptr) {
     return node_->get_value_ptr(field);
   }
@@ -396,8 +379,8 @@ inline arrow::Result<const char *> NodeView::get_value_ptr(
   const NodeHandle *handle = node_->get_handle();
   assert(handle != nullptr && "Versioned node must have a handle");
 
-  return arena_->get_field_value_ptr_from_version(*handle, resolved_version_,
-                                                  layout_, field);
+  return arena_->get_value_ptr_at_version(*handle, resolved_version_, layout_,
+                                          field);
 }
 
 inline arrow::Result<Value> NodeView::get_value(
@@ -413,15 +396,6 @@ inline arrow::Result<Value> NodeView::get_value(
 
   return entity_ops::get_value_at_version(field, *handle, resolved_version_,
                                           layout_);
-}
-
-inline const std::unordered_map<std::string, Value> &NodeView::get_properties()
-    const {
-  if (resolved_version_ == nullptr) {
-    return node_->get_properties();
-  }
-  return entity_ops::get_properties_at_version(resolved_version_,
-                                               node_->get_properties());
 }
 
 inline bool NodeView::is_visible() const {

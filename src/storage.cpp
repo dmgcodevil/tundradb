@@ -234,23 +234,17 @@ arrow::Result<std::vector<Edge>> Storage::read_edges(
   const int created_ts_col_idx = 3;
 
   // Build a mapping of property column name -> column index.
-  // Property columns are between the 4 structural columns and _properties.
   struct PropColInfo {
     std::string name;
     int col_idx;
     arrow::Type::type arrow_type;
   };
   std::vector<PropColInfo> prop_columns;
-  int properties_json_col_idx = -1;
 
   for (int col = 4; col < table->num_columns(); ++col) {
     const auto& col_name = table->schema()->field(col)->name();
-    if (col_name == "_properties") {
-      properties_json_col_idx = col;
-    } else {
-      prop_columns.push_back(
-          {col_name, col, table->schema()->field(col)->type()->id()});
-    }
+    prop_columns.push_back(
+        {col_name, col, table->schema()->field(col)->type()->id()});
   }
 
   for (int64_t row_idx = 0; row_idx < table->num_rows(); ++row_idx) {
@@ -325,43 +319,8 @@ arrow::Result<std::vector<Edge>> Storage::read_edges(
       }
     }
 
-    // Read _properties JSON column (dynamic properties — separate namespace)
-    std::unordered_map<std::string, Value> dynamic_props;
-    if (properties_json_col_idx >= 0) {
-      const auto json_chunk_info =
-          table_info.get_chunk_info(properties_json_col_idx, row_idx);
-      const auto json_chunk = table->column(properties_json_col_idx)
-                                  ->chunk(json_chunk_info.chunk_index);
-      if (!json_chunk->IsNull(json_chunk_info.offset_in_chunk)) {
-        auto typed = std::static_pointer_cast<arrow::StringArray>(json_chunk);
-        std::string json_str =
-            typed->GetString(json_chunk_info.offset_in_chunk);
-        if (!json_str.empty()) {
-          auto j = nlohmann::json::parse(json_str, nullptr, false);
-          if (!j.is_discarded() && j.is_object()) {
-            for (auto& [k, v] : j.items()) {
-              if (v.is_null()) {
-                dynamic_props[k] = Value{};
-              } else if (v.is_string()) {
-                dynamic_props[k] = Value{v.get<std::string>()};
-              } else if (v.is_number_integer()) {
-                dynamic_props[k] = Value{v.get<int64_t>()};
-              } else if (v.is_number_float()) {
-                dynamic_props[k] = Value{v.get<double>()};
-              } else if (v.is_boolean()) {
-                dynamic_props[k] = Value{v.get<bool>()};
-              }
-            }
-          }
-        }
-      }
-    }
-
-    // 'properties' = schema field data (goes into data_ on Edge)
-    // 'dynamic_props' = ad-hoc properties (goes into properties_ on Edge)
     edges.emplace_back(id, source_id, target_id, edge_metadata.edge_type,
-                       created_ts, std::move(properties),
-                       std::move(dynamic_props));
+                       created_ts, std::move(properties));
   }
 
   return edges;

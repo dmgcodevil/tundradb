@@ -127,9 +127,8 @@ TEST_F(NodeViewTest, TimeTravelValidTime) {
   // v1: Update age to 26 at time t1
   std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
-  std::vector<std::pair<std::shared_ptr<Field>, Value>> updates1 = {
-      {age_field_, Value(int32_t(26))}};
-  auto update1_result = node_arena_versioned_->update_fields(*node.get_handle(),
+  std::vector<FieldUpdate> updates1 = {{age_field_, Value(int32_t(26))}};
+  auto update1_result = node_arena_versioned_->apply_updates(*node.get_handle(),
                                                              layout_, updates1);
   ASSERT_TRUE(update1_result.ok());
 
@@ -138,9 +137,9 @@ TEST_F(NodeViewTest, TimeTravelValidTime) {
   // v2: Update department to Sales at time t2
   std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
-  std::vector<std::pair<std::shared_ptr<Field>, Value>> updates2 = {
+  std::vector<FieldUpdate> updates2 = {
       {department_field_, Value(std::string("Sales"))}};
-  auto update2_result = node_arena_versioned_->update_fields(*node.get_handle(),
+  auto update2_result = node_arena_versioned_->apply_updates(*node.get_handle(),
                                                              layout_, updates2);
   ASSERT_TRUE(update2_result.ok());
 
