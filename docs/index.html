@@ -143,7 +143,7 @@
         <h1>In-Memory Graph Database with Relational Joins</h1>
         <p class="tagline">
             TundraDB combines graph traversals with SQL-style join semantics,
-            bitemporal versioning, and Apache Arrow columnar output — built in C++23.
+            bitemporal versioning, edge-aware MATCH/UPDATE, and Apache Arrow columnar output — built in C++23.
         </p>
         <div class="hero-buttons">
             <a href="#quickstart" class="btn-primary">Get Started</a>
@@ -182,6 +182,11 @@
                 <p>Typed schemas enable fixed-layout memory, compile-time field access, and schema validation on writes.</p>
             </div>
             <div class="feature-card">
+                <div class="icon">🧭</div>
+                <h3>Edge-Aware Queries</h3>
+                <p>Bind edge aliases in MATCH, filter with <code>WHERE e.field</code>, select <code>e.field</code> or <code>e</code>, and update edge fields via <code>UPDATE MATCH ... SET e.field = ...</code>.</p>
+            </div>
+            <div class="feature-card">
                 <div class="icon">💾</div>
                 <h3>Parquet Persistence</h3>
                 <p>Snapshot-based COMMIT writes shards and edges to Parquet files with JSON metadata. Fast cold-start recovery.</p>
@@ -192,12 +197,13 @@
     <!-- Quick Start -->
     <section class="quickstart" id="quickstart">
         <h2>Quick Start</h2>
-        <p class="sub">A complete session in TundraQL — schema, data, edges, and query.</p>
+        <p class="sub">A complete session in TundraQL — schema, edge schema, edge update, edge filter, and edge selection.</p>
 
         <div class="qs-block">
-            <div class="label"><span>Define schemas</span> <span class="step">Step 1</span></div>
+            <div class="label"><span>Define schemas (nodes + edges)</span> <span class="step">Step 1</span></div>
             <pre><code><span class="kw">CREATE SCHEMA</span> User (name: STRING, age: INT64);
-<span class="kw">CREATE SCHEMA</span> Company (name: STRING, size: INT64);</code></pre>
+<span class="kw">CREATE SCHEMA</span> Company (name: STRING, size: INT64);
+<span class="kw">CREATE EDGE SCHEMA</span> WORKS_AT (since: INT64, role: STRING);</code></pre>
         </div>
 
         <div class="qs-block">
@@ -209,22 +215,20 @@
 
         <div class="qs-block">
             <div class="label"><span>Create edges</span> <span class="step">Step 3</span></div>
-            <pre><code><span class="kw">CREATE EDGE</span> friend   <span class="kw">FROM</span> User(<span class="num">0</span>) <span class="kw">TO</span> User(<span class="num">1</span>);
-<span class="kw">CREATE EDGE</span> works_at <span class="kw">FROM</span> User(<span class="num">1</span>) <span class="kw">TO</span> Company(<span class="num">0</span>);</code></pre>
+            <pre><code><span class="kw">CREATE EDGE</span> WORKS_AT <span class="kw">FROM</span> User(<span class="num">1</span>) <span class="kw">TO</span> Company(<span class="num">0</span>);
+<span class="kw">UPDATE MATCH</span> (u:User)-[e:WORKS_AT]-&gt;(c:Company)
+    <span class="kw">SET</span> e.since = <span class="num">2025</span>, e.role = <span class="str">"engineer"</span>;</code></pre>
         </div>
 
         <div class="qs-block">
-            <div class="label"><span>Query — Alice's friends who work at Google</span> <span class="step">Step 4</span></div>
-            <pre><code><span class="kw">MATCH</span> (u:User)-[:friend <span class="kw">INNER</span>]->(f:User)
-              -[:works_at <span class="kw">INNER</span>]->(c:Company)
-    <span class="kw">WHERE</span> u.name = <span class="str">"Alice"</span> <span class="kw">AND</span> c.name = <span class="str">"Google"</span>
-    <span class="kw">SELECT</span> u.name, f.name, c.name;
+            <div class="label"><span>Query using edge fields</span> <span class="step">Step 4</span></div>
+            <pre><code><span class="kw">MATCH</span> (u:User)-[e:WORKS_AT]-&gt;(c:Company)
+    <span class="kw">WHERE</span> e.since = <span class="num">2025</span>
+    <span class="kw">SELECT</span> u.name, c.name, e.since, e.role;
 
-<span class="cmt">// ┌────────┬────────┬────────┐</span>
-<span class="cmt">// │ u.name │ f.name │ c.name │</span>
-<span class="cmt">// ├────────┼────────┼────────┤</span>
-<span class="cmt">// │ Alice  │ Bob    │ Google │</span>
-<span class="cmt">// └────────┴────────┴────────┘</span></code></pre>
+<span class="cmt">// Select full edge alias (all edge columns)</span>
+<span class="kw">MATCH</span> (u:User)-[e:WORKS_AT]-&gt;(c:Company)
+    <span class="kw">SELECT</span> e;</code></pre>
         </div>
 
         <div class="qs-block">

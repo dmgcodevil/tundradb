@@ -170,6 +170,11 @@
 <span class="kw">CREATE SCHEMA</span> <span class="alias">Company</span> (
     <span class="alias">name</span>: <span class="type">STRING</span>,
     <span class="alias">revenue</span>: <span class="type">FLOAT64</span>
+);
+
+<span class="kw">CREATE EDGE SCHEMA</span> <span class="edge-type">WORKS_AT</span> (
+    <span class="alias">since</span>: <span class="type">INT64</span>,
+    <span class="alias">role</span>: <span class="type">STRING</span>
 );</code></pre>
             </div>
 
@@ -201,8 +206,7 @@
                 <div class="label">Syntax <span class="tag">DML</span></div>
                 <pre><code><span class="kw">CREATE</span> [<span class="kw">UNIQUE</span>] <span class="kw">EDGE</span> <span class="edge-type">edge_type</span>
     <span class="kw">FROM</span> <span class="alias">Schema</span>(<span class="num">id</span>)
-    <span class="kw">TO</span>   <span class="alias">Schema</span>(<span class="num">id</span>)
-    [<span class="kw">WITH</span> (<span class="alias">prop</span> = <span class="str">value</span>, ...)];</code></pre>
+    <span class="kw">TO</span>   <span class="alias">Schema</span>(<span class="num">id</span>);</code></pre>
             </div>
 
             <div class="syntax-block">
@@ -217,8 +221,11 @@
 
 <span class="cmt">// Unique edge (prevents duplicates)</span>
 <span class="kw">CREATE UNIQUE EDGE</span> <span class="edge-type">manages</span>
-    <span class="kw">FROM</span> <span class="alias">User</span>(<span class="num">0</span>) <span class="kw">TO</span> <span class="alias">User</span>(<span class="num">1</span>)
-    <span class="kw">WITH</span> (<span class="alias">since</span> = <span class="str">"2024"</span>);</code></pre>
+    <span class="kw">FROM</span> <span class="alias">User</span>(<span class="num">0</span>) <span class="kw">TO</span> <span class="alias">User</span>(<span class="num">1</span>);</code></pre>
+            </div>
+
+            <div class="warn-box">
+                <strong>Current limitation:</strong> <code>CREATE EDGE ... WITH (...)</code> property assignment is not yet wired in the shell. Create the edge first, then set properties with <code>UPDATE MATCH ... SET e.field = ...</code>.
             </div>
 
             <!-- ========== MATCH ========== -->
@@ -244,6 +251,7 @@
                 <div class="label">Syntax</div>
                 <pre><code><span class="cmt">// Outgoing edge</span>
 -[:<span class="edge-type">EDGE_TYPE</span> <span class="kw">JOIN</span>]-&gt;
+-[<span class="alias">e</span>:<span class="edge-type">EDGE_TYPE</span> <span class="kw">JOIN</span>]-&gt;   <span class="cmt">// bind edge alias</span>
 
 <span class="cmt">// Incoming edge</span>
 &lt;-[:<span class="edge-type">EDGE_TYPE</span> <span class="kw">JOIN</span>]-</code></pre>
@@ -347,12 +355,12 @@
             </div>
 
             <h3>Form 3 — Update by MATCH (traversals / joins)</h3>
-            <p>Uses a full <code>MATCH</code> pattern with traversals to find nodes across multiple schemas, then applies <code>SET</code> assignments. Field names must be alias-qualified. Multiple schemas can be updated in a single statement.</p>
+            <p>Uses a full <code>MATCH</code> pattern with traversals to find nodes across multiple schemas, then applies <code>SET</code> assignments. Field names must be alias-qualified. Multiple schemas can be updated in a single statement, including edge aliases.</p>
 
             <div class="syntax-block">
                 <div class="label">Syntax <span class="tag">DML</span></div>
-                <pre><code><span class="kw">UPDATE MATCH</span> (<span class="alias">a</span>:<span class="type">Schema1</span>)-[:<span class="edge-type">EDGE_TYPE</span>]-&gt;(<span class="alias">b</span>:<span class="type">Schema2</span>)
-    <span class="kw">SET</span> <span class="alias">a</span>.<span class="alias">field</span> = <span class="str">value</span> [, <span class="alias">b</span>.<span class="alias">field</span> = <span class="str">value</span> ...]
+                <pre><code><span class="kw">UPDATE MATCH</span> (<span class="alias">a</span>:<span class="type">Schema1</span>)-[<span class="alias">e</span>:<span class="edge-type">EDGE_TYPE</span>]-&gt;(<span class="alias">b</span>:<span class="type">Schema2</span>)
+    <span class="kw">SET</span> <span class="alias">a</span>.<span class="alias">field</span> = <span class="str">value</span> [, <span class="alias">b</span>.<span class="alias">field</span> = <span class="str">value</span> ...] [, <span class="alias">e</span>.<span class="alias">field</span> = <span class="str">value</span> ...]
     [<span class="kw">WHERE</span> <span class="alias">alias</span>.<span class="alias">field</span> <span class="op">op</span> <span class="str">value</span>] ;</code></pre>
             </div>
 
@@ -370,7 +378,12 @@
 
 <span class="cmt">// Same-schema traversal (e.g. friends)</span>
 <span class="kw">UPDATE MATCH</span> (<span class="alias">a</span>:<span class="type">User</span>)-[:<span class="edge-type">FRIEND</span>]-&gt;(<span class="alias">b</span>:<span class="type">User</span>)
-    <span class="kw">SET</span> <span class="alias">a</span>.<span class="alias">has_friend</span> = <span class="num">true</span>, <span class="alias">b</span>.<span class="alias">has_friend</span> = <span class="num">true</span>;</code></pre>
+    <span class="kw">SET</span> <span class="alias">a</span>.<span class="alias">has_friend</span> = <span class="num">true</span>, <span class="alias">b</span>.<span class="alias">has_friend</span> = <span class="num">true</span>;
+
+<span class="cmt">// Update edge properties by alias</span>
+<span class="kw">UPDATE MATCH</span> (<span class="alias">u</span>:<span class="type">User</span>)-[<span class="alias">e</span>:<span class="edge-type">WORKS_AT</span>]-&gt;(<span class="alias">c</span>:<span class="type">Company</span>)
+    <span class="kw">SET</span> <span class="alias">e</span>.<span class="alias">since</span> = <span class="num">2025</span>, <span class="alias">e</span>.<span class="alias">role</span> = <span class="str">"engineer"</span>
+    <span class="kw">WHERE</span> <span class="alias">u</span>.<span class="alias">name</span> <span class="op">=</span> <span class="str">"Alice"</span>;</code></pre>
             </div>
 
             <div class="info-box">
@@ -409,7 +422,7 @@
 
             <!-- ========== WHERE ========== -->
             <h2 id="where">WHERE Clause</h2>
-            <p>Filters results using boolean expressions. Supports <code>AND</code>, <code>OR</code>, and parenthesized grouping.</p>
+            <p>Filters results using boolean expressions. Supports <code>AND</code>, <code>OR</code>, and parenthesized grouping. Works for node aliases and edge aliases (for example, <code>e.since</code>).</p>
 
             <div class="syntax-block">
                 <div class="label">Syntax</div>
@@ -423,22 +436,29 @@
 
 <span class="kw">WHERE</span> <span class="alias">c</span>.<span class="alias">name</span> <span class="op">=</span> <span class="str">"Google"</span> <span class="kw">OR</span> <span class="alias">c</span>.<span class="alias">name</span> <span class="op">=</span> <span class="str">"Apple"</span>
 
+<span class="kw">WHERE</span> <span class="alias">e</span>.<span class="alias">since</span> <span class="op">&gt;=</span> <span class="num">2025</span>
+
 <span class="kw">WHERE</span> (<span class="alias">u</span>.<span class="alias">age</span> <span class="op">&gt;</span> <span class="num">30</span> <span class="kw">AND</span> <span class="alias">u</span>.<span class="alias">name</span> <span class="op">=</span> <span class="str">"Alice"</span>) <span class="kw">OR</span> <span class="alias">u</span>.<span class="alias">age</span> <span class="op">&lt;</span> <span class="num">20</span></code></pre>
             </div>
 
             <!-- ========== SELECT ========== -->
             <h2 id="select">SELECT Clause</h2>
-            <p>Choose which fields to include in the result table. Supports aliasing with <code>AS</code>.</p>
+            <p>Choose which fields to include in the result table. Supports aliasing with <code>AS</code>, edge field selection, and selecting a full edge alias.</p>
 
             <div class="syntax-block">
                 <div class="label">Syntax</div>
-                <pre><code><span class="kw">SELECT</span> <span class="alias">alias</span>.<span class="alias">field</span> [<span class="kw">AS</span> <span class="alias">alias_name</span>], ...</code></pre>
+                <pre><code><span class="kw">SELECT</span> <span class="alias">alias</span>.<span class="alias">field</span> [<span class="kw">AS</span> <span class="alias">alias_name</span>], ...
+<span class="kw">SELECT</span> <span class="alias">e</span>;  <span class="cmt">// full edge alias expansion</span></code></pre>
             </div>
 
             <div class="syntax-block">
                 <div class="label">Example</div>
                 <pre><code><span class="kw">MATCH</span> (<span class="alias">u</span>:<span class="type">User</span>)-[:<span class="edge-type">works_at</span> <span class="kw">INNER</span>]-&gt;(<span class="alias">c</span>:<span class="type">Company</span>)
-    <span class="kw">SELECT</span> <span class="alias">u</span>.<span class="alias">name</span> <span class="kw">AS</span> <span class="alias">employee</span>, <span class="alias">c</span>.<span class="alias">name</span> <span class="kw">AS</span> <span class="alias">company</span>, <span class="alias">u</span>.<span class="alias">age</span>;</code></pre>
+    <span class="kw">SELECT</span> <span class="alias">u</span>.<span class="alias">name</span> <span class="kw">AS</span> <span class="alias">employee</span>, <span class="alias">c</span>.<span class="alias">name</span> <span class="kw">AS</span> <span class="alias">company</span>, <span class="alias">u</span>.<span class="alias">age</span>;
+
+<span class="kw">MATCH</span> (<span class="alias">u</span>:<span class="type">User</span>)-[<span class="alias">e</span>:<span class="edge-type">WORKS_AT</span>]-&gt;(<span class="alias">c</span>:<span class="type">Company</span>)
+    <span class="kw">SELECT</span> <span class="alias">u</span>.<span class="alias">name</span>, <span class="alias">e</span>.<span class="alias">since</span>, <span class="alias">e</span>;
+</code></pre>
             </div>
 
             <!-- ========== SET ========== -->

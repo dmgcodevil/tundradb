@@ -145,6 +145,19 @@ arrow::Status append_array_to_list_builder(const ArrayRef& arr_ref,
                                            arrow::ListBuilder* list_builder);
 
 /**
+ * @brief Appends a MapRef's contents to an Arrow MapBuilder.
+ *
+ * Map values are encoded into the map's binary item column.
+ * Encoding format is internal and intended for round-trip within TundraDB.
+ *
+ * @param map_ref The map reference to append.
+ * @param map_builder The Arrow MapBuilder to append into.
+ * @return OK on success, or an error for unsupported/corrupt value types.
+ */
+arrow::Status append_map_to_map_builder(const MapRef& map_ref,
+                                        arrow::MapBuilder* map_builder);
+
+/**
  * @brief Filters an Arrow table using a WhereExpr predicate.
  *
  * @param table The table to filter.

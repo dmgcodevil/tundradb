@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "logger.hpp"
+#include "edge.hpp"
 #include "node.hpp"
 #include "query.hpp"
 #include "types.hpp"
@@ -141,6 +142,33 @@ struct Row {
     const size_t n = std::min(fields.size(), field_indices.size());
     for (size_t i = 0; i < n; ++i) {
       const auto& field = fields[i];
+      const int field_id = field_indices[i];
+      auto value_ref_result = view.get_value_ref(field);
+      if (value_ref_result.ok()) {
+        this->set_cell(field_id, value_ref_result.ValueOrDie());
+      }
+    }
+  }
+
+  void set_cell_from_edge(const std::vector<int>& field_indices,
+                          const std::shared_ptr<Edge>& edge,
+                          const llvm::SmallVector<std::shared_ptr<Field>, 4>& fields,
+                          TemporalContext* temporal_context) {
+    auto view = edge->view(temporal_context);
+    const auto edge_schema = edge->get_schema();
+    const size_t n = std::min(fields.size(), field_indices.size());
+    for (size_t i = 0; i < n; ++i) {
+      auto field = fields[i];
+      if (!field) continue;
+      const auto& name = field->name();
+      const bool structural = (name == "id" || name == "_edge_id" ||
+                               name == "source_id" || name == "target_id" ||
+                               name == "created_ts");
+      if (!structural && edge_schema) {
+        auto real_field = edge_schema->get_field(name);
+        if (!real_field) continue;
+        field = real_field;
+      }
       const int field_id = field_indices[i];
       auto value_ref_result = view.get_value_ref(field);
       if (value_ref_result.ok()) {

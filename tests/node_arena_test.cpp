@@ -52,38 +52,38 @@ class NodeArenaTest : public ::testing::Test {
 };
 
 // =============================================================================
-// 1. map_key FieldUpdate — all value types via Node::update_fields
+// 1. nested_path FieldUpdate — all value types via Node::update_fields
 // =============================================================================
 
-TEST_F(NodeArenaTest, MapKeyAllTypes) {
+TEST_F(NodeArenaTest, NestedPathAllTypes) {
   auto node =
       mgr_->create_node("Full", {{"name", Value{"Alice"}}}).ValueOrDie();
   auto schema = node->get_schema();
   auto props = schema->get_field("props");
 
-  ASSERT_TRUE(
-      node->update_fields({FieldUpdate{props, Value{int32_t(1)},
-                                       UpdateType::SET, std::string("i32")}})
-          .ok());
-  ASSERT_TRUE(
-      node->update_fields({FieldUpdate{props, Value{int64_t(2)},
-                                       UpdateType::SET, std::string("i64")}})
-          .ok());
+  ASSERT_TRUE(node->update_fields(
+                      {FieldUpdate{props, Value{int32_t(1)}, UpdateType::SET,
+                                   std::vector<std::string>{"i32"}}})
+                  .ok());
+  ASSERT_TRUE(node->update_fields(
+                      {FieldUpdate{props, Value{int64_t(2)}, UpdateType::SET,
+                                   std::vector<std::string>{"i64"}}})
+                  .ok());
   ASSERT_TRUE(
       node->update_fields({FieldUpdate{props, Value{3.14}, UpdateType::SET,
-                                       std::string("f64")}})
+                                       std::vector<std::string>{"f64"}}})
           .ok());
-  ASSERT_TRUE(
-      node->update_fields({FieldUpdate{props, Value{float(1.5f)},
-                                       UpdateType::SET, std::string("f32")}})
-          .ok());
+  ASSERT_TRUE(node->update_fields(
+                      {FieldUpdate{props, Value{float(1.5f)}, UpdateType::SET,
+                                   std::vector<std::string>{"f32"}}})
+                  .ok());
   ASSERT_TRUE(
       node->update_fields({FieldUpdate{props, Value{true}, UpdateType::SET,
-                                       std::string("b")}})
+                                       std::vector<std::string>{"b"}}})
           .ok());
   ASSERT_TRUE(
       node->update_fields({FieldUpdate{props, Value{"hello"}, UpdateType::SET,
-                                       std::string("s")}})
+                                       std::vector<std::string>{"s"}}})
           .ok());
 
   auto m = node->get_value(props).ValueOrDie().as_map_ref();
@@ -95,18 +95,20 @@ TEST_F(NodeArenaTest, MapKeyAllTypes) {
 }
 
 // =============================================================================
-// 2. map_key FieldUpdate — COW growth across multiple updates
+// 2. nested_path FieldUpdate — COW growth across multiple updates
 // =============================================================================
 
-TEST_F(NodeArenaTest, MapKeyCowGrowth) {
+TEST_F(NodeArenaTest, NestedPathCowGrowth) {
   auto node = mgr_->create_node("Full", {{"name", Value{"Bob"}}}).ValueOrDie();
   auto schema = node->get_schema();
   auto props = schema->get_field("props");
 
   for (int i = 0; i < 20; ++i) {
     ASSERT_TRUE(node->update_fields(
-                        {FieldUpdate{props, Value{int32_t(i)}, UpdateType::SET,
-                                     std::string("k") + std::to_string(i)}})
+                        {FieldUpdate{props,
+                                     Value{int32_t(i)},
+                                     UpdateType::SET,
+                                     {std::string("k") + std::to_string(i)}}})
                     .ok());
   }
 
@@ -192,15 +194,15 @@ TEST_F(NodeArenaTest, VersionedAppendToArrayField) {
 // 7. set_field_value_internal — overwrite MAP field (marks old for deletion)
 // =============================================================================
 
-TEST_F(NodeArenaTest, OverwriteMapKeyValue) {
+TEST_F(NodeArenaTest, OverwriteNestedPathValue) {
   auto node = mgr_->create_node("Full", {{"name", Value{"Dave"}}}).ValueOrDie();
   auto schema = node->get_schema();
   auto props = schema->get_field("props");
 
-  ASSERT_TRUE(
-      node->update_fields({FieldUpdate{props, Value{int32_t(1)},
-                                       UpdateType::SET, std::string("x")}})
-          .ok());
+  ASSERT_TRUE(node->update_fields(
+                      {FieldUpdate{props, Value{int32_t(1)}, UpdateType::SET,
+                                   std::vector<std::string>{"x"}}})
+                  .ok());
   EXPECT_EQ(node->get_value(props)
                 .ValueOrDie()
                 .as_map_ref()
@@ -209,10 +211,10 @@ TEST_F(NodeArenaTest, OverwriteMapKeyValue) {
             1);
 
   // Overwrite the same key — COW copy and update
-  ASSERT_TRUE(
-      node->update_fields({FieldUpdate{props, Value{int32_t(99)},
-                                       UpdateType::SET, std::string("x")}})
-          .ok());
+  ASSERT_TRUE(node->update_fields(
+                      {FieldUpdate{props, Value{int32_t(99)}, UpdateType::SET,
+                                   std::vector<std::string>{"x"}}})
+                  .ok());
   EXPECT_EQ(node->get_value(props)
                 .ValueOrDie()
                 .as_map_ref()
@@ -512,10 +514,10 @@ TEST_F(NodeArenaTest, VersionCounterAndChain) {
 }
 
 // =============================================================================
-// End-to-end: map_key update via Node::update_fields (versioned)
+// End-to-end: nested_path update via Node::update_fields (versioned)
 // =============================================================================
 
-TEST_F(NodeArenaTest, VersionedMapKeyUpdate) {
+TEST_F(NodeArenaTest, VersionedNestedPathUpdate) {
   auto node = mgr_versioned_
                   ->create_node("Full", {{"name", Value{"MapVer"}},
                                          {"age", Value{int32_t(1)}}})
@@ -527,7 +529,7 @@ TEST_F(NodeArenaTest, VersionedMapKeyUpdate) {
   // v1: set props.score = 3.14
   ASSERT_TRUE(
       node->update_fields({FieldUpdate{props, Value{3.14}, UpdateType::SET,
-                                       std::string("score")}})
+                                       std::vector<std::string>{"score"}}})
           .ok());
 
   auto m1 = node->get_value(props).ValueOrDie().as_map_ref();
@@ -535,10 +537,10 @@ TEST_F(NodeArenaTest, VersionedMapKeyUpdate) {
 
   // v2: update props.score = 6.28 and age = 2 in a single batch
   ASSERT_TRUE(
-      node->update_fields({FieldUpdate{props, Value{6.28}, UpdateType::SET,
-                                       std::string("score")},
-                           FieldUpdate{age, Value{int32_t(2)}, UpdateType::SET,
-                                       std::nullopt}})
+      node->update_fields(
+              {FieldUpdate{props, Value{6.28}, UpdateType::SET,
+                           std::vector<std::string>{"score"}},
+               FieldUpdate{age, Value{int32_t(2)}, UpdateType::SET, {}}})
           .ok());
 
   auto m2 = node->get_value(props).ValueOrDie().as_map_ref();
@@ -548,7 +550,7 @@ TEST_F(NodeArenaTest, VersionedMapKeyUpdate) {
   // v3: add a new key to the map
   ASSERT_TRUE(
       node->update_fields({FieldUpdate{props, Value{true}, UpdateType::SET,
-                                       std::string("active")}})
+                                       std::vector<std::string>{"active"}}})
           .ok());
 
   auto m3 = node->get_value(props).ValueOrDie().as_map_ref();
@@ -558,24 +560,37 @@ TEST_F(NodeArenaTest, VersionedMapKeyUpdate) {
 }
 
 // =============================================================================
-// End-to-end: map_key update on null MAP field creates map automatically
+// End-to-end: nested_path update on null MAP field creates map automatically
 // =============================================================================
 
-TEST_F(NodeArenaTest, MapKeyOnNullFieldCreatesMap) {
+TEST_F(NodeArenaTest, NestedPathOnNullFieldCreatesMap) {
   auto node =
       mgr_->create_node("Full", {{"name", Value{"NullMap"}}}).ValueOrDie();
   auto schema = node->get_schema();
   auto props = schema->get_field("props");
 
-  // MAP field is null initially — map_key update should create it
-  ASSERT_TRUE(
-      node->update_fields({FieldUpdate{props, Value{int32_t(42)},
-                                       UpdateType::SET, std::string("answer")}})
-          .ok());
+  // MAP field is null initially — nested_path update should create it
+  ASSERT_TRUE(node->update_fields(
+                      {FieldUpdate{props, Value{int32_t(42)}, UpdateType::SET,
+                                   std::vector<std::string>{"answer"}}})
+                  .ok());
 
   auto val = node->get_value(props).ValueOrDie();
   ASSERT_TRUE(val.holds_map_ref());
   EXPECT_EQ(val.as_map_ref().get_value("answer").as_int32(), 42);
+}
+
+TEST_F(NodeArenaTest, NestedPathDepthGreaterThanOneReturnsNotImplemented) {
+  auto node =
+      mgr_->create_node("Full", {{"name", Value{"Nested"}}}).ValueOrDie();
+  auto schema = node->get_schema();
+  auto props = schema->get_field("props");
+
+  auto update_result = node->update_fields(
+      {FieldUpdate{props, Value{int32_t(1)}, UpdateType::SET,
+                   std::vector<std::string>{"lvl1", "lvl2"}}});
+  ASSERT_FALSE(update_result.ok());
+  EXPECT_TRUE(update_result.status().IsNotImplemented());
 }
 
 // =============================================================================
@@ -724,10 +739,10 @@ TEST_F(NodeArenaTest, OverwriteEntireMapField) {
   auto schema = node->get_schema();
   auto props = schema->get_field("props");
 
-  ASSERT_TRUE(
-      node->update_fields({FieldUpdate{props, Value{int32_t(1)},
-                                       UpdateType::SET, std::string("a")}})
-          .ok());
+  ASSERT_TRUE(node->update_fields(
+                      {FieldUpdate{props, Value{int32_t(1)}, UpdateType::SET,
+                                   std::vector<std::string>{"a"}}})
+                  .ok());
 
   auto* arena = node->get_arena();
   auto new_map = arena->allocate_map().ValueOrDie();

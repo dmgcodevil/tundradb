@@ -705,8 +705,8 @@ class NodeArena {
         return arrow::Status::Invalid("Invalid field in apply_updates: ",
                                       upd.field->name());
       }
-      result.push_back(
-          {static_cast<uint16_t>(fl->index), upd.value, upd.op, upd.map_key});
+      result.push_back({static_cast<uint16_t>(fl->index), upd.value, upd.op,
+                        upd.nested_path});
     }
     return result;
   }
@@ -721,9 +721,9 @@ class NodeArena {
       }
       const FieldLayout& fl = layout->get_fields()[upd.field_idx];
 
-      if (upd.map_key.has_value()) {
-        ARROW_RETURN_NOT_OK(apply_map_key_update_non_versioned(
-            handle.ptr, layout, &fl, upd.map_key.value(), upd.value));
+      if (!upd.nested_path.empty()) {
+        ARROW_RETURN_NOT_OK(apply_nested_path_update_non_versioned(
+            handle.ptr, layout, &fl, upd.nested_path, upd.value));
         continue;
       }
 
@@ -781,11 +781,10 @@ class NodeArena {
     for (const auto& upd : schema_updates) {
       const FieldLayout& fl = layout->get_fields()[upd.field_idx];
 
-      if (upd.map_key.has_value()) {
+      if (!upd.nested_path.empty()) {
         ARROW_ASSIGN_OR_RAISE(
-            Value map_val,
-            apply_map_key_update_versioned(handle, layout, fl,
-                                           upd.map_key.value(), upd.value));
+            Value map_val, apply_nested_path_update_versioned(
+                               handle, layout, fl, upd.nested_path, upd.value));
         assert(batch_memory != nullptr);
         char* field_storage = batch_memory + offset;
         offset += fl.size;
@@ -920,7 +919,7 @@ class NodeArena {
     return arrow::Status::OK();
   }
 
-  // ---- map-key update helpers -----------------------------------------------
+  // ---- nested-path update helpers -------------------------------------------
 
   /**
    * Materialise a Value suitable for storing a scalar into a MapEntry.
@@ -940,8 +939,8 @@ class NodeArena {
    * Set a single key inside an existing (or new) MapRef.
    * Handles COW growth when the map is full and string materialisation.
    */
-  arrow::Status set_map_key(MapRef& ref, const std::string& key,
-                            const Value& value) {
+  arrow::Status set_nested_map_key(MapRef& ref, const std::string& key,
+                                   const Value& value) {
     if (ref.is_null()) {
       ARROW_ASSIGN_OR_RAISE(ref, map_arena_->allocate());
     }
@@ -991,18 +990,21 @@ class NodeArena {
         break;
       case ValueType::ARRAY:
         if (!mat.holds_array_ref())
-          return arrow::Status::Invalid("map_key: raw arrays not supported");
+          return arrow::Status::Invalid(
+              "nested_path update: raw arrays not supported");
         ar = mat.as_array_ref();
         vptr = &ar;
         break;
       case ValueType::MAP:
         if (!mat.holds_map_ref())
-          return arrow::Status::Invalid("map_key: raw maps not supported");
+          return arrow::Status::Invalid(
+              "nested_path update: raw maps not supported");
         mr = mat.as_map_ref();
         vptr = &mr;
         break;
       default:
-        return arrow::Status::Invalid("map_key: unsupported value type");
+        return arrow::Status::Invalid(
+            "nested_path update: unsupported value type");
     }
 
     auto status = MapArena::set_entry(ref, key_ref, vtype, vptr);
@@ -1017,14 +1019,26 @@ class NodeArena {
   }
 
   /**
-   * Non-versioned map-key update: read current MapRef from base node,
-   * COW-copy, set the key, write back.
+   * Non-versioned nested-path update: read current composite value from the
+   * base node, apply update, and write back.
+   *
+   * Current implementation supports MAP-backed paths (depth 1).
    */
-  arrow::Status apply_map_key_update_non_versioned(
+  arrow::Status apply_nested_path_update_non_versioned(
       void* node_ptr, const std::shared_ptr<SchemaLayout>& layout,
-      const FieldLayout* fl, const std::string& key, const Value& value) {
+      const FieldLayout* fl, const std::vector<std::string>& nested_path,
+      const Value& value) {
+    if (nested_path.empty()) {
+      return arrow::Status::Invalid(
+          "nested_path update requires at least one path segment");
+    }
+    if (nested_path.size() > 1) {
+      return arrow::Status::NotImplemented(
+          "nested_path update depth > 1 is not implemented yet");
+    }
+    const std::string& key = nested_path.front();
     if (!is_map_type(fl->type)) {
-      return arrow::Status::TypeError("map_key update on non-MAP field: ",
+      return arrow::Status::TypeError("nested_path update on non-map field: ",
                                       tundradb::to_string(fl->type));
     }
 
@@ -1043,24 +1057,36 @@ class NodeArena {
       map_arena_->mark_for_deletion(current);
     }
 
-    ARROW_RETURN_NOT_OK(set_map_key(copy, key, value));
+    ARROW_RETURN_NOT_OK(set_nested_map_key(copy, key, value));
 
     if (!layout->set_field_value(base, *fl, Value{std::move(copy)})) {
       return arrow::Status::Invalid(
-          "Failed to write MAP field after map_key update");
+          "Failed to write map field after nested_path update");
     }
     return arrow::Status::OK();
   }
 
   /**
-   * Versioned map-key update: read current MapRef from version chain or base,
-   * COW-copy, set the key, return the new MapRef as a Value.
+   * Versioned nested-path update: read current composite value from version
+   * chain or base, apply update, and return the new value.
+   *
+   * Current implementation supports MAP-backed paths (depth 1).
    */
-  arrow::Result<Value> apply_map_key_update_versioned(
+  arrow::Result<Value> apply_nested_path_update_versioned(
       const NodeHandle& handle, const std::shared_ptr<SchemaLayout>& layout,
-      const FieldLayout& fl, const std::string& key, const Value& value) {
+      const FieldLayout& fl, const std::vector<std::string>& nested_path,
+      const Value& value) {
+    if (nested_path.empty()) {
+      return arrow::Status::Invalid(
+          "nested_path update requires at least one path segment");
+    }
+    if (nested_path.size() > 1) {
+      return arrow::Status::NotImplemented(
+          "nested_path update depth > 1 is not implemented yet");
+    }
+    const std::string& key = nested_path.front();
     if (!is_map_type(fl.type)) {
-      return arrow::Status::TypeError("map_key update on non-MAP field: ",
+      return arrow::Status::TypeError("nested_path update on non-map field: ",
                                       tundradb::to_string(fl.type));
     }
 
@@ -1086,11 +1112,11 @@ class NodeArena {
       ARROW_ASSIGN_OR_RAISE(copy, map_arena_->copy(current));
     }
 
-    ARROW_RETURN_NOT_OK(set_map_key(copy, key, value));
+    ARROW_RETURN_NOT_OK(set_nested_map_key(copy, key, value));
     return Value{std::move(copy)};
   }
 
-  // ---- end map-key update helpers -------------------------------------------
+  // ---- end nested-path update helpers ---------------------------------------
 
   /**
    * APPEND implementation for array fields (non-versioned path).

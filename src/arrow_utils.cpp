@@ -10,6 +10,8 @@
 #include <llvm/ADT/StringMap.h>
 
 #include <algorithm>
+#include <cstdint>
+#include <cstring>
 
 #include "logger.hpp"
 #include "node.hpp"
@@ -17,6 +19,70 @@
 #include "schema.hpp"
 
 namespace tundradb {
+
+namespace {
+
+template <typename T>
+void append_pod(std::string& out, const T value) {
+  const size_t old_size = out.size();
+  out.resize(old_size + sizeof(T));
+  std::memcpy(out.data() + old_size, &value, sizeof(T));
+}
+
+void append_bytes(std::string& out, const char* data, const uint32_t len) {
+  append_pod(out, len);
+  if (len > 0 && data != nullptr) {
+    out.append(data, len);
+  }
+}
+
+std::string encode_map_value_binary(const char* value_ptr,
+                                    const ValueType type) {
+  std::string out;
+  out.reserve(32);
+  out.push_back(static_cast<char>(type));
+
+  switch (type) {
+    case ValueType::INT32:
+      append_pod(out, *reinterpret_cast<const int32_t*>(value_ptr));
+      break;
+    case ValueType::INT64:
+      append_pod(out, *reinterpret_cast<const int64_t*>(value_ptr));
+      break;
+    case ValueType::FLOAT:
+      append_pod(out, *reinterpret_cast<const float*>(value_ptr));
+      break;
+    case ValueType::DOUBLE:
+      append_pod(out, *reinterpret_cast<const double*>(value_ptr));
+      break;
+    case ValueType::BOOL:
+      out.push_back(*reinterpret_cast<const bool*>(value_ptr) ? '\x01'
+                                                              : '\x00');
+      break;
+    case ValueType::STRING:
+    case ValueType::FIXED_STRING16:
+    case ValueType::FIXED_STRING32:
+    case ValueType::FIXED_STRING64: {
+      const auto& sr = *reinterpret_cast<const StringRef*>(value_ptr);
+      append_bytes(out, sr.data(), static_cast<uint32_t>(sr.length()));
+      break;
+    }
+    case ValueType::ARRAY:
+    case ValueType::MAP:
+    case ValueType::NA:
+    default: {
+      // Fallback for complex values that are not yet represented as strongly
+      // typed Arrow map items in the current schema (utf8 -> binary).
+      const std::string repr =
+          Value::read_value_from_memory(value_ptr, type).to_string();
+      append_bytes(out, repr.data(), static_cast<uint32_t>(repr.size()));
+      break;
+    }
+  }
+  return out;
+}
+
+}  // namespace
 
 arrow::Result<llvm::DenseSet<int64_t>> get_ids_from_table(
     const std::shared_ptr<arrow::Table>& table) {
@@ -251,6 +317,39 @@ arrow::Status append_array_to_list_builder(const ArrayRef& arr_ref,
   return arrow::Status::OK();
 }
 
+arrow::Status append_map_to_map_builder(const MapRef& map_ref,
+                                        arrow::MapBuilder* map_builder) {
+  if (map_ref.is_null()) {
+    return map_builder->AppendNull();
+  }
+
+  auto* key_builder =
+      dynamic_cast<arrow::StringBuilder*>(map_builder->key_builder());
+  auto* item_builder =
+      dynamic_cast<arrow::BinaryBuilder*>(map_builder->item_builder());
+  if (!key_builder || !item_builder) {
+    return arrow::Status::Invalid(
+        "MapBuilder does not have expected key/item builders");
+  }
+
+  ARROW_RETURN_NOT_OK(map_builder->Append());
+  for (uint32_t i = 0; i < map_ref.count(); ++i) {
+    const auto* entry = map_ref.entry_ptr(i);
+    const auto& key = entry->key;
+    ARROW_RETURN_NOT_OK(
+        key_builder->Append(key.data(), static_cast<int32_t>(key.length())));
+
+    const auto value_type = static_cast<ValueType>(entry->value_type);
+    const std::string encoded =
+        encode_map_value_binary(entry->value, value_type);
+    ARROW_RETURN_NOT_OK(
+        item_builder->Append(reinterpret_cast<const uint8_t*>(encoded.data()),
+                             static_cast<int32_t>(encoded.size())));
+  }
+
+  return arrow::Status::OK();
+}
+
 arrow::compute::Expression where_condition_to_expression(
     const WhereExpr& condition, bool strip_var) {
   return condition.to_arrow_expression(strip_var);
@@ -306,6 +405,16 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
             }
             ARROW_RETURN_NOT_OK(
                 append_array_to_list_builder(arr_ref, list_builder));
+          } else if (field->type() == ValueType::MAP) {
+            const auto& map_ref = *reinterpret_cast<const MapRef*>(value);
+            auto* map_builder =
+                dynamic_cast<arrow::MapBuilder*>(builders[i].get());
+            if (!map_builder) {
+              return arrow::Status::Invalid(
+                  "Expected MapBuilder for MAP field: ", field_name);
+            }
+            ARROW_RETURN_NOT_OK(
+                append_map_to_map_builder(map_ref, map_builder));
           } else {
             auto scalar_result =
                 value_ptr_to_arrow_scalar(value, field->type());
@@ -404,6 +513,13 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_empty_table(
       }
       case arrow::Type::LIST:
       case arrow::Type::FIXED_SIZE_LIST: {
+        std::unique_ptr<arrow::ArrayBuilder> builder;
+        ARROW_RETURN_NOT_OK(arrow::MakeBuilder(arrow::default_memory_pool(),
+                                               field->type(), &builder));
+        ARROW_RETURN_NOT_OK(builder->Finish(&empty_array));
+        break;
+      }
+      case arrow::Type::MAP: {
         std::unique_ptr<arrow::ArrayBuilder> builder;
         ARROW_RETURN_NOT_OK(arrow::MakeBuilder(arrow::default_memory_pool(),
                                                field->type(), &builder));

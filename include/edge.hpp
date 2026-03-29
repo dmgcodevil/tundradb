@@ -87,8 +87,34 @@ class Edge {
 
   [[nodiscard]] arrow::Result<Value> get_value(
       const std::shared_ptr<Field>& field) const {
+    if (field && (field->name() == "id" || field->name() == "_edge_id")) {
+      return Value{id_};
+    }
+    if (field && field->name() == "source_id") return Value{source_id_};
+    if (field && field->name() == "target_id") return Value{target_id_};
+    if (field && field->name() == "created_ts") return Value{created_ts_};
     return entity_ops::get_value(field, handle_.get(), arena_.get(), layout_,
                                  data_);
+  }
+
+  [[nodiscard]] arrow::Result<const char*> get_value_ptr(
+      const std::shared_ptr<Field>& field) const {
+    if (!field) {
+      return arrow::Status::Invalid("Field is null");
+    }
+    if (field->name() == "id" || field->name() == "_edge_id") {
+      return reinterpret_cast<const char*>(&id_);
+    }
+    if (field->name() == "source_id")
+      return reinterpret_cast<const char*>(&source_id_);
+    if (field->name() == "target_id")
+      return reinterpret_cast<const char*>(&target_id_);
+    if (field->name() == "created_ts")
+      return reinterpret_cast<const char*>(&created_ts_);
+    if (arena_ && handle_) {
+      return NodeArena::get_value_ptr(*handle_, layout_, field);
+    }
+    return arrow::Status::KeyError("Field not found: ", field->name());
   }
 
   arrow::Result<bool> update_fields(const std::vector<FieldUpdate>& updates) {
@@ -106,7 +132,7 @@ class Edge {
       VersionInfo* vi = handle_ ? handle_->version_info_ : nullptr;
       return {this, vi, layout_};
     }
-    VersionInfo* resolved = ctx->resolve_version(id_, *handle_);
+    VersionInfo* resolved = ctx->resolve_edge_version(id_, *handle_);
     return {this, resolved, layout_};
   }
 };
@@ -124,6 +150,30 @@ inline arrow::Result<Value> EdgeView::get_value(
   assert(handle != nullptr && "Versioned edge must have a handle");
   return entity_ops::get_value_at_version(field, *handle, resolved_version_,
                                           layout_);
+}
+
+inline arrow::Result<const char*> EdgeView::get_value_ptr(
+    const std::shared_ptr<Field>& field) const {
+  if (resolved_version_ == nullptr || !layout_) {
+    return edge_->get_value_ptr(field);
+  }
+  if (field && (field->name() == "id" || field->name() == "_edge_id" ||
+                field->name() == "source_id" ||
+                field->name() == "target_id" || field->name() == "created_ts")) {
+    return edge_->get_value_ptr(field);
+  }
+  const NodeHandle* handle = edge_->get_handle();
+  if (!handle) {
+    return edge_->get_value_ptr(field);
+  }
+  return edge_->get_arena()->get_value_ptr_at_version(*handle, resolved_version_,
+                                                       layout_, field);
+}
+
+inline arrow::Result<ValueRef> EdgeView::get_value_ref(
+    const std::shared_ptr<Field>& field) const {
+  ARROW_ASSIGN_OR_RAISE(const auto ptr, get_value_ptr(field));
+  return ValueRef{ptr, field->type()};
 }
 
 inline bool EdgeView::is_visible() const {

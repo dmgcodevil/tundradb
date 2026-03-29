@@ -305,6 +305,40 @@ git push origin gh-pages
 | Responsive Design | ✅ | Mobile-friendly |
 | Dark Theme | ✅ | Professional styling |
 
+## 🆕 Edge Query Capabilities
+
+The query engine and shell now support edge alias reads and writes in MATCH:
+
+- `CREATE EDGE SCHEMA <type> (...)`
+- Edge alias binding in traversal: `-[e:TYPE]->`
+- Edge field filters: `WHERE e.<field> ...`
+- Edge field selection: `SELECT e.<field>`
+- Full edge selection: `SELECT e` (expands to all edge columns)
+- Edge updates: `UPDATE MATCH ... SET e.<field> = ...`
+
+Example:
+
+```sql
+CREATE SCHEMA User (name: STRING);
+CREATE SCHEMA Company (name: STRING);
+CREATE EDGE SCHEMA WORKS_AT (since: INT64, role: STRING);
+
+CREATE NODE User (name = "Alice");
+CREATE NODE Company (name = "Acme");
+CREATE EDGE WORKS_AT FROM User(0) TO Company(0);
+
+UPDATE MATCH (u:User)-[e:WORKS_AT]->(c:Company) SET e.since = 2025;
+
+MATCH (u:User)-[e:WORKS_AT]->(c:Company)
+WHERE e.since = 2025
+SELECT u.name, c.name, e.since;
+
+MATCH (u:User)-[e:WORKS_AT]->(c:Company) SELECT e;
+```
+
+Current limitation:
+- `CREATE EDGE ... WITH (...)` property assignment is still pending; use `UPDATE MATCH ... SET e.<field> = ...` after creating the edge.
+
 ## 🎯 Next Enhancements
 
 Potential additions:

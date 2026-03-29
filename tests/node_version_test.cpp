@@ -481,12 +481,12 @@ TEST_F(NodeVersionTest, MapPropertyVersioned) {
   VersionInfo* v0 = handle.get_version_info();
   uint64_t t0 = v0->valid_from;
 
-  // v1: update count=20 and props.score=6.28 using map_key in FieldUpdate
+  // v1: update count=20 and props.score=6.28 using nested_path in FieldUpdate
   std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
   std::vector<FieldUpdate> updates = {
-      {count_field_, Value(int32_t(20)), UpdateType::SET, std::nullopt},
-      {props_field_, Value(6.28), UpdateType::SET, std::string("score")}};
+      {count_field_, Value(int32_t(20)), UpdateType::SET, {}},
+      {props_field_, Value(6.28), UpdateType::SET, {"score"}}};
   ASSERT_TRUE(
       node_arena_versioned_->apply_updates(handle, layout_, updates).ok());
 

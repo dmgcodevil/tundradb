@@ -4,10 +4,48 @@
 #include <unordered_set>
 
 #include "arrow_utils.hpp"
+#include "edge_store.hpp"
 #include "logger.hpp"
 #include "utils.hpp"
 
 namespace tundradb {
+
+namespace {
+std::string edge_shadow_schema_name(const std::string& edge_type) {
+  return "__edge__" + edge_type;
+}
+
+arrow::Result<std::string> ensure_edge_shadow_schema(QueryState& query_state,
+                                                     const std::string& edge_type) {
+  const std::string shadow = edge_shadow_schema_name(edge_type);
+  auto registry = query_state.schema_registry();
+  if (registry->get(shadow).ok()) {
+    return shadow;
+  }
+  if (!query_state.edge_store) {
+    return arrow::Status::Invalid("Edge store is not available in query state");
+  }
+  auto edge_schema = query_state.edge_store->get_edge_schema(edge_type);
+  if (!edge_schema) {
+    return arrow::Status::KeyError("Edge schema '", edge_type, "' not found");
+  }
+
+  std::vector<std::shared_ptr<arrow::Field>> fields{
+      arrow::field("_edge_id", arrow::int64()),
+      arrow::field("source_id", arrow::int64()),
+      arrow::field("target_id", arrow::int64()),
+      arrow::field("created_ts", arrow::int64())};
+  std::unordered_set<std::string> seen{"_edge_id", "source_id", "target_id",
+                                       "created_ts"};
+  for (const auto& f : edge_schema->arrow()->fields()) {
+    if (seen.insert(f->name()).second) {
+      fields.push_back(f);
+    }
+  }
+  ARROW_RETURN_NOT_OK(registry->create(shadow, arrow::schema(fields)));
+  return shadow;
+}
+}  // namespace
 
 // SchemaContext implementation
 
@@ -173,7 +211,14 @@ std::string QueryState::ToString() const {
         break;
       }
       ss << "        <- " << conn.source.value() << ":" << conn.source_id
-         << " (via '" << conn.edge_type << "')\n";
+         << " (via '" << conn.edge_type << "'";
+      if (conn.edge_alias.has_value()) {
+        ss << " as " << conn.edge_alias.value();
+      }
+      if (conn.edge_id >= 0) {
+        ss << " #" << conn.edge_id;
+      }
+      ss << ")\n";
       conns_printed_for_target++;
     }
     target_nodes_printed++;
@@ -183,6 +228,8 @@ std::string QueryState::ToString() const {
   for (size_t i = 0; i < traversals.size(); ++i) {
     const auto& trav = traversals[i];
     ss << "    - [" << i << "]: " << trav.source().value() << " -["
+       << (trav.edge_alias().has_value() ? trav.edge_alias().value() + ":"
+                                         : "")
        << trav.edge_type() << "]-> " << trav.target().value() << " (Type: "
        << (trav.traverse_type() == TraverseType::Inner ? "Inner" : "Other")
        << ")\n";
@@ -297,6 +344,10 @@ arrow::Result<std::shared_ptr<arrow::Schema>> build_denormalized_schema(
     if (processed_schemas.insert(traverse.target().value()).second) {
       unique_schemas.push_back(traverse.target());
     }
+    if (traverse.edge_alias().has_value() &&
+        processed_schemas.insert(traverse.edge_alias().value()).second) {
+      unique_schemas.push_back(SchemaRef::parse(traverse.edge_alias().value()));
+    }
   }
 
   for (const auto& schema_ref : unique_schemas) {
@@ -315,8 +366,7 @@ arrow::Result<std::shared_ptr<arrow::Schema>> build_denormalized_schema(
       std::string prefixed_field_name =
           schema_ref.value() + "." + field->name();
       if (processed_fields.contains(prefixed_field_name)) {
-        return arrow::Status::KeyError("Field '{}' already exists",
-                                       prefixed_field_name);
+        continue;
       }
 
       processed_fields.insert(prefixed_field_name);
@@ -349,8 +399,13 @@ void log_grouped_connections(
 
       for (size_t i = 0; i < connections.size(); ++i) {
         const auto& conn = connections[i];
-        log_debug("    [{}] {} -[{}]-> {}.{} (target_id: {})", i,
-                  conn.source.value(), conn.edge_type, conn.target.value(),
+        log_debug("    [{}] {} -[{}{}{}]-> {}.{} (target_id: {})", i,
+                  conn.source.value(),
+                  conn.edge_alias.has_value() ? conn.edge_alias.value() + ":"
+                                              : "",
+                  conn.edge_type,
+                  conn.edge_id >= 0 ? "#" + std::to_string(conn.edge_id) : "",
+                  conn.target.value(),
                   conn.target.schema(), conn.target_id);
       }
     }
@@ -470,6 +525,19 @@ arrow::Status prepare_query(Query& query, QueryState& query_state) {
 
       if (!traverse->target().is_declaration()) {
         traverse->mutable_target().set_schema(target_schema);
+      }
+      if (traverse->edge_alias().has_value()) {
+        ARROW_ASSIGN_OR_RAISE(
+            auto edge_shadow_schema,
+            ensure_edge_shadow_schema(query_state, traverse->edge_type()));
+        ARROW_ASSIGN_OR_RAISE(
+            auto _edge_schema_name,
+            query_state.register_schema(
+                SchemaRef::parse(traverse->edge_alias().value() + ":" +
+                                 edge_shadow_schema)));
+        (void)_edge_schema_name;
+        ARROW_RETURN_NOT_OK(query_state.register_edge_alias(
+            traverse->edge_alias().value(), traverse->edge_type()));
       }
 
       traverse->mutable_source().set_tag(compute_tag(traverse->source()));

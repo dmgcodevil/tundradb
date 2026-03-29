@@ -139,7 +139,7 @@ class Node {
     }
 
     // Resolve version using TemporalContext
-    VersionInfo *resolved = ctx->resolve_version(id, *handle_);
+    VersionInfo *resolved = ctx->resolve_node_version(id, *handle_);
     return {this, resolved, arena_.get(), layout_};
   }
 };

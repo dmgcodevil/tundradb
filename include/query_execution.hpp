@@ -12,6 +12,7 @@
 #include <atomic>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -25,6 +26,7 @@ namespace tundradb {
 // Forward declarations
 class SchemaRegistry;
 class NodeManager;
+class EdgeStore;
 
 /**
  * @brief Runtime connection between two nodes discovered during traversal
@@ -35,6 +37,8 @@ class NodeManager;
 struct GraphConnection {
   SchemaRef source;
   int64_t source_id;
+  int64_t edge_id = -1;
+  std::optional<std::string> edge_alias;
   std::string edge_type;
   std::string label;
   SchemaRef target;
@@ -42,8 +46,15 @@ struct GraphConnection {
 
   [[nodiscard]] std::string toString() const {
     std::stringstream ss;
-    ss << "{(" << source << ":id=" << source_id << "->[:" << edge_type << "]->"
-       << "(" << label << ":" << target << ":id=" << target_id << ")}";
+    ss << "{(" << source << ":id=" << source_id << ")-[";
+    if (edge_alias.has_value()) {
+      ss << edge_alias.value() << ":";
+    }
+    ss << edge_type;
+    if (edge_id >= 0) {
+      ss << "#" << edge_id;
+    }
+    ss << "]->(" << label << ":" << target << ":id=" << target_id << ")}";
     return ss.str();
   }
 
@@ -316,6 +327,10 @@ class FieldIndexer {
                                        const std::string& resolved_schema,
                                        SchemaRegistry* registry);
 
+  arrow::Result<bool> compute_fq_names_from_fields(
+      const std::string& alias,
+      const std::vector<std::shared_ptr<Field>>& fields);
+
   /**
    * @brief Returns the field-index vector for a schema alias, or nullptr.
    *
@@ -404,8 +419,11 @@ struct QueryState {
 
   SchemaRef from;                    ///< Source schema from the FROM clause.
   std::vector<Traverse> traversals;  ///< Traverse clauses in query order.
+  std::unordered_map<std::string, std::string>
+      edge_aliases;  ///< edge alias -> edge type
 
   std::shared_ptr<NodeManager> node_manager;  ///< Node storage.
+  std::shared_ptr<EdgeStore> edge_store;      ///< Edge storage.
   std::unique_ptr<TemporalContext>
       temporal_context;  ///< Temporal snapshot (nullptr = current).
 
@@ -415,6 +433,20 @@ struct QueryState {
   /** @brief Registers a schema alias. @see SchemaContext::register_schema. */
   arrow::Result<std::string> register_schema(const SchemaRef& ref) {
     return schemas.register_schema(ref);
+  }
+
+  arrow::Result<bool> register_edge_alias(const std::string& alias,
+                                          const std::string& edge_type) {
+    if (alias.empty()) {
+      return arrow::Status::Invalid("Edge alias cannot be empty");
+    }
+    if (auto [it, inserted] = edge_aliases.emplace(alias, edge_type);
+        !inserted && it->second != edge_type) {
+      return arrow::Status::Invalid("Edge alias '", alias,
+                                    "' is already bound to edge type '",
+                                    it->second, "'");
+    }
+    return true;
   }
 
   /** @brief Resolves a schema alias to its concrete name. */

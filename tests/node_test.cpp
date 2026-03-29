@@ -832,10 +832,10 @@ TEST_F(NodeMapFieldTest, SetMapKeyViUpdateFields) {
   auto schema = node->get_schema();
   auto props = schema->get_field("props");
 
-  ASSERT_TRUE(
-      node->update_fields({FieldUpdate{props, Value{int32_t(42)},
-                                       UpdateType::SET, std::string("answer")}})
-          .ok());
+  ASSERT_TRUE(node->update_fields(
+                      {FieldUpdate{props, Value{int32_t(42)}, UpdateType::SET,
+                                   std::vector<std::string>{"answer"}}})
+                  .ok());
 
   auto val = node->get_value("props");
   ASSERT_TRUE(val.ok());
@@ -853,15 +853,15 @@ TEST_F(NodeMapFieldTest, SetMultipleMapKeys) {
 
   ASSERT_TRUE(
       node->update_fields({FieldUpdate{props, Value{3.14}, UpdateType::SET,
-                                       std::string("score")}})
+                                       std::vector<std::string>{"score"}}})
           .ok());
   ASSERT_TRUE(
       node->update_fields({FieldUpdate{props, Value{true}, UpdateType::SET,
-                                       std::string("active")}})
+                                       std::vector<std::string>{"active"}}})
           .ok());
   ASSERT_TRUE(
       node->update_fields({FieldUpdate{props, Value{"admin"}, UpdateType::SET,
-                                       std::string("role")}})
+                                       std::vector<std::string>{"role"}}})
           .ok());
 
   auto m = node->get_value("props").ValueOrDie().as_map_ref();
@@ -877,10 +877,10 @@ TEST_F(NodeMapFieldTest, OverwriteMapKey) {
   auto schema = node->get_schema();
   auto props = schema->get_field("props");
 
-  ASSERT_TRUE(
-      node->update_fields({FieldUpdate{props, Value{int32_t(1)},
-                                       UpdateType::SET, std::string("x")}})
-          .ok());
+  ASSERT_TRUE(node->update_fields(
+                      {FieldUpdate{props, Value{int32_t(1)}, UpdateType::SET,
+                                   std::vector<std::string>{"x"}}})
+                  .ok());
   EXPECT_EQ(node->get_value("props")
                 .ValueOrDie()
                 .as_map_ref()
@@ -888,10 +888,10 @@ TEST_F(NodeMapFieldTest, OverwriteMapKey) {
                 .as_int32(),
             1);
 
-  ASSERT_TRUE(
-      node->update_fields({FieldUpdate{props, Value{int32_t(99)},
-                                       UpdateType::SET, std::string("x")}})
-          .ok());
+  ASSERT_TRUE(node->update_fields(
+                      {FieldUpdate{props, Value{int32_t(99)}, UpdateType::SET,
+                                   std::vector<std::string>{"x"}}})
+                  .ok());
   EXPECT_EQ(node->get_value("props")
                 .ValueOrDie()
                 .as_map_ref()
@@ -910,10 +910,10 @@ TEST_F(NodeMapFieldTest, MixedScalarAndMapKeyUpdates) {
 
   // Update both a scalar field and a map key in one batch
   ASSERT_TRUE(
-      node->update_fields({FieldUpdate{age, Value{int32_t(21)}, UpdateType::SET,
-                                       std::nullopt},
-                           FieldUpdate{props, Value{100.0}, UpdateType::SET,
-                                       std::string("score")}})
+      node->update_fields(
+              {FieldUpdate{age, Value{int32_t(21)}, UpdateType::SET, {}},
+               FieldUpdate{props, Value{100.0}, UpdateType::SET,
+                           std::vector<std::string>{"score"}}})
           .ok());
 
   EXPECT_EQ(node->get_value("age").ValueOrDie().as_int32(), 21);
@@ -931,10 +931,10 @@ TEST_F(NodeMapFieldTest, GetValueMissingMapKeyReturnsNull) {
   auto schema = node->get_schema();
   auto props = schema->get_field("props");
 
-  ASSERT_TRUE(
-      node->update_fields({FieldUpdate{props, Value{int32_t(1)},
-                                       UpdateType::SET, std::string("a")}})
-          .ok());
+  ASSERT_TRUE(node->update_fields(
+                      {FieldUpdate{props, Value{int32_t(1)}, UpdateType::SET,
+                                   std::vector<std::string>{"a"}}})
+                  .ok());
 
   auto m = node->get_value("props").ValueOrDie().as_map_ref();
   EXPECT_TRUE(m.get_value("nonexistent").is_null());

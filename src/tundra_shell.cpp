@@ -14,6 +14,7 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -151,6 +152,44 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
     }
 
     *g_output_stream << "Created schema: " << schema_name << std::endl;
+    return true;
+  }
+
+  // Handle CREATE EDGE SCHEMA statements
+  antlrcpp::Any visitCreateEdgeSchemaStatement(
+      tundraql::TundraQLParser::CreateEdgeSchemaStatementContext* ctx)
+      override {
+    const std::string edge_type = ctx->IDENTIFIER()->getText();
+    spdlog::info("Creating edge schema: {}", edge_type);
+
+    std::vector<std::shared_ptr<tundradb::Field>> fields;
+    auto fieldList = ctx->schemaFieldList();
+    for (auto field : fieldList->schemaField()) {
+      const std::string field_name = field->IDENTIFIER()->getText();
+      const std::string field_type = field->dataType()->getText();
+
+      tundradb::ValueType value_type;
+      if (field_type == "STRING") {
+        value_type = tundradb::ValueType::STRING;
+      } else if (field_type == "INT64") {
+        value_type = tundradb::ValueType::INT64;
+      } else if (field_type == "FLOAT64") {
+        value_type = tundradb::ValueType::DOUBLE;
+      } else {
+        throw std::runtime_error("Unsupported edge field type: " + field_type);
+      }
+
+      fields.push_back(
+          std::make_shared<tundradb::Field>(field_name, value_type));
+    }
+
+    auto result = db.register_edge_schema(edge_type, fields);
+    if (!result.ok()) {
+      throw std::runtime_error("Failed to register edge schema: " +
+                               result.status().ToString());
+    }
+
+    *g_output_stream << "Created edge schema: " << edge_type << std::endl;
     return true;
   }
 
@@ -430,15 +469,7 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
       std::vector<std::string> columns;
 
       for (auto field : selectClause->selectField()) {
-        std::string column_name;
-        if (field->IDENTIFIER().size() > 1) {
-          column_name = field->IDENTIFIER(0)->getText() + "." +
-                        field->IDENTIFIER(1)->getText();
-        } else {
-          column_name = field->IDENTIFIER(0)->getText();
-        }
-
-        columns.push_back(column_name);
+        columns.push_back(join_identifier_path(field->IDENTIFIER()));
       }
 
       query_builder.select(columns);
@@ -447,7 +478,8 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
     auto query = query_builder.build();
     auto result = db.query(query);
     if (!result.ok()) {
-      tundradb::log_error("Query failed");
+      tundradb::log_error("Query failed: {}", result.status().ToString());
+      *g_output_stream << "Error: " << result.status().ToString() << std::endl;
       return result.status();
     }
     auto result_table = result.ValueOrDie()->table();
@@ -483,11 +515,16 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
 
       bool outgoing = edge->GT() != nullptr;
 
+      std::optional<std::string> edge_alias;
       std::string edge_type;
-      if (edge->IDENTIFIER() != nullptr) {
-        edge_type = edge->IDENTIFIER()->getText();
-      } else {
-        edge_type = "";  // Default edge type
+      if (auto* edge_ref = edge->edgeRef(); edge_ref != nullptr) {
+        const auto edge_ids = edge_ref->IDENTIFIER();
+        if (edge_ids.size() == 2) {
+          edge_alias = edge_ids[0]->getText();
+          edge_type = edge_ids[1]->getText();
+        } else if (edge_ids.size() == 1) {
+          edge_type = edge_ids[0]->getText();
+        }
       }
 
       tundradb::TraverseType traverse_type = tundradb::TraverseType::Inner;
@@ -514,10 +551,11 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
 
       if (outgoing) {
         query_builder.traverse(source_alias, edge_type,
-                               target_alias + ":" + target_type, traverse_type);
+                               target_alias + ":" + target_type, traverse_type,
+                               edge_alias);
       } else {
         query_builder.traverse(target_alias + ":" + target_type, edge_type,
-                               source_alias, traverse_type);
+                               source_alias, traverse_type, edge_alias);
       }
     }
 
@@ -537,11 +575,16 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
 
       bool outgoing = edge->GT() != nullptr;
 
+      std::optional<std::string> edge_alias;
       std::string edge_type;
-      if (edge->IDENTIFIER() != nullptr) {
-        edge_type = edge->IDENTIFIER()->getText();
-      } else {
-        edge_type = "";  // Default edge type
+      if (auto* edge_ref = edge->edgeRef(); edge_ref != nullptr) {
+        const auto edge_ids = edge_ref->IDENTIFIER();
+        if (edge_ids.size() == 2) {
+          edge_alias = edge_ids[0]->getText();
+          edge_type = edge_ids[1]->getText();
+        } else if (edge_ids.size() == 1) {
+          edge_type = edge_ids[0]->getText();
+        }
       }
 
       tundradb::TraverseType traverse_type = tundradb::TraverseType::Inner;
@@ -568,11 +611,12 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
 
       if (outgoing) {
         query_builder.traverse(source_alias, edge_type,
-                               target_alias + ":" + target_type, traverse_type);
+                               target_alias + ":" + target_type, traverse_type,
+                               edge_alias);
       } else {
         // For incoming edges, swap source and target
         query_builder.traverse(target_alias + ":" + target_type, edge_type,
-                               source_alias, traverse_type);
+                               source_alias, traverse_type, edge_alias);
       }
     }
   }
@@ -609,15 +653,14 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
         auto leftFactor = term->factor(0);
         auto rightFactor = term->factor(1);
 
-        std::string fieldName;
-        if (leftFactor->IDENTIFIER().size() == 2) {
-          fieldName = leftFactor->IDENTIFIER(0)->getText() + "." +
-                      leftFactor->IDENTIFIER(1)->getText();
-        } else {
+        if (leftFactor->IDENTIFIER().size() < 2) {
           // Can't handle just a field name without alias
-          spdlog::warn("WHERE clause field must be in format alias.field");
+          spdlog::warn(
+              "WHERE clause field must be in format alias.field[.nested...]");
           return;
         }
+        const std::string fieldName =
+            join_identifier_path(leftFactor->IDENTIFIER());
 
         tundradb::CompareOp op;
         if (term->EQ())
@@ -912,6 +955,10 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
   antlrcpp::Any visitUpdateStatement(
       tundraql::TundraQLParser::UpdateStatementContext* ctx) override {
     spdlog::info("Executing UPDATE command");
+    auto fail = [&](const std::string& message) -> antlrcpp::Any {
+      *g_output_stream << "Error: " << message << std::endl;
+      return false;
+    };
 
     auto updateTarget = ctx->updateTarget();
     auto setClause = ctx->setClause();
@@ -945,37 +992,39 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
       // ----- Mode 1: UPDATE User(0) SET age = 31; -----
       auto schema_result = schema_registry->get(schema_name);
       if (!schema_result.ok()) {
-        throw std::runtime_error("Schema '" + schema_name + "' not found");
+        return fail("Schema '" + schema_name + "' not found");
       }
       auto schema = schema_result.ValueOrDie();
 
       auto builder = tundradb::UpdateQuery::on(schema_name, *node_id);
       for (auto assignment : setClause->setAssignment()) {
-        std::string field_name;
-        if (assignment->IDENTIFIER().size() == 2) {
-          field_name = assignment->IDENTIFIER(1)->getText();
-        } else {
-          field_name = assignment->IDENTIFIER(0)->getText();
+        const auto identifiers = assignment->IDENTIFIER();
+        if (identifiers.empty()) {
+          return fail("Invalid SET assignment: missing field name");
         }
+        const std::string field_name = join_identifier_path(identifiers);
+        const std::string root_field = identifiers[0]->getText();
         std::string raw_value = assignment->value()->getText();
         if (raw_value.size() >= 2 && raw_value.front() == '"' &&
             raw_value.back() == '"') {
           raw_value = raw_value.substr(1, raw_value.size() - 2);
         }
-        auto field = schema->get_field(field_name);
+        auto field = schema->get_field(root_field);
         if (!field) {
-          throw std::runtime_error("Field '" + field_name +
-                                   "' not found in schema '" + schema_name +
-                                   "'");
+          return fail("Field '" + root_field + "' not found in schema '" +
+                      schema_name + "'");
         }
-        builder.set(field_name, parseValueForField(field, raw_value));
+        try {
+          builder.set(field_name, parseValueForField(field, raw_value));
+        } catch (const std::exception& e) {
+          return fail(std::string("Invalid SET value: ") + e.what());
+        }
       }
 
       auto update_query = std::move(builder).build();
       auto result = db.update(update_query);
       if (!result.ok()) {
-        throw std::runtime_error("UPDATE failed: " +
-                                 result.status().ToString());
+        return fail("UPDATE failed: " + result.status().ToString());
       }
       update_result = result.ValueOrDie();
 
@@ -1005,6 +1054,7 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
 
       // Build alias→schema map from the query builder's pattern
       std::unordered_map<std::string, std::string> alias_to_schema;
+      std::unordered_map<std::string, std::string> edge_alias_to_type;
       if (updateTarget->patternList()) {
         for (auto pathPat : updateTarget->patternList()->pathPattern()) {
           for (auto nodePat : pathPat->nodePattern()) {
@@ -1014,6 +1064,14 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
             } else {
               auto name = nodePat->IDENTIFIER(0)->getText();
               alias_to_schema[name] = name;
+            }
+          }
+          for (auto edgePat : pathPat->edgePattern()) {
+            if (auto* edge_ref = edgePat->edgeRef(); edge_ref != nullptr) {
+              const auto ids = edge_ref->IDENTIFIER();
+              if (ids.size() == 2) {
+                edge_alias_to_type[ids[0]->getText()] = ids[1]->getText();
+              }
             }
           }
         }
@@ -1030,35 +1088,52 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
 
       // Parse SET assignments - keep alias.field format
       for (auto assignment : setClause->setAssignment()) {
-        std::string qualified_name;
-        if (assignment->IDENTIFIER().size() == 2) {
-          qualified_name = assignment->IDENTIFIER(0)->getText() + "." +
-                           assignment->IDENTIFIER(1)->getText();
-        } else {
-          qualified_name = alias + "." + assignment->IDENTIFIER(0)->getText();
+        const auto identifiers = assignment->IDENTIFIER();
+        if (identifiers.empty()) {
+          return fail("Invalid SET assignment: missing field name");
+        }
+        std::string qualified_name = join_identifier_path(identifiers);
+        if (identifiers.size() == 1) {
+          qualified_name = alias + "." + qualified_name;
         }
 
         std::string set_alias =
             qualified_name.substr(0, qualified_name.find('.'));
-        std::string bare_field =
+        const std::string field_and_path =
             qualified_name.substr(qualified_name.find('.') + 1);
+        const size_t nested_dot = field_and_path.find('.');
+        const std::string bare_field =
+            nested_dot == std::string::npos
+                ? field_and_path
+                : field_and_path.substr(0, nested_dot);
 
         auto it = alias_to_schema.find(set_alias);
+        std::shared_ptr<tundradb::Field> field;
         if (it == alias_to_schema.end()) {
-          throw std::runtime_error("Unknown alias '" + set_alias +
-                                   "' in SET clause");
-        }
-        const std::string& set_schema = it->second;
-
-        auto s_result = schema_registry->get(set_schema);
-        if (!s_result.ok()) {
-          throw std::runtime_error("Schema '" + set_schema + "' not found");
-        }
-        auto field = s_result.ValueOrDie()->get_field(bare_field);
-        if (!field) {
-          throw std::runtime_error("Field '" + bare_field +
-                                   "' not found in schema '" + set_schema +
-                                   "'");
+          auto eit = edge_alias_to_type.find(set_alias);
+          if (eit == edge_alias_to_type.end()) {
+            return fail("Unknown alias '" + set_alias + "' in SET clause");
+          }
+          auto edge_schema = db.get_edge_store()->get_edge_schema(eit->second);
+          if (!edge_schema) {
+            return fail("Edge schema '" + eit->second + "' not found");
+          }
+          field = edge_schema->get_field(bare_field);
+          if (!field) {
+            return fail("Field '" + bare_field + "' not found in edge schema '" +
+                        eit->second + "'");
+          }
+        } else {
+          const std::string& set_schema = it->second;
+          auto s_result = schema_registry->get(set_schema);
+          if (!s_result.ok()) {
+            return fail("Schema '" + set_schema + "' not found");
+          }
+          field = s_result.ValueOrDie()->get_field(bare_field);
+          if (!field) {
+            return fail("Field '" + bare_field + "' not found in schema '" +
+                        set_schema + "'");
+          }
         }
 
         std::string raw_value = assignment->value()->getText();
@@ -1066,14 +1141,17 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
             raw_value.back() == '"') {
           raw_value = raw_value.substr(1, raw_value.size() - 2);
         }
-        builder.set(qualified_name, parseValueForField(field, raw_value));
+        try {
+          builder.set(qualified_name, parseValueForField(field, raw_value));
+        } catch (const std::exception& e) {
+          return fail(std::string("Invalid SET value: ") + e.what());
+        }
       }
 
       auto update_query = std::move(builder).build();
       auto result = db.update(update_query);
       if (!result.ok()) {
-        throw std::runtime_error("UPDATE failed: " +
-                                 result.status().ToString());
+        return fail("UPDATE failed: " + result.status().ToString());
       }
       update_result = result.ValueOrDie();
 
@@ -1188,6 +1266,17 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
   }
 
  private:
+  static std::string join_identifier_path(
+      const std::vector<antlr4::tree::TerminalNode*>& identifiers) {
+    if (identifiers.empty()) return "";
+    std::string out = identifiers[0]->getText();
+    for (size_t i = 1; i < identifiers.size(); ++i) {
+      out += ".";
+      out += identifiers[i]->getText();
+    }
+    return out;
+  }
+
   // Helper: convert a raw string value to a typed Value based on field type
   tundradb::Value parseValueForField(
       const std::shared_ptr<tundradb::Field>& field,
@@ -1437,15 +1526,13 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
       auto leftFactor = term->factor(0);
       auto rightFactor = term->factor(1);
 
-      std::string fieldName;
-      if (leftFactor->IDENTIFIER().size() == 2) {
-        fieldName = leftFactor->IDENTIFIER(0)->getText() + "." +
-                    leftFactor->IDENTIFIER(1)->getText();
-      } else {
+      if (leftFactor->IDENTIFIER().size() < 2) {
         // Can't handle just a field name without alias
-        spdlog::warn("WHERE clause field must be in format alias.field");
+        spdlog::warn(
+            "WHERE clause field must be in format alias.field[.nested...]");
         return nullptr;
       }
+      const std::string fieldName = join_identifier_path(leftFactor->IDENTIFIER());
 
       tundradb::CompareOp op;
       if (term->EQ())
@@ -1795,6 +1882,10 @@ bool executeStatement(const std::string& statement_text,
   } catch (const std::exception& e) {
     std::cerr << "Error executing statement '" << statement_text
               << "': " << e.what() << std::endl;
+    return false;
+  } catch (...) {
+    std::cerr << "Error executing statement '" << statement_text
+              << "': unknown non-standard exception" << std::endl;
     return false;
   }
 }

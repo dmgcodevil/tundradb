@@ -1,5 +1,6 @@
 #include "core.hpp"
 
+#include <arrow/compute/api.h>
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/DenseSet.h>
 #include <llvm/ADT/SmallVector.h>
@@ -46,6 +47,29 @@ populate_rows_bfs(int64_t node_id, const SchemaRef& start_schema,
   std::queue<QueueItem> queue;
   queue.emplace(node_id, start_schema, 0, initial_row);
   // Use precomputed fully-qualified field names from QueryState
+  auto apply_edge_to_row = [&](Row& row,
+                               const GraphConnection& conn) -> arrow::Status {
+    if (!conn.edge_alias.has_value() || conn.edge_id < 0 ||
+        !query_state.edge_store) {
+      return arrow::Status::OK();
+    }
+
+    const std::string& edge_alias = conn.edge_alias.value();
+    const auto idx_it = query_state.schema_field_indices().find(edge_alias);
+    if (idx_it == query_state.schema_field_indices().end()) {
+      return arrow::Status::OK();
+    }
+
+    ARROW_ASSIGN_OR_RAISE(const auto edge_schema_name,
+                          query_state.resolve_schema(SchemaRef::parse(edge_alias)));
+    ARROW_ASSIGN_OR_RAISE(const auto edge_schema,
+                          query_state.schema_registry()->get(edge_schema_name));
+    ARROW_ASSIGN_OR_RAISE(const auto edge_obj,
+                          query_state.edge_store->get(conn.edge_id));
+    row.set_cell_from_edge(idx_it->second, edge_obj, edge_schema->fields(),
+                           query_state.temporal_context.get());
+    return arrow::Status::OK();
+  };
 
   while (!queue.empty()) {
     auto size = queue.size();
@@ -112,7 +136,8 @@ populate_rows_bfs(int64_t node_id, const SchemaRef& start_schema,
           const auto& connections = pair.second;
           if (connections.size() == 1) {
             // continue the path
-            auto conn = connections[0];
+            const auto& conn = connections[0];
+            ARROW_RETURN_NOT_OK(apply_edge_to_row(*item.row, conn));
             auto next =
                 QueueItem(connections[0].target_id, connections[0].target,
                           item.level + 1, item.row);
@@ -127,6 +152,7 @@ populate_rows_bfs(int64_t node_id, const SchemaRef& start_schema,
           } else {
             for (const auto& conn : connections) {
               auto next_row = std::make_shared<Row>(*item.row);
+              ARROW_RETURN_NOT_OK(apply_edge_to_row(*next_row, conn));
               auto next = QueueItem(conn.target_id, conn.target, item.level + 1,
                                     next_row);
               next.path = item.path;
@@ -453,6 +479,18 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_rows(
             append_status = append_array_to_list_builder(arr_ref, list_builder);
             break;
           }
+          case ValueType::MAP: {
+            const auto& map_ref = value_ref.as_map_ref();
+            auto* map_builder =
+                dynamic_cast<arrow::MapBuilder*>(builders[i].get());
+            if (!map_builder) {
+              append_status = arrow::Status::Invalid(
+                  "Expected MapBuilder for field: ", field_name);
+              break;
+            }
+            append_status = append_map_to_map_builder(map_ref, map_builder);
+            break;
+          }
           default:
             append_status = builders[i]->AppendNull();
             break;
@@ -506,6 +544,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
               query.from().toString());
   }
   query_state.node_manager = this->node_manager_;
+  query_state.edge_store = this->edge_store_;
   query_state.from = query.from();
 
   {
@@ -595,10 +634,65 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           std::unordered_map<std::string, std::set<int64_t>> new_front_ids;
           std::string variable = *variables.begin();
           if (!query_state.tables.contains(variable)) {
-            return arrow::Status::Invalid("Unknown variable '{}'", variable);
+            const bool known_node_alias =
+                query_state.aliases().contains(variable);
+            const bool known_edge_alias =
+                query_state.edge_aliases.contains(variable);
+            if (!known_node_alias && !known_edge_alias) {
+              return arrow::Status::Invalid("Unknown variable '{}'", variable);
+            }
+            // Alias is valid but not materialized as a table at this point
+            // (e.g. edge alias). Defer to post-processing/inlined traversal.
+            post_where.emplace_back(where);
+            continue;
           }
           auto table = query_state.tables.at(variable);
-          auto filtered_table_result = filter(table, *where, true);
+          arrow::Result<std::shared_ptr<arrow::Table>> filtered_table_result =
+              filter(table, *where, true);
+          if (!filtered_table_result.ok() && where->requires_row_eval()) {
+            ARROW_ASSIGN_OR_RAISE(
+                const auto resolved_schema,
+                query_state.resolve_schema(SchemaRef::parse(variable)));
+
+            llvm::DenseSet<int64_t> keep_ids;
+            for (const auto id : query_state.ids()[variable]) {
+              auto node_res = node_manager_->get_node(resolved_schema, id);
+              if (!node_res.ok()) continue;
+              ARROW_ASSIGN_OR_RAISE(const bool matches,
+                                    where->matches(node_res.ValueOrDie()));
+              if (matches) {
+                keep_ids.insert(id);
+              }
+            }
+
+            auto id_column = table->GetColumnByName("id");
+            if (!id_column) {
+              return arrow::Status::Invalid(
+                  "Could not find 'id' column for variable '", variable, "'");
+            }
+
+            arrow::BooleanBuilder mask_builder;
+            for (int ci = 0; ci < id_column->num_chunks(); ++ci) {
+              auto ids = std::static_pointer_cast<arrow::Int64Array>(
+                  id_column->chunk(ci));
+              for (int64_t irow = 0; irow < ids->length(); ++irow) {
+                if (ids->IsNull(irow)) {
+                  ARROW_RETURN_NOT_OK(mask_builder.Append(false));
+                } else {
+                  ARROW_RETURN_NOT_OK(
+                      mask_builder.Append(keep_ids.contains(ids->Value(irow))));
+                }
+              }
+            }
+
+            std::shared_ptr<arrow::Array> mask_array;
+            ARROW_RETURN_NOT_OK(mask_builder.Finish(&mask_array));
+            ARROW_ASSIGN_OR_RAISE(
+                auto filtered_datum,
+                arrow::compute::Filter(arrow::Datum(table),
+                                       arrow::Datum(mask_array)));
+            filtered_table_result = filtered_datum.table();
+          }
           if (!filtered_table_result.ok()) {
             log_error("Failed to process where: '{}', error: {}",
                       where->toString(),
@@ -631,14 +725,23 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
             traverse->source(), source_schema));
         ARROW_RETURN_NOT_OK(query_state.compute_fully_qualified_names(
             traverse->target(), target_schema));
+        if (traverse->edge_alias().has_value()) {
+          ARROW_RETURN_NOT_OK(query_state.compute_fully_qualified_names(
+              SchemaRef::parse(traverse->edge_alias().value())));
+        }
 
         std::vector<std::shared_ptr<WhereExpr>> where_clauses;
+        std::vector<std::shared_ptr<WhereExpr>> edge_where_clauses;
         if (query.inline_where()) {
           where_clauses = get_where_to_inline(traverse->target().value(), i + 1,
                                               query.clauses());
-          result->mutable_execution_stats().num_where_clauses_inlined +=
-              where_clauses.size();
         }
+        if (traverse->edge_alias().has_value()) {
+          edge_where_clauses = get_where_to_inline(traverse->edge_alias().value(),
+                                                   i + 1, query.clauses());
+        }
+        result->mutable_execution_stats().num_where_clauses_inlined +=
+            where_clauses.size() + edge_where_clauses.size();
         // Traversal already added to query_state.traversals during preparation
         IF_DEBUG_ENABLED {
           log_debug("Processing TRAVERSE {}-({})->{}",
@@ -700,12 +803,26 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
                     passes_all_filters = false;
                     break;
                   }
+                  where_clause->set_inlined(true);
+                }
+                if (passes_all_filters) {
+                  for (const auto& where_clause : edge_where_clauses) {
+                    if (!apply_where_to_edge(where_clause, edge).ValueOrDie()) {
+                      passes_all_filters = false;
+                      break;
+                    }
+                    where_clause->set_inlined(true);
+                  }
                 }
                 if (passes_all_filters) {
                   IF_DEBUG_ENABLED {
-                    log_debug("found edge {}:{} -[{}]-> {}:{}", source.value(),
-                              source_id, traverse->edge_type(),
-                              traverse->target().value(), target_node->id);
+                    log_debug("found edge {}:{} -[{}{}]-> {}:{}", source.value(),
+                              source_id,
+                              traverse->edge_alias().has_value()
+                                  ? traverse->edge_alias().value() + ":"
+                                  : "",
+                              traverse->edge_type(), traverse->target().value(),
+                              target_node->id);
                   }
                   // record match immediately to avoid extra containers/copies
                   if (!source_had_match) {
@@ -717,6 +834,8 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
                   auto& conn = query_state.connection_pool().get();
                   conn.source = traverse->source();
                   conn.source_id = source_id;
+                  conn.edge_id = edge->get_id();
+                  conn.edge_alias = traverse->edge_alias();
                   conn.edge_type = traverse->edge_type();
                   conn.label = "";
                   conn.target = traverse->target();
@@ -887,15 +1006,41 @@ arrow::Result<UpdateResult> Database::update_by_id(const UpdateQuery& uq) {
   const auto& schema = schema_result.ValueOrDie();
 
   // Resolve fields upfront - fail early on bad field names
-  std::vector<std::pair<std::shared_ptr<Field>, Value>> resolved;
+  std::vector<FieldUpdate> resolved;
   resolved.reserve(uq.assignments().size());
   for (const auto& a : uq.assignments()) {
-    auto field = schema->get_field(a.field_name);
+    const size_t first_dot = a.field_name.find('.');
+    const std::string field_name = first_dot == std::string::npos
+                                       ? a.field_name
+                                       : a.field_name.substr(0, first_dot);
+    if (field_name.empty()) {
+      return arrow::Status::Invalid("Invalid SET field '", a.field_name,
+                                    "' for ID-based update");
+    }
+    std::vector<std::string> nested_path{};
+    if (first_dot != std::string::npos) {
+      size_t start = first_dot + 1;
+      while (start < a.field_name.size()) {
+        const size_t end = a.field_name.find('.', start);
+        std::string segment = a.field_name.substr(
+            start, end == std::string::npos ? std::string::npos : end - start);
+        if (segment.empty()) {
+          return arrow::Status::Invalid("Invalid SET field '", a.field_name,
+                                        "' for ID-based update");
+        }
+        nested_path.push_back(std::move(segment));
+        if (end == std::string::npos) break;
+        start = end + 1;
+      }
+    }
+
+    auto field = schema->get_field(field_name);
     if (!field) {
       return arrow::Status::Invalid(
-          "Field '", a.field_name, "' not found in schema '", uq.schema(), "'");
+          "Field '", field_name, "' not found in schema '", uq.schema(), "'");
     }
-    resolved.emplace_back(field, a.value);
+    resolved.push_back(
+        FieldUpdate{field, a.value, uq.update_type(), std::move(nested_path)});
   }
 
   const int64_t id = uq.node_id().value();
@@ -920,23 +1065,52 @@ arrow::Result<UpdateResult> Database::update_by_match(const UpdateQuery& uq) {
 
   // 1. Resolve alias -> schema mapping (declarations only, with validation)
   ARROW_ASSIGN_OR_RAISE(auto alias_to_schema, resolve_alias_map(match_query));
+  std::unordered_map<std::string, std::string> edge_alias_to_type;
+  for (const auto& clause : match_query.clauses()) {
+    if (clause->type() != Clause::Type::TRAVERSE) continue;
+    const auto t = std::static_pointer_cast<Traverse>(clause);
+    if (t->edge_alias().has_value()) {
+      edge_alias_to_type.emplace(t->edge_alias().value(), t->edge_type());
+    }
+  }
 
   // 2. Group SET assignments by alias: { alias -> (schema, [(Field,Value)]) }
   struct AliasUpdate {
     std::string schema_name;
-    std::vector<std::pair<std::shared_ptr<Field>, Value>> fields;
+    std::vector<FieldUpdate> fields;
   };
   std::unordered_map<std::string, AliasUpdate> grouped;
+  std::unordered_map<std::string, AliasUpdate> grouped_edge;
 
   for (const auto& a : uq.assignments()) {
-    auto dot = a.field_name.find('.');
-    if (dot == std::string::npos) {
+    const auto parsed = FieldRef::from_string(a.field_name);
+    if (parsed.variable().empty()) {
       return arrow::Status::Invalid(
           "SET field '", a.field_name,
           "' must be alias-qualified (e.g. u.age) in a MATCH-based update");
     }
-    std::string alias = a.field_name.substr(0, dot);
-    std::string bare_field = a.field_name.substr(dot + 1);
+    const std::string alias = parsed.variable();
+    const std::string bare_field = parsed.field_name();
+
+    if (const auto edge_it = edge_alias_to_type.find(alias);
+        edge_it != edge_alias_to_type.end()) {
+      const auto edge_schema = edge_store_->get_edge_schema(edge_it->second);
+      if (!edge_schema) {
+        return arrow::Status::KeyError("Edge schema '", edge_it->second,
+                                       "' not found");
+      }
+      auto field = edge_schema->get_field(bare_field);
+      if (!field) {
+        return arrow::Status::Invalid("Field '", bare_field,
+                                      "' not found in edge schema '",
+                                      edge_it->second, "'");
+      }
+      auto& entry = grouped_edge[alias];
+      if (entry.schema_name.empty()) entry.schema_name = edge_it->second;
+      entry.fields.push_back(
+          FieldUpdate{field, a.value, uq.update_type(), parsed.nested_path()});
+      continue;
+    }
 
     auto it = alias_to_schema.find(alias);
     if (it == alias_to_schema.end()) {
@@ -957,14 +1131,18 @@ arrow::Result<UpdateResult> Database::update_by_match(const UpdateQuery& uq) {
 
     auto& entry = grouped[alias];
     if (entry.schema_name.empty()) entry.schema_name = it->second;
-    entry.fields.emplace_back(field, a.value);
+    entry.fields.push_back(
+        FieldUpdate{field, a.value, uq.update_type(), parsed.nested_path()});
   }
 
   // 3. Build ID-only SELECT: we only need "u.id", "c.id", etc.
   std::vector<std::string> id_columns;
-  id_columns.reserve(grouped.size());
+  id_columns.reserve(grouped.size() + grouped_edge.size());
   for (const auto& alias : grouped | std::views::keys) {
     id_columns.push_back(alias + ".id");
+  }
+  for (const auto& alias : grouped_edge | std::views::keys) {
+    id_columns.push_back(alias + "._edge_id");
   }
   Query id_query(match_query.from(), match_query.clauses(),
                  std::make_shared<Select>(std::move(id_columns)),
@@ -988,6 +1166,36 @@ arrow::Result<UpdateResult> Database::update_by_match(const UpdateQuery& uq) {
     apply_updates(info.schema_name, id_column, info.fields, uq.update_type(),
                   result);
   }
+  for (const auto& [alias, info] : grouped_edge) {
+    auto id_column = table->GetColumnByName(alias + "._edge_id");
+    if (!id_column) {
+      return arrow::Status::Invalid("Could not find '", alias,
+                                    "._edge_id' column in query results");
+    }
+    for (int ci = 0; ci < id_column->num_chunks(); ci++) {
+      const auto chunk =
+          std::static_pointer_cast<arrow::Int64Array>(id_column->chunk(ci));
+      for (int64_t i = 0; i < chunk->length(); i++) {
+        if (chunk->IsNull(i)) continue;
+        const int64_t edge_id = chunk->Value(i);
+        auto edge_res = edge_store_->get(edge_id);
+        if (!edge_res.ok()) {
+          result.failed_count++;
+          result.errors.push_back("edge(" + std::to_string(edge_id) +
+                                  "): " + edge_res.status().ToString());
+          continue;
+        }
+        if (auto upd = edge_res.ValueOrDie()->update_fields(info.fields);
+            !upd.ok()) {
+          result.failed_count++;
+          result.errors.push_back("edge(" + std::to_string(edge_id) +
+                                  "): " + upd.status().ToString());
+        } else {
+          result.updated_count++;
+        }
+      }
+    }
+  }
 
   return result;
 }
@@ -998,8 +1206,8 @@ arrow::Result<UpdateResult> Database::update_by_match(const UpdateQuery& uq) {
 void Database::apply_updates(
     const std::string& schema_name,
     const std::shared_ptr<arrow::ChunkedArray>& id_column,
-    const std::vector<std::pair<std::shared_ptr<Field>, Value>>& fields,
-    UpdateType update_type, UpdateResult& result) {
+    const std::vector<FieldUpdate>& fields, UpdateType update_type,
+    UpdateResult& result) {
   for (int ci = 0; ci < id_column->num_chunks(); ci++) {
     const auto chunk =
         std::static_pointer_cast<arrow::Int64Array>(id_column->chunk(ci));

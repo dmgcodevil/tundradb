@@ -261,6 +261,13 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
         builders.push_back(std::move(list_builder));
         break;
       }
+      case arrow::Type::MAP: {
+        std::unique_ptr<arrow::ArrayBuilder> map_builder;
+        ARROW_RETURN_NOT_OK(arrow::MakeBuilder(arrow::default_memory_pool(),
+                                               field->type(), &map_builder));
+        builders.push_back(std::move(map_builder));
+        break;
+      }
       default:
         return arrow::Status::NotImplemented("Unsupported type: ",
                                              field->type()->ToString());
@@ -341,6 +348,18 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
               }
               ARROW_RETURN_NOT_OK(
                   append_array_to_list_builder(arr_ref, list_builder));
+              break;
+            }
+            case ValueType::MAP: {
+              const auto& map_ref = *reinterpret_cast<const MapRef*>(value_ptr);
+              auto* map_builder =
+                  dynamic_cast<arrow::MapBuilder*>(builders[i].get());
+              if (!map_builder) {
+                return arrow::Status::Invalid(
+                    "Expected MapBuilder for MAP field: ", field->name());
+              }
+              ARROW_RETURN_NOT_OK(
+                  append_map_to_map_builder(map_ref, map_builder));
               break;
             }
             default:
@@ -755,6 +774,15 @@ inline arrow::Result<bool> apply_where_to_node(
   }
 
   return where_expr->matches(node);
+}
+
+inline arrow::Result<bool> apply_where_to_edge(
+    const std::shared_ptr<WhereExpr>& where_expr,
+    const std::shared_ptr<Edge>& edge) {
+  if (!where_expr) {
+    return arrow::Status::Invalid("WHERE expression is null");
+  }
+  return where_expr->matches_edge(edge);
 }
 
 /**

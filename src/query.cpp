@@ -5,6 +5,7 @@
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/StringMap.h>
 
+#include "edge.hpp"
 #include "logger.hpp"
 
 namespace tundradb {
@@ -39,13 +40,31 @@ std::string SchemaRef::toString() const {
 // ================== FieldRef Implementation ==================
 
 FieldRef FieldRef::from_string(const std::string& field_str) {
-  const size_t dot_pos = field_str.find('.');
-  if (dot_pos != std::string::npos) {
-    std::string variable = field_str.substr(0, dot_pos);
-    std::string field_name = field_str.substr(dot_pos + 1);
+  const size_t first_dot = field_str.find('.');
+  if (first_dot != std::string::npos) {
+    std::string variable = field_str.substr(0, first_dot);
+    std::string rest = field_str.substr(first_dot + 1);
+    const size_t field_dot = rest.find('.');
+    std::string field_name =
+        field_dot == std::string::npos ? rest : rest.substr(0, field_dot);
+
+    std::vector<std::string> nested_path;
+    if (field_dot != std::string::npos) {
+      size_t start = field_dot + 1;
+      while (start < rest.size()) {
+        size_t end = rest.find('.', start);
+        std::string segment = rest.substr(
+            start, end == std::string::npos ? std::string::npos : end - start);
+        if (!segment.empty()) {
+          nested_path.push_back(std::move(segment));
+        }
+        if (end == std::string::npos) break;
+        start = end + 1;
+      }
+    }
 
     // Return unresolved FieldRef - will be resolved later in query processing
-    return {variable, field_name};
+    return {variable, field_name, nested_path};
   }
   // No variable prefix, treat entire string as field name
   return {"", field_str};
@@ -336,17 +355,53 @@ arrow::Result<bool> ComparisonExpr::matches(
   }
   assert(field_ref_.field() != nullptr);
   ARROW_ASSIGN_OR_RAISE(auto field_value, node->get_value(field_ref_.field()));
+  for (const auto& segment : field_ref_.nested_path()) {
+    if (field_value.type() == ValueType::MAP) {
+      field_value = field_value.as_map_ref().get_value(segment);
+    } else {
+      return arrow::Status::Invalid(
+          "Cannot resolve nested path '", field_ref_.to_string(),
+          "' on non-composite value type: ", to_string(field_value.type()));
+    }
+  }
+  return compare_values(field_value, op_, value_);
+}
+
+arrow::Result<bool> ComparisonExpr::matches_edge(
+    const std::shared_ptr<Edge>& edge) const {
+  if (!edge) {
+    return arrow::Status::Invalid("Edge is null");
+  }
+  assert(field_ref_.field() != nullptr);
+  ARROW_ASSIGN_OR_RAISE(auto field_value, edge->get_value(field_ref_.field()));
+  for (const auto& segment : field_ref_.nested_path()) {
+    if (field_value.type() == ValueType::MAP) {
+      field_value = field_value.as_map_ref().get_value(segment);
+    } else {
+      return arrow::Status::Invalid(
+          "Cannot resolve nested path '", field_ref_.to_string(),
+          "' on non-composite value type: ", to_string(field_value.type()));
+    }
+  }
   return compare_values(field_value, op_, value_);
 }
 
 arrow::compute::Expression ComparisonExpr::to_arrow_expression(
     bool strip_var) const {
+  if (!field_ref_.nested_path().empty()) {
+    throw std::runtime_error(
+        "Nested field access is not supported in Arrow expressions yet");
+  }
   std::string field_name =
       strip_var ? field_ref_.field_name() : field_ref_.value();
   const auto field_expr = arrow::compute::field_ref(field_name);
   const auto value_expr = value_to_expression(value_);
 
   return apply_comparison_op(field_expr, value_expr, op_);
+}
+
+bool ComparisonExpr::requires_row_eval() const {
+  return !field_ref_.nested_path().empty();
 }
 
 std::vector<std::shared_ptr<ComparisonExpr>>
@@ -358,7 +413,7 @@ ComparisonExpr::get_conditions_for_variable(const std::string& variable) const {
 }
 
 bool ComparisonExpr::can_inline(const std::string& variable) const {
-  return field_ref_.variable() == variable;
+  return field_ref_.nested_path().empty() && field_ref_.variable() == variable;
 }
 
 std::string ComparisonExpr::extract_first_variable() const {
@@ -474,6 +529,35 @@ arrow::Result<bool> LogicalExpr::matches(
   return arrow::Status::Invalid("Unknown logical operator");
 }
 
+arrow::Result<bool> LogicalExpr::matches_edge(
+    const std::shared_ptr<Edge>& edge) const {
+  if (!left_ || !right_) {
+    return arrow::Status::Invalid("LogicalExpr missing left or right operand");
+  }
+
+  auto left_result = left_->matches_edge(edge);
+  if (!left_result.ok()) {
+    return left_result.status();
+  }
+
+  auto right_result = right_->matches_edge(edge);
+  if (!right_result.ok()) {
+    return right_result.status();
+  }
+
+  bool left_val = left_result.ValueOrDie();
+  bool right_val = right_result.ValueOrDie();
+
+  switch (op_) {
+    case LogicalOp::AND:
+      return left_val && right_val;
+    case LogicalOp::OR:
+      return left_val || right_val;
+  }
+
+  return arrow::Status::Invalid("Unknown logical operator");
+}
+
 arrow::compute::Expression LogicalExpr::to_arrow_expression(
     bool strip_var) const {
   if (!left_ || !right_) {
@@ -491,6 +575,11 @@ arrow::compute::Expression LogicalExpr::to_arrow_expression(
     default:
       throw std::runtime_error("Unknown logical operator in LogicalExpr");
   }
+}
+
+bool LogicalExpr::requires_row_eval() const {
+  if (!left_ || !right_) return false;
+  return left_->requires_row_eval() || right_->requires_row_eval();
 }
 
 std::vector<std::shared_ptr<ComparisonExpr>>

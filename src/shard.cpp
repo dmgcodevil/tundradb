@@ -147,8 +147,7 @@ arrow::Result<bool> Shard::update(const int64_t node_id,
 }
 
 arrow::Result<bool> Shard::update_fields(
-    const int64_t node_id,
-    const std::vector<std::pair<std::shared_ptr<Field>, Value>> &field_updates,
+    const int64_t node_id, const std::vector<FieldUpdate> &field_updates,
     const UpdateType update_type) {
   if (!nodes_.contains(node_id)) {
     return arrow::Status::KeyError("Node not found: ", node_id);
@@ -156,7 +155,8 @@ arrow::Result<bool> Shard::update_fields(
   dirty_ = true;
   updated_ = true;
   updated_ts_ = now_millis();
-  return nodes_[node_id]->update_fields(field_updates, update_type);
+  (void)update_type;
+  return nodes_[node_id]->update_fields(field_updates);
 }
 
 arrow::Result<std::shared_ptr<arrow::Table>> Shard::get_table(
@@ -476,7 +476,7 @@ arrow::Result<bool> ShardManager::update_node(const std::string &schema_name,
 
 arrow::Result<bool> ShardManager::update_node_fields(
     const std::string &schema_name, const int64_t id,
-    const std::vector<std::pair<std::shared_ptr<Field>, Value>> &field_updates,
+    const std::vector<FieldUpdate> &field_updates,
     const UpdateType update_type) {
   const auto schema_it = shards_.find(schema_name);
   if (schema_it == shards_.end()) {

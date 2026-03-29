@@ -27,6 +27,10 @@ class EdgeView {
         layout_(std::move(layout)) {}
 
   arrow::Result<Value> get_value(const std::shared_ptr<Field>& field) const;
+  arrow::Result<const char*> get_value_ptr(
+      const std::shared_ptr<Field>& field) const;
+  arrow::Result<ValueRef> get_value_ref(
+      const std::shared_ptr<Field>& field) const;
 
   [[nodiscard]] bool is_visible() const;
 

@@ -458,4 +458,64 @@ TEST_F(UpdateQueryTest, SequentialUpdatesAccumulate) {
   EXPECT_EQ(get_field<int32_t>("User", 0, "age"), 60);
 }
 
+TEST_F(UpdateQueryTest, UpdateByMatchSupportsMapKeySet) {
+  auto map_schema = arrow::schema({
+      arrow::field("name", arrow::utf8()),
+      arrow::field("props", arrow::map(arrow::utf8(), arrow::binary())),
+  });
+  db_->get_schema_registry()->create("MapUser", map_schema).ValueOrDie();
+  db_->create_node("MapUser", {{"name", Value{"Nina"}}}).ValueOrDie();
+  db_->create_node("MapUser", {{"name", Value{"Omar"}}}).ValueOrDie();
+
+  auto q = Query::from("m:MapUser")
+               .where("m.name", CompareOp::Eq, Value("Nina"s))
+               .build();
+  auto uq =
+      UpdateQuery::match(q).set("m.props.score", Value(int32_t(99))).build();
+
+  auto update_res = db_->update(uq);
+  ASSERT_OK(update_res);
+  EXPECT_EQ(update_res.ValueOrDie().updated_count, 1);
+
+  auto props_field =
+      db_->get_schema_registry()->get("MapUser").ValueOrDie()->get_field(
+          "props");
+  ASSERT_NE(props_field, nullptr);
+
+  auto nina = db_->get_node_manager()->get_node("MapUser", 0).ValueOrDie();
+  auto omar = db_->get_node_manager()->get_node("MapUser", 1).ValueOrDie();
+
+  auto nina_props = nina->get_value(props_field).ValueOrDie();
+  ASSERT_EQ(nina_props.type(), ValueType::MAP);
+  EXPECT_EQ(nina_props.as_map_ref().get_value("score").get<int32_t>(), 99);
+
+  auto omar_props = omar->get_value(props_field).ValueOrDie();
+  ASSERT_TRUE(omar_props.is_null() ||
+              !omar_props.as_map_ref().contains("score"));
+}
+
+TEST_F(UpdateQueryTest, UpdateByMatchNestedPathDepthGreaterThanOneNotImplemented) {
+  auto map_schema = arrow::schema({
+      arrow::field("name", arrow::utf8()),
+      arrow::field("props", arrow::map(arrow::utf8(), arrow::binary())),
+  });
+  db_->get_schema_registry()->create("MapUserDepth", map_schema).ValueOrDie();
+  db_->create_node("MapUserDepth", {{"name", Value{"Nina"}}}).ValueOrDie();
+
+  auto q = Query::from("m:MapUserDepth")
+               .where("m.name", CompareOp::Eq, Value("Nina"s))
+               .build();
+  auto uq = UpdateQuery::match(q)
+                .set("m.props.level1.level2", Value(int32_t(123)))
+                .build();
+
+  auto update_res = db_->update(uq);
+  ASSERT_OK(update_res);
+  const auto result = update_res.ValueOrDie();
+  EXPECT_EQ(result.updated_count, 0);
+  EXPECT_EQ(result.failed_count, 1);
+  ASSERT_FALSE(result.errors.empty());
+  EXPECT_NE(result.errors[0].find("NotImplemented"), std::string::npos);
+}
+
 }  // namespace tundradb

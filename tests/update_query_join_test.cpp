@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
 #include <memory>
+#include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -43,6 +45,11 @@ class UpdateJoinCrossSchemaTest : public ::testing::Test {
     db_ = std::make_shared<Database>(config);
     db_->get_schema_registry()->create("User", user_schema).ValueOrDie();
     db_->get_schema_registry()->create("Company", company_schema).ValueOrDie();
+    db_->register_edge_schema(
+           "WORKS_AT",
+           {std::make_shared<Field>("since", ValueType::INT64),
+            std::make_shared<Field>("role", ValueType::STRING)})
+        .ValueOrDie();
 
     // Users:  Alice(0), Bob(1), Charlie(2)
     // All start with employed = false
@@ -67,8 +74,12 @@ class UpdateJoinCrossSchemaTest : public ::testing::Test {
 
     // Edges: Alice(0) --WORKS_AT--> Acme(0)
     //        Bob(1)   --WORKS_AT--> Acme(0)
-    db_->connect(0, "WORKS_AT", 0).ValueOrDie();
-    db_->connect(1, "WORKS_AT", 0).ValueOrDie();
+    db_->connect(0, "WORKS_AT", 0,
+                 {{"since", Value{int64_t(2020)}}, {"role", Value{"eng"s}}})
+        .ValueOrDie();
+    db_->connect(1, "WORKS_AT", 0,
+                 {{"since", Value{int64_t(2021)}}, {"role", Value{"pm"s}}})
+        .ValueOrDie();
   }
 
   template <typename T>
@@ -112,7 +123,7 @@ TEST_F(UpdateJoinCrossSchemaTest, UpdateBothSidesOfTraversal) {
                 .build();
 
   auto result = db_->update(uq);
-  ASSERT_OK(result);
+  ASSERT_TRUE(result.ok()) << result.status().ToString();
 
   auto ur = result.ValueOrDie();
   EXPECT_EQ(ur.failed_count, 0);
@@ -167,6 +178,110 @@ TEST_F(UpdateJoinCrossSchemaTest, UpdateOnlyCompanySide) {
 
   // Acme updated
   EXPECT_EQ(get_field<int32_t>("Company", 0, "size"), 42);
+}
+
+TEST_F(UpdateJoinCrossSchemaTest, UpdateWithEdgeAliasTraversal) {
+  auto q = Query::from("u:User")
+               .traverse("u", "WORKS_AT", "c:Company", TraverseType::Inner,
+                         std::optional<std::string>{"e"})
+               .where("c.name", CompareOp::Eq, Value("Acme"s))
+               .build();
+  auto uq = UpdateQuery::match(q).set("u.employed", Value(true)).build();
+
+  auto result = db_->update(uq);
+  ASSERT_OK(result);
+  EXPECT_EQ(result.ValueOrDie().failed_count, 0);
+
+  EXPECT_EQ(get_field<bool>("User", 0, "employed"), true);
+  EXPECT_EQ(get_field<bool>("User", 1, "employed"), true);
+  EXPECT_EQ(get_field<bool>("User", 2, "employed"), false);
+}
+
+TEST_F(UpdateJoinCrossSchemaTest, FilterByEdgeFieldAndSelectEdgeFields) {
+  auto query = Query::from("u:User")
+                   .traverse("u", "WORKS_AT", "c:Company", TraverseType::Inner,
+                             std::optional<std::string>{"e"})
+                   .where("e.since", CompareOp::Gte, Value(int64_t(2021)))
+                   .select({"u.name", "e.since", "e.role", "c.name"})
+                   .build();
+  auto result = db_->query(query);
+  ASSERT_TRUE(result.ok()) << result.status().ToString();
+  auto table = result.ValueOrDie()->table();
+
+  auto names = get_column_values<std::string>(table, "u.name").ValueOrDie();
+  auto since = get_column_values<int64_t>(table, "e.since").ValueOrDie();
+  auto role = get_column_values<std::string>(table, "e.role").ValueOrDie();
+  auto company = get_column_values<std::string>(table, "c.name").ValueOrDie();
+
+  ASSERT_EQ(names.size(), 1u);
+  EXPECT_EQ(names[0], "Bob");
+  EXPECT_EQ(since[0], 2021);
+  EXPECT_EQ(role[0], "pm");
+  EXPECT_EQ(company[0], "Acme");
+}
+
+TEST_F(UpdateJoinCrossSchemaTest, UpdateEdgeFieldByMatchAlias) {
+  auto q = Query::from("u:User")
+               .traverse("u", "WORKS_AT", "c:Company", TraverseType::Inner,
+                         std::optional<std::string>{"e"})
+               .where("u.name", CompareOp::Eq, Value("Alice"s))
+               .build();
+  auto uq = UpdateQuery::match(q).set("e.since", Value(int64_t(2025))).build();
+
+  auto update_res = db_->update(uq);
+  ASSERT_TRUE(update_res.ok()) << update_res.status().ToString();
+  EXPECT_EQ(update_res.ValueOrDie().failed_count, 0);
+  EXPECT_EQ(update_res.ValueOrDie().updated_count, 1);
+
+  auto verify = Query::from("u:User")
+                    .traverse("u", "WORKS_AT", "c:Company", TraverseType::Inner,
+                              std::optional<std::string>{"e"})
+                    .where("u.name", CompareOp::Eq, Value("Alice"s))
+                    .select({"e.since"})
+                    .build();
+  auto table = db_->query(verify).ValueOrDie()->table();
+  auto vals = get_column_values<int64_t>(table, "e.since").ValueOrDie();
+  ASSERT_EQ(vals.size(), 1u);
+  EXPECT_EQ(vals[0], 2025);
+}
+
+TEST_F(UpdateJoinCrossSchemaTest, SelectEdgeAliasExpandsAllEdgeFields) {
+  auto query = Query::from("u:User")
+                   .traverse("u", "WORKS_AT", "c:Company", TraverseType::Inner,
+                             std::optional<std::string>{"e"})
+                   .select({"e"})
+                   .build();
+  auto result = db_->query(query);
+  ASSERT_TRUE(result.ok()) << result.status().ToString();
+  auto table = result.ValueOrDie()->table();
+
+  ASSERT_NE(table->GetColumnByName("e._edge_id"), nullptr);
+  ASSERT_NE(table->GetColumnByName("e.source_id"), nullptr);
+  ASSERT_NE(table->GetColumnByName("e.target_id"), nullptr);
+  ASSERT_NE(table->GetColumnByName("e.created_ts"), nullptr);
+  ASSERT_NE(table->GetColumnByName("e.since"), nullptr);
+  ASSERT_NE(table->GetColumnByName("e.role"), nullptr);
+
+  auto edge_ids = get_column_values<int64_t>(table, "e._edge_id").ValueOrDie();
+  auto src_ids = get_column_values<int64_t>(table, "e.source_id").ValueOrDie();
+  auto dst_ids = get_column_values<int64_t>(table, "e.target_id").ValueOrDie();
+  auto since = get_column_values<int64_t>(table, "e.since").ValueOrDie();
+  auto role = get_column_values<std::string>(table, "e.role").ValueOrDie();
+
+  ASSERT_EQ(edge_ids.size(), 2u);
+  ASSERT_EQ(src_ids.size(), 2u);
+  ASSERT_EQ(dst_ids.size(), 2u);
+  ASSERT_EQ(since.size(), 2u);
+  ASSERT_EQ(role.size(), 2u);
+
+  std::set<int64_t> src_set(src_ids.begin(), src_ids.end());
+  std::set<int64_t> dst_set(dst_ids.begin(), dst_ids.end());
+  std::set<int64_t> since_set(since.begin(), since.end());
+  std::set<std::string> role_set(role.begin(), role.end());
+  EXPECT_EQ(src_set, (std::set<int64_t>{0, 1}));
+  EXPECT_EQ(dst_set, (std::set<int64_t>{0}));
+  EXPECT_EQ(since_set, (std::set<int64_t>{2020, 2021}));
+  EXPECT_EQ(role_set, (std::set<std::string>{"eng", "pm"}));
 }
 
 TEST_F(UpdateJoinCrossSchemaTest, TraversalWithNoMatchUpdatesNothing) {

@@ -604,15 +604,15 @@ TEST_F(NodeMapTest, SetAndGetMapField) {
   auto schema = node->get_schema();
   auto props_field = schema->get_field("props");
 
-  // Use map_key FieldUpdate to set individual keys inside the MAP field
-  ASSERT_TRUE(
-      node->update_fields({FieldUpdate{props_field, Value{3.14},
-                                       UpdateType::SET, std::string("score")}})
-          .ok());
-  ASSERT_TRUE(
-      node->update_fields({FieldUpdate{props_field, Value{true},
-                                       UpdateType::SET, std::string("active")}})
-          .ok());
+  // Use nested_path FieldUpdate to set individual keys inside the MAP field
+  ASSERT_TRUE(node->update_fields(
+                      {FieldUpdate{props_field, Value{3.14}, UpdateType::SET,
+                                   std::vector<std::string>{"score"}}})
+                  .ok());
+  ASSERT_TRUE(node->update_fields(
+                      {FieldUpdate{props_field, Value{true}, UpdateType::SET,
+                                   std::vector<std::string>{"active"}}})
+                  .ok());
 
   auto val_res = node->get_value(props_field);
   ASSERT_TRUE(val_res.ok());
@@ -638,8 +638,9 @@ TEST_F(NodeMapTest, SetMapKeyViFieldUpdate) {
 
   // Set a key when MAP field is null (creates a new map)
   ASSERT_TRUE(
-      node->update_fields({FieldUpdate{props_field, Value{int32_t(42)},
-                                       UpdateType::SET, std::string("slot")}})
+      node->update_fields(
+              {FieldUpdate{props_field, Value{int32_t(42)}, UpdateType::SET,
+                           std::vector<std::string>{"slot"}}})
           .ok());
 
   auto val = node->get_value(props_field).ValueOrDie();
@@ -657,32 +658,35 @@ TEST_F(NodeMapTest, SetMapKeyAllPrimitiveTypes) {
   auto schema = node->get_schema();
   auto props_field = schema->get_field("props");
 
-  // Set each primitive type via map_key FieldUpdate
+  // Set each primitive type via nested_path FieldUpdate
   ASSERT_TRUE(
-      node->update_fields({FieldUpdate{props_field, Value{int32_t(7)},
-                                       UpdateType::SET, std::string("i32")}})
+      node->update_fields(
+              {FieldUpdate{props_field, Value{int32_t(7)}, UpdateType::SET,
+                           std::vector<std::string>{"i32"}}})
           .ok());
   ASSERT_TRUE(
       node->update_fields(
               {FieldUpdate{props_field, Value{int64_t(9007199254740992LL)},
-                           UpdateType::SET, std::string("i64")}})
+                           UpdateType::SET, std::vector<std::string>{"i64"}}})
           .ok());
   ASSERT_TRUE(
-      node->update_fields({FieldUpdate{props_field, Value{double(2.718)},
-                                       UpdateType::SET, std::string("dbl")}})
+      node->update_fields(
+              {FieldUpdate{props_field, Value{double(2.718)}, UpdateType::SET,
+                           std::vector<std::string>{"dbl"}}})
           .ok());
   ASSERT_TRUE(
-      node->update_fields({FieldUpdate{props_field, Value{float(1.25f)},
-                                       UpdateType::SET, std::string("flt")}})
+      node->update_fields(
+              {FieldUpdate{props_field, Value{float(1.25f)}, UpdateType::SET,
+                           std::vector<std::string>{"flt"}}})
           .ok());
-  ASSERT_TRUE(
-      node->update_fields({FieldUpdate{props_field, Value{bool(false)},
-                                       UpdateType::SET, std::string("ok")}})
-          .ok());
-  ASSERT_TRUE(
-      node->update_fields({FieldUpdate{props_field, Value{"text"},
-                                       UpdateType::SET, std::string("s")}})
-          .ok());
+  ASSERT_TRUE(node->update_fields({FieldUpdate{props_field, Value{bool(false)},
+                                               UpdateType::SET,
+                                               std::vector<std::string>{"ok"}}})
+                  .ok());
+  ASSERT_TRUE(node->update_fields(
+                      {FieldUpdate{props_field, Value{"text"}, UpdateType::SET,
+                                   std::vector<std::string>{"s"}}})
+                  .ok());
 
   auto val = node->get_value(props_field).ValueOrDie();
   ASSERT_TRUE(val.holds_map_ref());
@@ -706,18 +710,18 @@ TEST_F(NodeMapTest, MapKeyCowGrowthWhenMapFull) {
   auto props_field = schema->get_field("props");
 
   // Set 3 keys one by one — each COW-copies the map to add a key
-  ASSERT_TRUE(
-      node->update_fields({FieldUpdate{props_field, Value{int32_t(1)},
-                                       UpdateType::SET, std::string("a")}})
-          .ok());
-  ASSERT_TRUE(
-      node->update_fields({FieldUpdate{props_field, Value{int32_t(2)},
-                                       UpdateType::SET, std::string("b")}})
-          .ok());
-  ASSERT_TRUE(
-      node->update_fields({FieldUpdate{props_field, Value{int32_t(3)},
-                                       UpdateType::SET, std::string("c")}})
-          .ok());
+  ASSERT_TRUE(node->update_fields({FieldUpdate{props_field, Value{int32_t(1)},
+                                               UpdateType::SET,
+                                               std::vector<std::string>{"a"}}})
+                  .ok());
+  ASSERT_TRUE(node->update_fields({FieldUpdate{props_field, Value{int32_t(2)},
+                                               UpdateType::SET,
+                                               std::vector<std::string>{"b"}}})
+                  .ok());
+  ASSERT_TRUE(node->update_fields({FieldUpdate{props_field, Value{int32_t(3)},
+                                               UpdateType::SET,
+                                               std::vector<std::string>{"c"}}})
+                  .ok());
 
   auto val = node->get_value(props_field).ValueOrDie();
   ASSERT_TRUE(val.holds_map_ref());
