@@ -494,7 +494,8 @@ TEST_F(UpdateQueryTest, UpdateByMatchSupportsMapKeySet) {
               !omar_props.as_map_ref().contains("score"));
 }
 
-TEST_F(UpdateQueryTest, UpdateByMatchNestedPathDepthGreaterThanOneNotImplemented) {
+TEST_F(UpdateQueryTest,
+       UpdateByMatchNestedPathDepthGreaterThanOneNotImplemented) {
   auto map_schema = arrow::schema({
       arrow::field("name", arrow::utf8()),
       arrow::field("props", arrow::map(arrow::utf8(), arrow::binary())),

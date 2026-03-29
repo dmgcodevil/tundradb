@@ -46,9 +46,8 @@ class UpdateJoinCrossSchemaTest : public ::testing::Test {
     db_->get_schema_registry()->create("User", user_schema).ValueOrDie();
     db_->get_schema_registry()->create("Company", company_schema).ValueOrDie();
     db_->register_edge_schema(
-           "WORKS_AT",
-           {std::make_shared<Field>("since", ValueType::INT64),
-            std::make_shared<Field>("role", ValueType::STRING)})
+           "WORKS_AT", {std::make_shared<Field>("since", ValueType::INT64),
+                        std::make_shared<Field>("role", ValueType::STRING)})
         .ValueOrDie();
 
     // Users:  Alice(0), Bob(1), Charlie(2)

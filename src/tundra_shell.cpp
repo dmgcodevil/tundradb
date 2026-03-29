@@ -135,6 +135,9 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
         arrow_type = arrow::int64();
       } else if (field_type == "FLOAT64") {
         arrow_type = arrow::float64();
+      } else if (field_type == "MAP") {
+        // MAP is serialized as map<utf8, binary> in Arrow.
+        arrow_type = arrow::map(arrow::utf8(), arrow::binary());
       } else {
         throw std::runtime_error("Unsupported data type: " + field_type);
       }
@@ -175,6 +178,8 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
         value_type = tundradb::ValueType::INT64;
       } else if (field_type == "FLOAT64") {
         value_type = tundradb::ValueType::DOUBLE;
+      } else if (field_type == "MAP") {
+        value_type = tundradb::ValueType::MAP;
       } else {
         throw std::runtime_error("Unsupported edge field type: " + field_type);
       }
@@ -232,6 +237,12 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
       }
 
       if (properties.find(field_name) == properties.end()) {
+        if (field_type == tundradb::ValueType::MAP) {
+          // Leave MAP field at default/null. It can be initialized via UPDATE
+          // nested-path writes (e.g., SET u.props.key = value or SET u.props =
+          // {...}).
+          continue;
+        }
         throw std::runtime_error("Missing property: " + field_name);
       }
 
@@ -355,6 +366,10 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
           throw std::runtime_error("Error converting '" + value_str +
                                    "' to int32: " + e.what());
         }
+      } else if (field_type == tundradb::ValueType::MAP) {
+        // CREATE NODE currently does not materialize map literals.
+        // Keep field as default/null; map contents can be set through UPDATE.
+        continue;
       }
     }
 
@@ -1002,6 +1017,10 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
         if (identifiers.empty()) {
           return fail("Invalid SET assignment: missing field name");
         }
+        if (!assignment->value()) {
+          return fail("Invalid SET assignment for '" + assignment->getText() +
+                      "': unsupported value expression");
+        }
         const std::string field_name = join_identifier_path(identifiers);
         const std::string root_field = identifiers[0]->getText();
         std::string raw_value = assignment->value()->getText();
@@ -1015,7 +1034,18 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
                       schema_name + "'");
         }
         try {
-          builder.set(field_name, parseValueForField(field, raw_value));
+          if (assignment->value()->mapLiteral() &&
+              field->type() != tundradb::ValueType::MAP) {
+            return fail("Map literal can only be assigned to MAP fields: '" +
+                        field_name + "'");
+          }
+          if (field->type() == tundradb::ValueType::MAP &&
+              assignment->value()->mapLiteral()) {
+            applyMapLiteralAsNestedUpdates(builder, field_name,
+                                           assignment->value()->mapLiteral());
+          } else {
+            builder.set(field_name, parseValueForField(field, raw_value));
+          }
         } catch (const std::exception& e) {
           return fail(std::string("Invalid SET value: ") + e.what());
         }
@@ -1092,6 +1122,10 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
         if (identifiers.empty()) {
           return fail("Invalid SET assignment: missing field name");
         }
+        if (!assignment->value()) {
+          return fail("Invalid SET assignment for '" + assignment->getText() +
+                      "': unsupported value expression");
+        }
         std::string qualified_name = join_identifier_path(identifiers);
         if (identifiers.size() == 1) {
           qualified_name = alias + "." + qualified_name;
@@ -1120,8 +1154,8 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
           }
           field = edge_schema->get_field(bare_field);
           if (!field) {
-            return fail("Field '" + bare_field + "' not found in edge schema '" +
-                        eit->second + "'");
+            return fail("Field '" + bare_field +
+                        "' not found in edge schema '" + eit->second + "'");
           }
         } else {
           const std::string& set_schema = it->second;
@@ -1142,7 +1176,18 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
           raw_value = raw_value.substr(1, raw_value.size() - 2);
         }
         try {
-          builder.set(qualified_name, parseValueForField(field, raw_value));
+          if (assignment->value()->mapLiteral() &&
+              field->type() != tundradb::ValueType::MAP) {
+            return fail("Map literal can only be assigned to MAP fields: '" +
+                        qualified_name + "'");
+          }
+          if (field->type() == tundradb::ValueType::MAP &&
+              assignment->value()->mapLiteral()) {
+            applyMapLiteralAsNestedUpdates(builder, qualified_name,
+                                           assignment->value()->mapLiteral());
+          } else {
+            builder.set(qualified_name, parseValueForField(field, raw_value));
+          }
         } catch (const std::exception& e) {
           return fail(std::string("Invalid SET value: ") + e.what());
         }
@@ -1275,6 +1320,51 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
       out += identifiers[i]->getText();
     }
     return out;
+  }
+
+  tundradb::Value parseLiteralValue(
+      tundraql::TundraQLParser::ValueContext* value_ctx) {
+    if (!value_ctx) {
+      throw std::runtime_error("Missing value expression");
+    }
+    if (value_ctx->INTEGER_LITERAL()) {
+      return tundradb::Value(static_cast<int64_t>(
+          std::stoll(value_ctx->INTEGER_LITERAL()->getText())));
+    }
+    if (value_ctx->FLOAT_LITERAL()) {
+      return tundradb::Value(std::stod(value_ctx->FLOAT_LITERAL()->getText()));
+    }
+    if (value_ctx->STRING_LITERAL()) {
+      std::string s = value_ctx->STRING_LITERAL()->getText();
+      if (s.size() >= 2 && s.front() == '"' && s.back() == '"') {
+        s = s.substr(1, s.size() - 2);
+      }
+      return tundradb::Value(s);
+    }
+    if (value_ctx->mapLiteral()) {
+      throw std::runtime_error(
+          "Nested map literals are not supported yet. Use scalar values for "
+          "map "
+          "entries.");
+    }
+    throw std::runtime_error("Unsupported literal value: " +
+                             value_ctx->getText());
+  }
+
+  void applyMapLiteralAsNestedUpdates(
+      tundradb::UpdateQuery::Builder& builder,
+      const std::string& qualified_name,
+      tundraql::TundraQLParser::MapLiteralContext* map_ctx) {
+    // Replace semantics: clear existing map first, then set provided keys.
+    builder.set(qualified_name, tundradb::Value{});
+    if (!map_ctx || !map_ctx->propertyList()) {
+      return;  // "{}" means replace with empty map
+    }
+    for (auto entry : map_ctx->propertyList()->propertyAssignment()) {
+      const std::string key = entry->IDENTIFIER()->getText();
+      const std::string nested_name = qualified_name + "." + key;
+      builder.set(nested_name, parseLiteralValue(entry->value()));
+    }
   }
 
   // Helper: convert a raw string value to a typed Value based on field type
@@ -1532,7 +1622,8 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
             "WHERE clause field must be in format alias.field[.nested...]");
         return nullptr;
       }
-      const std::string fieldName = join_identifier_path(leftFactor->IDENTIFIER());
+      const std::string fieldName =
+          join_identifier_path(leftFactor->IDENTIFIER());
 
       tundradb::CompareOp op;
       if (term->EQ())

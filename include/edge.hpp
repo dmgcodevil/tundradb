@@ -93,8 +93,14 @@ class Edge {
     if (field && field->name() == "source_id") return Value{source_id_};
     if (field && field->name() == "target_id") return Value{target_id_};
     if (field && field->name() == "created_ts") return Value{created_ts_};
-    return entity_ops::get_value(field, handle_.get(), arena_.get(), layout_,
-                                 data_);
+    auto resolved_field = field;
+    if (schema_) {
+      if (auto schema_field = schema_->get_field(field->name()); schema_field) {
+        resolved_field = schema_field;
+      }
+    }
+    return entity_ops::get_value(resolved_field, handle_.get(), arena_.get(),
+                                 layout_, data_);
   }
 
   [[nodiscard]] arrow::Result<const char*> get_value_ptr(
@@ -112,7 +118,14 @@ class Edge {
     if (field->name() == "created_ts")
       return reinterpret_cast<const char*>(&created_ts_);
     if (arena_ && handle_) {
-      return NodeArena::get_value_ptr(*handle_, layout_, field);
+      auto resolved_field = field;
+      if (schema_) {
+        if (auto schema_field = schema_->get_field(field->name());
+            schema_field) {
+          resolved_field = schema_field;
+        }
+      }
+      return NodeArena::get_value_ptr(*handle_, layout_, resolved_field);
     }
     return arrow::Status::KeyError("Field not found: ", field->name());
   }
@@ -148,8 +161,14 @@ inline arrow::Result<Value> EdgeView::get_value(
   }
   const NodeHandle* handle = edge_->get_handle();
   assert(handle != nullptr && "Versioned edge must have a handle");
-  return entity_ops::get_value_at_version(field, *handle, resolved_version_,
-                                          layout_);
+  auto resolved_field = field;
+  if (auto schema = edge_->get_schema(); schema) {
+    if (auto schema_field = schema->get_field(field->name()); schema_field) {
+      resolved_field = schema_field;
+    }
+  }
+  return entity_ops::get_value_at_version(resolved_field, *handle,
+                                          resolved_version_, layout_);
 }
 
 inline arrow::Result<const char*> EdgeView::get_value_ptr(
@@ -158,16 +177,22 @@ inline arrow::Result<const char*> EdgeView::get_value_ptr(
     return edge_->get_value_ptr(field);
   }
   if (field && (field->name() == "id" || field->name() == "_edge_id" ||
-                field->name() == "source_id" ||
-                field->name() == "target_id" || field->name() == "created_ts")) {
+                field->name() == "source_id" || field->name() == "target_id" ||
+                field->name() == "created_ts")) {
     return edge_->get_value_ptr(field);
   }
   const NodeHandle* handle = edge_->get_handle();
   if (!handle) {
     return edge_->get_value_ptr(field);
   }
-  return edge_->get_arena()->get_value_ptr_at_version(*handle, resolved_version_,
-                                                       layout_, field);
+  auto resolved_field = field;
+  if (auto schema = edge_->get_schema(); schema) {
+    if (auto schema_field = schema->get_field(field->name()); schema_field) {
+      resolved_field = schema_field;
+    }
+  }
+  return edge_->get_arena()->get_value_ptr_at_version(
+      *handle, resolved_version_, layout_, resolved_field);
 }
 
 inline arrow::Result<ValueRef> EdgeView::get_value_ref(

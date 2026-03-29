@@ -12,8 +12,8 @@
 #include <unordered_map>
 #include <vector>
 
-#include "logger.hpp"
 #include "edge.hpp"
+#include "logger.hpp"
 #include "node.hpp"
 #include "query.hpp"
 #include "types.hpp"
@@ -150,10 +150,35 @@ struct Row {
     }
   }
 
-  void set_cell_from_edge(const std::vector<int>& field_indices,
-                          const std::shared_ptr<Edge>& edge,
-                          const llvm::SmallVector<std::shared_ptr<Field>, 4>& fields,
-                          TemporalContext* temporal_context) {
+  /**
+   * @brief Populates row cells from an edge projection.
+   *
+   * This is the edge equivalent of `set_cell_from_node()`, used when query
+   * output includes edge aliases (for example `SELECT e` or `SELECT e.role`).
+   *
+   * Mapping behavior:
+   * - `fields[i]` is the projected field metadata for the edge alias.
+   * - `field_indices[i]` is the destination row-cell index.
+   * - The method reads values through `EdgeView` so temporal snapshots are
+   *   honored.
+   *
+   * Field resolution behavior:
+   * - Structural edge fields (`id`, `_edge_id`, `source_id`, `target_id`,
+   *   `created_ts`) are read directly as-is.
+   * - Non-structural fields are resolved by name against the edge's runtime
+   *   schema to ensure type/layout consistency before reading.
+   * - Missing or unresolved fields are skipped (no write to the target cell).
+   *
+   * @param field_indices Maps each projected edge field to a row cell index.
+   * @param edge The source edge to read from.
+   * @param fields Projected edge fields for the alias in output-schema order.
+   * @param temporal_context Temporal snapshot for versioned reads (may be
+   * nullptr).
+   */
+  void set_cell_from_edge(
+      const std::vector<int>& field_indices, const std::shared_ptr<Edge>& edge,
+      const llvm::SmallVector<std::shared_ptr<Field>, 4>& fields,
+      TemporalContext* temporal_context) {
     auto view = edge->view(temporal_context);
     const auto edge_schema = edge->get_schema();
     const size_t n = std::min(fields.size(), field_indices.size());
@@ -161,9 +186,9 @@ struct Row {
       auto field = fields[i];
       if (!field) continue;
       const auto& name = field->name();
-      const bool structural = (name == "id" || name == "_edge_id" ||
-                               name == "source_id" || name == "target_id" ||
-                               name == "created_ts");
+      const bool structural =
+          (name == "id" || name == "_edge_id" || name == "source_id" ||
+           name == "target_id" || name == "created_ts");
       if (!structural && edge_schema) {
         auto real_field = edge_schema->get_field(name);
         if (!real_field) continue;

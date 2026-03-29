@@ -60,8 +60,9 @@ populate_rows_bfs(int64_t node_id, const SchemaRef& start_schema,
       return arrow::Status::OK();
     }
 
-    ARROW_ASSIGN_OR_RAISE(const auto edge_schema_name,
-                          query_state.resolve_schema(SchemaRef::parse(edge_alias)));
+    ARROW_ASSIGN_OR_RAISE(
+        const auto edge_schema_name,
+        query_state.resolve_schema(SchemaRef::parse(edge_alias)));
     ARROW_ASSIGN_OR_RAISE(const auto edge_schema,
                           query_state.schema_registry()->get(edge_schema_name));
     ARROW_ASSIGN_OR_RAISE(const auto edge_obj,
@@ -737,9 +738,11 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
                                               query.clauses());
         }
         if (traverse->edge_alias().has_value()) {
-          edge_where_clauses = get_where_to_inline(traverse->edge_alias().value(),
-                                                   i + 1, query.clauses());
+          edge_where_clauses = get_where_to_inline(
+              traverse->edge_alias().value(), i + 1, query.clauses());
         }
+        for (const auto& wc : where_clauses) wc->set_inlined(true);
+        for (const auto& wc : edge_where_clauses) wc->set_inlined(true);
         result->mutable_execution_stats().num_where_clauses_inlined +=
             where_clauses.size() + edge_where_clauses.size();
         // Traversal already added to query_state.traversals during preparation
@@ -798,26 +801,32 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
                 // temporary table and using Arrow expressions For now, use
                 // the existing approach but this could be optimized
                 for (const auto& where_clause : where_clauses) {
-                  if (!apply_where_to_node(where_clause, target_node)
-                           .ValueOrDie()) {
+                  auto node_where =
+                      apply_where_to_node(where_clause, target_node);
+                  if (!node_where.ok()) {
+                    return node_where.status();
+                  }
+                  if (!node_where.ValueOrDie()) {
                     passes_all_filters = false;
                     break;
                   }
-                  where_clause->set_inlined(true);
                 }
                 if (passes_all_filters) {
                   for (const auto& where_clause : edge_where_clauses) {
-                    if (!apply_where_to_edge(where_clause, edge).ValueOrDie()) {
+                    auto edge_where = apply_where_to_edge(where_clause, edge);
+                    if (!edge_where.ok()) {
+                      return edge_where.status();
+                    }
+                    if (!edge_where.ValueOrDie()) {
                       passes_all_filters = false;
                       break;
                     }
-                    where_clause->set_inlined(true);
                   }
                 }
                 if (passes_all_filters) {
                   IF_DEBUG_ENABLED {
-                    log_debug("found edge {}:{} -[{}{}]-> {}:{}", source.value(),
-                              source_id,
+                    log_debug("found edge {}:{} -[{}{}]-> {}:{}",
+                              source.value(), source_id,
                               traverse->edge_alias().has_value()
                                   ? traverse->edge_alias().value() + ":"
                                   : "",
@@ -973,7 +982,12 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
   for (const auto& expr : post_where) {
     result->mutable_execution_stats().num_where_clauses_post_processed++;
     IF_DEBUG_ENABLED { log_debug("post process where: {}", expr->toString()); }
-    output_table = filter(output_table, *expr, false).ValueOrDie();
+    auto filtered = filter(output_table, *expr, false);
+    if (!filtered.ok()) {
+      log_error("Post-process WHERE failed: {}", filtered.status().ToString());
+      return filtered.status();
+    }
+    output_table = filtered.ValueOrDie();
   }
   result->set_table(apply_select(query.select(), output_table));
   return result;

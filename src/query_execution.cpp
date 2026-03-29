@@ -15,8 +15,8 @@ std::string edge_shadow_schema_name(const std::string& edge_type) {
   return "__edge__" + edge_type;
 }
 
-arrow::Result<std::string> ensure_edge_shadow_schema(QueryState& query_state,
-                                                     const std::string& edge_type) {
+arrow::Result<std::string> ensure_edge_shadow_schema(
+    QueryState& query_state, const std::string& edge_type) {
   const std::string shadow = edge_shadow_schema_name(edge_type);
   auto registry = query_state.schema_registry();
   if (registry->get(shadow).ok()) {
@@ -44,6 +44,247 @@ arrow::Result<std::string> ensure_edge_shadow_schema(QueryState& query_state,
   }
   ARROW_RETURN_NOT_OK(registry->create(shadow, arrow::schema(fields)));
   return shadow;
+}
+
+/**
+ * @brief Decode one MAP item payload from Arrow `binary` into a `Value`.
+ *
+ * The payload format matches `encode_map_value_binary()`:
+ * - first byte: `ValueType` tag
+ * - remaining bytes: type-specific payload
+ *   - numeric/bool: POD bytes
+ *   - string/complex fallback: uint32 length + raw bytes
+ *
+ * Return contract:
+ * - returns `optional<Value>` with a value on successful decode
+ * - returns empty optional for empty/invalid/truncated payload (treated as NULL)
+ * - reserves `Status` errors for exceptional decode failures
+ */
+arrow::Result<std::optional<Value>> decode_map_item_binary(const uint8_t* data,
+                                                           const int32_t size) {
+  if (!data || size <= 0) {
+    return std::optional<Value>{};
+  }
+  const auto type = static_cast<ValueType>(data[0]);
+  const uint8_t* p = data + 1;
+  int32_t rem = size - 1;
+
+  auto read_len_prefixed_string = [&](std::string& out) -> bool {
+    if (rem < static_cast<int32_t>(sizeof(uint32_t))) return false;
+    uint32_t len = 0;
+    std::memcpy(&len, p, sizeof(uint32_t));
+    p += sizeof(uint32_t);
+    rem -= sizeof(uint32_t);
+    if (rem < static_cast<int32_t>(len)) return false;
+    out.assign(reinterpret_cast<const char*>(p), len);
+    return true;
+  };
+
+  switch (type) {
+    case ValueType::INT32: {
+      if (rem < static_cast<int32_t>(sizeof(int32_t)))
+        return std::optional<Value>{};
+      int32_t v = 0;
+      std::memcpy(&v, p, sizeof(int32_t));
+      return Value(v);
+    }
+    case ValueType::INT64: {
+      if (rem < static_cast<int32_t>(sizeof(int64_t)))
+        return std::optional<Value>{};
+      int64_t v = 0;
+      std::memcpy(&v, p, sizeof(int64_t));
+      return Value(v);
+    }
+    case ValueType::FLOAT: {
+      if (rem < static_cast<int32_t>(sizeof(float)))
+        return std::optional<Value>{};
+      float v = 0.0F;
+      std::memcpy(&v, p, sizeof(float));
+      return Value(v);
+    }
+    case ValueType::DOUBLE: {
+      if (rem < static_cast<int32_t>(sizeof(double)))
+        return std::optional<Value>{};
+      double v = 0.0;
+      std::memcpy(&v, p, sizeof(double));
+      return Value(v);
+    }
+    case ValueType::BOOL: {
+      if (rem < 1) return std::optional<Value>{};
+      return Value(*p != 0);
+    }
+    case ValueType::STRING:
+    case ValueType::FIXED_STRING16:
+    case ValueType::FIXED_STRING32:
+    case ValueType::FIXED_STRING64:
+    case ValueType::ARRAY:
+    case ValueType::MAP:
+    case ValueType::NA:
+    default: {
+      std::string s;
+      if (!read_len_prefixed_string(s)) return std::optional<Value>{};
+      return Value(s);
+    }
+  }
+}
+
+arrow::Result<std::shared_ptr<arrow::Array>> extract_map_key_array(
+    const std::shared_ptr<arrow::ChunkedArray>& map_column,
+    const std::string& key_name) {
+  std::vector<std::optional<Value>> decoded_values;
+  decoded_values.reserve(map_column->length());
+  std::optional<ValueType> dominant_type;
+
+  for (int ci = 0; ci < map_column->num_chunks(); ++ci) {
+    auto chunk = map_column->chunk(ci);
+    if (chunk->type_id() != arrow::Type::MAP) {
+      return arrow::Status::Invalid("Base column is not a MAP column");
+    }
+    auto map_arr = std::static_pointer_cast<arrow::MapArray>(chunk);
+    auto keys = std::static_pointer_cast<arrow::StringArray>(map_arr->keys());
+    auto items = std::static_pointer_cast<arrow::BinaryArray>(map_arr->items());
+
+    for (int64_t row = 0; row < map_arr->length(); ++row) {
+      if (map_arr->IsNull(row)) {
+        decoded_values.emplace_back(std::nullopt);
+        continue;
+      }
+      const int64_t begin = map_arr->value_offset(row);
+      const int64_t end = begin + map_arr->value_length(row);
+      std::optional<Value> hit;
+      for (int64_t idx = begin; idx < end; ++idx) {
+        if (keys->IsNull(idx)) continue;
+        if (keys->GetString(idx) != key_name) continue;
+        if (items->IsNull(idx)) {
+          hit = std::nullopt;
+        } else {
+          int32_t bin_len = 0;
+          const uint8_t* bin_ptr = items->GetValue(idx, &bin_len);
+          ARROW_ASSIGN_OR_RAISE(hit, decode_map_item_binary(bin_ptr, bin_len));
+        }
+        break;
+      }
+      decoded_values.push_back(hit);
+      if (hit.has_value()) {
+        const auto t = hit->type();
+        if (!dominant_type.has_value()) {
+          dominant_type = t;
+        } else if (dominant_type.value() != t) {
+          dominant_type = ValueType::STRING;  // fallback for mixed types
+        }
+      }
+    }
+  }
+
+  if (!dominant_type.has_value()) {
+    std::shared_ptr<arrow::Array> arr;
+    ARROW_RETURN_NOT_OK(arrow::NullBuilder().Finish(&arr));
+    return arr;
+  }
+
+  switch (dominant_type.value()) {
+    case ValueType::INT32: {
+      arrow::Int32Builder b;
+      for (const auto& v : decoded_values) {
+        if (!v.has_value())
+          ARROW_RETURN_NOT_OK(b.AppendNull());
+        else
+          ARROW_RETURN_NOT_OK(b.Append(v->as_int32()));
+      }
+      std::shared_ptr<arrow::Array> arr;
+      ARROW_RETURN_NOT_OK(b.Finish(&arr));
+      return arr;
+    }
+    case ValueType::INT64: {
+      arrow::Int64Builder b;
+      for (const auto& v : decoded_values) {
+        if (!v.has_value())
+          ARROW_RETURN_NOT_OK(b.AppendNull());
+        else
+          ARROW_RETURN_NOT_OK(b.Append(v->as_int64()));
+      }
+      std::shared_ptr<arrow::Array> arr;
+      ARROW_RETURN_NOT_OK(b.Finish(&arr));
+      return arr;
+    }
+    case ValueType::FLOAT: {
+      arrow::FloatBuilder b;
+      for (const auto& v : decoded_values) {
+        if (!v.has_value())
+          ARROW_RETURN_NOT_OK(b.AppendNull());
+        else
+          ARROW_RETURN_NOT_OK(b.Append(v->as_float()));
+      }
+      std::shared_ptr<arrow::Array> arr;
+      ARROW_RETURN_NOT_OK(b.Finish(&arr));
+      return arr;
+    }
+    case ValueType::DOUBLE: {
+      arrow::DoubleBuilder b;
+      for (const auto& v : decoded_values) {
+        if (!v.has_value())
+          ARROW_RETURN_NOT_OK(b.AppendNull());
+        else
+          ARROW_RETURN_NOT_OK(b.Append(v->as_double()));
+      }
+      std::shared_ptr<arrow::Array> arr;
+      ARROW_RETURN_NOT_OK(b.Finish(&arr));
+      return arr;
+    }
+    case ValueType::BOOL: {
+      arrow::BooleanBuilder b;
+      for (const auto& v : decoded_values) {
+        if (!v.has_value())
+          ARROW_RETURN_NOT_OK(b.AppendNull());
+        else
+          ARROW_RETURN_NOT_OK(b.Append(v->as_bool()));
+      }
+      std::shared_ptr<arrow::Array> arr;
+      ARROW_RETURN_NOT_OK(b.Finish(&arr));
+      return arr;
+    }
+    case ValueType::STRING:
+    default: {
+      arrow::StringBuilder b;
+      for (const auto& v : decoded_values) {
+        if (!v.has_value())
+          ARROW_RETURN_NOT_OK(b.AppendNull());
+        else
+          ARROW_RETURN_NOT_OK(b.Append(v->to_string()));
+      }
+      std::shared_ptr<arrow::Array> arr;
+      ARROW_RETURN_NOT_OK(b.Finish(&arr));
+      return arr;
+    }
+  }
+}
+
+arrow::Result<std::shared_ptr<arrow::Table>> enrich_nested_select_fields(
+    const std::shared_ptr<Select>& select,
+    std::shared_ptr<arrow::Table> table) {
+  if (!select || select->fields().empty()) return table;
+
+  for (const auto& sf : select->fields()) {
+    if (sf.find('.') == std::string::npos) continue;
+    if (table->GetColumnByName(sf) != nullptr) continue;
+
+    const auto parsed = FieldRef::from_string(sf);
+    if (parsed.nested_path().empty() || parsed.nested_path().size() != 1) {
+      continue;  // currently support one-level map projection
+    }
+    const std::string base_col = parsed.variable() + "." + parsed.field_name();
+    auto base = table->GetColumnByName(base_col);
+    if (!base || base->type()->id() != arrow::Type::MAP) continue;
+
+    ARROW_ASSIGN_OR_RAISE(auto arr,
+                          extract_map_key_array(base, parsed.nested_path()[0]));
+    auto add_res =
+        table->AddColumn(table->num_columns(), arrow::field(sf, arr->type()),
+                         std::make_shared<arrow::ChunkedArray>(arr));
+    if (!add_res.ok()) return add_res.status();
+    table = add_res.ValueOrDie();
+  }
+  return table;
 }
 }  // namespace
 
@@ -228,8 +469,7 @@ std::string QueryState::ToString() const {
   for (size_t i = 0; i < traversals.size(); ++i) {
     const auto& trav = traversals[i];
     ss << "    - [" << i << "]: " << trav.source().value() << " -["
-       << (trav.edge_alias().has_value() ? trav.edge_alias().value() + ":"
-                                         : "")
+       << (trav.edge_alias().has_value() ? trav.edge_alias().value() + ":" : "")
        << trav.edge_type() << "]-> " << trav.target().value() << " (Type: "
        << (trav.traverse_type() == TraverseType::Inner ? "Inner" : "Other")
        << ")\n";
@@ -399,14 +639,13 @@ void log_grouped_connections(
 
       for (size_t i = 0; i < connections.size(); ++i) {
         const auto& conn = connections[i];
-        log_debug("    [{}] {} -[{}{}{}]-> {}.{} (target_id: {})", i,
-                  conn.source.value(),
-                  conn.edge_alias.has_value() ? conn.edge_alias.value() + ":"
-                                              : "",
-                  conn.edge_type,
-                  conn.edge_id >= 0 ? "#" + std::to_string(conn.edge_id) : "",
-                  conn.target.value(),
-                  conn.target.schema(), conn.target_id);
+        log_debug(
+            "    [{}] {} -[{}{}{}]-> {}.{} (target_id: {})", i,
+            conn.source.value(),
+            conn.edge_alias.has_value() ? conn.edge_alias.value() + ":" : "",
+            conn.edge_type,
+            conn.edge_id >= 0 ? "#" + std::to_string(conn.edge_id) : "",
+            conn.target.value(), conn.target.schema(), conn.target_id);
       }
     }
   }
@@ -415,12 +654,13 @@ void log_grouped_connections(
 std::shared_ptr<arrow::Table> apply_select(
     const std::shared_ptr<Select>& select,
     const std::shared_ptr<arrow::Table>& table) {
-  if (!select || select->fields().empty()) {
-    return table;
-  }
+  if (!select || select->fields().empty()) return table;
+
+  auto enriched_res = enrich_nested_select_fields(select, table);
+  auto working_table = enriched_res.ok() ? enriched_res.ValueOrDie() : table;
 
   std::vector<std::string> all_columns;
-  for (const auto& field : table->schema()->fields()) {
+  for (const auto& field : working_table->schema()->fields()) {
     all_columns.push_back(field->name());
   }
 
@@ -454,10 +694,10 @@ std::shared_ptr<arrow::Table> apply_select(
   std::ranges::sort(column_indices);
 
   arrow::Result<std::shared_ptr<arrow::Table>> result =
-      table->SelectColumns(column_indices);
+      working_table->SelectColumns(column_indices);
 
   if (!result.ok()) {
-    return table;
+    return working_table;
   }
 
   return result.ValueOrDie();
@@ -532,9 +772,8 @@ arrow::Status prepare_query(Query& query, QueryState& query_state) {
             ensure_edge_shadow_schema(query_state, traverse->edge_type()));
         ARROW_ASSIGN_OR_RAISE(
             auto _edge_schema_name,
-            query_state.register_schema(
-                SchemaRef::parse(traverse->edge_alias().value() + ":" +
-                                 edge_shadow_schema)));
+            query_state.register_schema(SchemaRef::parse(
+                traverse->edge_alias().value() + ":" + edge_shadow_schema)));
         (void)_edge_schema_name;
         ARROW_RETURN_NOT_OK(query_state.register_edge_alias(
             traverse->edge_alias().value(), traverse->edge_type()));

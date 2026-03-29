@@ -8,13 +8,14 @@ createSchemaStatement: K_CREATE K_SCHEMA IDENTIFIER LPAREN schemaFieldList RPARE
 createEdgeSchemaStatement: K_CREATE K_EDGE K_SCHEMA IDENTIFIER LPAREN schemaFieldList RPAREN SEMI;
 schemaFieldList: schemaField (COMMA schemaField)*;
 schemaField: IDENTIFIER COLON dataType;
-dataType: T_STRING | T_INT64 | T_FLOAT64; // Add more as needed
+dataType: T_STRING | T_INT64 | T_FLOAT64 | T_MAP; // Add more as needed
 
 // --- Node Creation ---
 createNodeStatement: K_CREATE K_NODE IDENTIFIER LPAREN propertyList RPAREN (K_RETURN K_ID)? SEMI;
 propertyList: propertyAssignment (COMMA propertyAssignment)*;
-propertyAssignment: IDENTIFIER EQ value;
-value: STRING_LITERAL | INTEGER_LITERAL | FLOAT_LITERAL; // Add more value types
+propertyAssignment: IDENTIFIER (EQ | COLON) value;
+mapLiteral: LBRACE propertyList? RBRACE;
+value: STRING_LITERAL | INTEGER_LITERAL | FLOAT_LITERAL | mapLiteral; // Add more value types
 
 // --- Edge Creation ---
 createEdgeStatement: K_CREATE (K_UNIQUE)? K_EDGE IDENTIFIER K_FROM nodeSelector K_TO nodeSelector (K_WITH LPAREN propertyList RPAREN)? SEMI;
@@ -137,6 +138,7 @@ K_TYPES: 'TYPES';
 T_STRING: 'STRING';
 T_INT64: 'INT64';
 T_FLOAT64: 'FLOAT64';
+T_MAP: 'MAP';
 
 
 // --- Literals & Punctuation ---
