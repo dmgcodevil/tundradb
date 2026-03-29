@@ -443,18 +443,19 @@ TEST_F(NodeVersionTest, VersionCounterIncreases) {
 TEST_F(NodeVersionTest, MapPropertySetAndGet) {
   NodeHandle handle = node_arena_versioned_->allocate_node("TestNode");
 
-  // Allocate an empty MapRef and store it in the props field (v0)
-  auto map_res = node_arena_versioned_->allocate_map();
+  auto* map_arena = node_arena_versioned_->get_map_arena();
+  auto* str_arena = node_arena_versioned_->get_string_arena();
+  auto map_res = map_arena->allocate();
   ASSERT_TRUE(map_res.ok());
   MapRef map = std::move(*map_res);
 
-  ASSERT_TRUE(
-      node_arena_versioned_->set_map_entry(map, "weight", Value(1.5)).ok());
+  auto key = str_arena->store_string_auto("weight").ValueOrDie();
+  double val = 1.5;
+  ASSERT_TRUE(MapArena::set_entry(map, key, ValueType::DOUBLE, &val).ok());
 
   node_arena_versioned_->set_field_value_v0(handle, layout_, props_field_,
                                             Value(map));
 
-  // Read back via get_value
   Value v = node_arena_versioned_->get_value(handle, layout_, props_field_);
   ASSERT_TRUE(v.holds_map_ref());
   ASSERT_EQ(v.as_map_ref().get_value("weight").as_double(), 1.5);
@@ -463,39 +464,34 @@ TEST_F(NodeVersionTest, MapPropertySetAndGet) {
 TEST_F(NodeVersionTest, MapPropertyVersioned) {
   NodeHandle handle = node_arena_versioned_->allocate_node("TestNode");
 
+  auto* map_arena = node_arena_versioned_->get_map_arena();
+  auto* str_arena = node_arena_versioned_->get_string_arena();
+
   // v0: set count=10 and props={score: 3.14}
   node_arena_versioned_->set_field_value_v0(handle, layout_, count_field_,
                                             Value(int32_t(10)));
-  auto map_res = node_arena_versioned_->allocate_map();
-  ASSERT_TRUE(map_res.ok());
-  MapRef map = std::move(*map_res);
+  auto map = map_arena->allocate().ValueOrDie();
+  auto score_key = str_arena->store_string_auto("score").ValueOrDie();
+  double score_val = 3.14;
   ASSERT_TRUE(
-      node_arena_versioned_->set_map_entry(map, "score", Value(3.14)).ok());
+      MapArena::set_entry(map, score_key, ValueType::DOUBLE, &score_val).ok());
   node_arena_versioned_->set_field_value_v0(handle, layout_, props_field_,
                                             Value(map));
 
   VersionInfo* v0 = handle.get_version_info();
   uint64_t t0 = v0->valid_from;
 
-  // v1: update count=20 and COW-copy map, set score=6.28
+  // v1: update count=20 and props.score=6.28 using map_key in FieldUpdate
   std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  Value cur_props =
-      node_arena_versioned_->get_value(handle, layout_, props_field_);
-  auto copy_res = node_arena_versioned_->copy_map(cur_props.as_map_ref());
-  ASSERT_TRUE(copy_res.ok());
-  MapRef new_map = std::move(*copy_res);
-  ASSERT_TRUE(
-      node_arena_versioned_->set_map_entry(new_map, "score", Value(6.28)).ok());
 
   std::vector<FieldUpdate> updates = {
-      {count_field_, Value(int32_t(20))},
-      {props_field_, Value(std::move(new_map))}};
+      {count_field_, Value(int32_t(20)), UpdateType::SET, std::nullopt},
+      {props_field_, Value(6.28), UpdateType::SET, std::string("score")}};
   ASSERT_TRUE(
       node_arena_versioned_->apply_updates(handle, layout_, updates).ok());
 
   ASSERT_EQ(handle.count_versions(), 2);
 
-  // Current: count=20, score=6.28
   Value curr_count =
       node_arena_versioned_->get_value(handle, layout_, count_field_);
   ASSERT_EQ(curr_count.as_int32(), 20);
@@ -522,32 +518,32 @@ TEST_F(NodeVersionTest, MapPropertyVersioned) {
 TEST_F(NodeVersionTest, MapPropertyRemoveEntry) {
   NodeHandle handle = node_arena_versioned_->allocate_node("TestNode");
 
-  auto map_res = node_arena_versioned_->allocate_map();
-  ASSERT_TRUE(map_res.ok());
-  MapRef map = std::move(*map_res);
-  ASSERT_TRUE(
-      node_arena_versioned_->set_map_entry(map, "a", Value(int32_t(1))).ok());
-  ASSERT_TRUE(
-      node_arena_versioned_->set_map_entry(map, "b", Value(int32_t(2))).ok());
+  auto* map_arena = node_arena_versioned_->get_map_arena();
+  auto* str_arena = node_arena_versioned_->get_string_arena();
+  auto map = map_arena->allocate().ValueOrDie();
+  auto ka = str_arena->store_string_auto("a").ValueOrDie();
+  auto kb = str_arena->store_string_auto("b").ValueOrDie();
+  int32_t v1 = 1, v2 = 2;
+  ASSERT_TRUE(MapArena::set_entry(map, ka, ValueType::INT32, &v1).ok());
+  ASSERT_TRUE(MapArena::set_entry(map, kb, ValueType::INT32, &v2).ok());
 
   ASSERT_EQ(map.count(), 2);
 
-  ASSERT_TRUE(NodeArena::remove_map_entry(map, "a"));
+  ASSERT_TRUE(MapArena::remove_entry(map, "a"));
   ASSERT_EQ(map.count(), 1);
   ASSERT_TRUE(map.get_value("a").is_null());
   ASSERT_EQ(map.get_value("b").as_int32(), 2);
 }
 
 TEST_F(NodeVersionTest, MapPropertyNonVersioned) {
-  // With versioning OFF, MAP field is written directly to base node
   NodeHandle handle = node_arena_non_versioned_->allocate_node("TestNode");
 
-  auto map_res = node_arena_non_versioned_->allocate_map();
-  ASSERT_TRUE(map_res.ok());
-  MapRef map = std::move(*map_res);
-  ASSERT_TRUE(
-      node_arena_non_versioned_->set_map_entry(map, "weight", Value(3.14))
-          .ok());
+  auto* map_arena = node_arena_non_versioned_->get_map_arena();
+  auto* str_arena = node_arena_non_versioned_->get_string_arena();
+  auto map = map_arena->allocate().ValueOrDie();
+  auto key = str_arena->store_string_auto("weight").ValueOrDie();
+  double val = 3.14;
+  ASSERT_TRUE(MapArena::set_entry(map, key, ValueType::DOUBLE, &val).ok());
 
   node_arena_non_versioned_->set_field_value_v0(handle, layout_, props_field_,
                                                 Value(map));

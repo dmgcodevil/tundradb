@@ -13,7 +13,8 @@ class TypeRoundTripTest : public ::testing::Test {
                   ValueType expected_back_type) {
     auto field = std::make_shared<Field>(name, td);
     auto arrow_res = field->to_arrow();
-    ASSERT_TRUE(arrow_res.ok()) << name << ": " << arrow_res.status().ToString();
+    ASSERT_TRUE(arrow_res.ok())
+        << name << ": " << arrow_res.status().ToString();
     auto arrow_field = arrow_res.ValueOrDie();
 
     EXPECT_EQ(arrow_field->name(), name);
@@ -85,33 +86,33 @@ TEST_F(TypeRoundTripTest, FixedString64) {
 // --- Array types ---
 
 TEST_F(TypeRoundTripTest, ArrayInt32) {
-  round_trip("ai", TypeDescriptor::array(ValueType::INT32),
-             arrow::Type::LIST, ValueType::ARRAY);
+  round_trip("ai", TypeDescriptor::array(ValueType::INT32), arrow::Type::LIST,
+             ValueType::ARRAY);
 }
 
 TEST_F(TypeRoundTripTest, ArrayInt64) {
-  round_trip("al", TypeDescriptor::array(ValueType::INT64),
-             arrow::Type::LIST, ValueType::ARRAY);
+  round_trip("al", TypeDescriptor::array(ValueType::INT64), arrow::Type::LIST,
+             ValueType::ARRAY);
 }
 
 TEST_F(TypeRoundTripTest, ArrayFloat) {
-  round_trip("af", TypeDescriptor::array(ValueType::FLOAT),
-             arrow::Type::LIST, ValueType::ARRAY);
+  round_trip("af", TypeDescriptor::array(ValueType::FLOAT), arrow::Type::LIST,
+             ValueType::ARRAY);
 }
 
 TEST_F(TypeRoundTripTest, ArrayDouble) {
-  round_trip("ad", TypeDescriptor::array(ValueType::DOUBLE),
-             arrow::Type::LIST, ValueType::ARRAY);
+  round_trip("ad", TypeDescriptor::array(ValueType::DOUBLE), arrow::Type::LIST,
+             ValueType::ARRAY);
 }
 
 TEST_F(TypeRoundTripTest, ArrayBool) {
-  round_trip("ab", TypeDescriptor::array(ValueType::BOOL),
-             arrow::Type::LIST, ValueType::ARRAY);
+  round_trip("ab", TypeDescriptor::array(ValueType::BOOL), arrow::Type::LIST,
+             ValueType::ARRAY);
 }
 
 TEST_F(TypeRoundTripTest, ArrayString) {
-  round_trip("as", TypeDescriptor::array(ValueType::STRING),
-             arrow::Type::LIST, ValueType::ARRAY);
+  round_trip("as", TypeDescriptor::array(ValueType::STRING), arrow::Type::LIST,
+             ValueType::ARRAY);
 }
 
 // --- Fixed-size array ---
@@ -124,8 +125,8 @@ TEST_F(TypeRoundTripTest, FixedSizeArrayInt32) {
 // --- MAP type ---
 
 TEST_F(TypeRoundTripTest, Map) {
-  round_trip("m", TypeDescriptor::properties(),
-             arrow::Type::MAP, ValueType::MAP);
+  round_trip("m", TypeDescriptor::properties(), arrow::Type::MAP,
+             ValueType::MAP);
 }
 
 // --- Arrow-incoming types that widen (e.g. INT8 -> INT32) ---
@@ -177,8 +178,7 @@ TEST_F(TypeRoundTripTest, FullSchemaRoundTrip) {
   fields.push_back(std::make_shared<Field>("s", ValueType::STRING));
   fields.push_back(
       std::make_shared<Field>("arr", TypeDescriptor::array(ValueType::INT32)));
-  fields.push_back(
-      std::make_shared<Field>("m", TypeDescriptor::properties()));
+  fields.push_back(std::make_shared<Field>("m", TypeDescriptor::properties()));
 
   auto schema = std::make_shared<Schema>("All", 0, fields);
   auto arrow_schema = Schema::to_arrow(schema);

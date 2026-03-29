@@ -406,44 +406,6 @@ class NodeArena {
     return {node_data, node_size, layout->get_schema_name()};
   }
 
-  /** Deallocate node and its strings/arrays. */
-  void deallocate_node(const NodeHandle& handle) const {
-    if (handle.is_null()) {
-      return;
-    }
-
-    if (!handle.schema_name.empty()) {
-      const std::shared_ptr<SchemaLayout> layout =
-          layout_registry_->get_layout(handle.schema_name);
-      if (layout) {
-        const char* data_start =
-            static_cast<const char*>(handle.ptr) + layout->get_data_offset();
-        for (const auto& field : layout->get_fields()) {
-          const char* field_ptr = data_start + field.offset;
-
-          if (is_string_type(field.type)) {
-            const auto* str_ref = reinterpret_cast<const StringRef*>(field_ptr);
-            if (!str_ref->is_null()) {
-              string_arena_->mark_for_deletion(*str_ref);
-            }
-          } else if (is_array_type(field.type)) {
-            const auto* arr_ref = reinterpret_cast<const ArrayRef*>(field_ptr);
-            if (!arr_ref->is_null()) {
-              array_arena_->mark_for_deletion(*arr_ref);
-            }
-          } else if (is_map_type(field.type)) {
-            const auto* map_ref = reinterpret_cast<const MapRef*>(field_ptr);
-            if (!map_ref->is_null()) {
-              map_arena_->mark_for_deletion(*map_ref);
-            }
-          }
-        }
-      }
-    }
-
-    mem_arena_->deallocate(handle.ptr);
-  }
-
   /** Get field value pointer. */
   static const char* get_value_ptr(const NodeHandle& handle,
                                    const std::shared_ptr<SchemaLayout>& layout,
@@ -630,132 +592,6 @@ class NodeArena {
     return map_arena_->allocate(capacity);
   }
 
-  /**
-   * Set a key-value pair in a MapRef.
-   * Handles COW growth when the map is full.
-   *
-   * @param ref       MapRef to set entry in (may be reallocated)
-   * @param key       Key string (stored in string_arena)
-   * @param value     Value to store
-   * @return Ok on success
-   */
-  arrow::Status set_map_entry(MapRef& ref, const std::string& key,
-                              const Value& value) {
-    if (ref.is_null()) {
-      ARROW_ASSIGN_OR_RAISE(ref, map_arena_->allocate());
-    }
-
-    ARROW_ASSIGN_OR_RAISE(StringRef key_ref,
-                          string_arena_->store_string_auto(key));
-
-    ValueType vtype = value.type();
-    const void* value_ptr = nullptr;
-    StringRef value_str_ref;
-    ArrayRef value_arr_ref;
-    MapRef value_map_ref;
-
-    switch (vtype) {
-      case ValueType::INT32: {
-        static int32_t tmp;
-        tmp = value.as_int32();
-        value_ptr = &tmp;
-        break;
-      }
-      case ValueType::INT64: {
-        static int64_t tmp;
-        tmp = value.as_int64();
-        value_ptr = &tmp;
-        break;
-      }
-      case ValueType::DOUBLE: {
-        static double tmp;
-        tmp = value.as_double();
-        value_ptr = &tmp;
-        break;
-      }
-      case ValueType::FLOAT: {
-        static float tmp;
-        tmp = value.as_float();
-        value_ptr = &tmp;
-        break;
-      }
-      case ValueType::BOOL: {
-        static bool tmp;
-        tmp = value.as_bool();
-        value_ptr = &tmp;
-        break;
-      }
-      case ValueType::STRING:
-      case ValueType::FIXED_STRING16:
-      case ValueType::FIXED_STRING32:
-      case ValueType::FIXED_STRING64: {
-        if (value.holds_string_ref()) {
-          value_str_ref = value.as_string_ref();
-        } else {
-          ARROW_ASSIGN_OR_RAISE(value_str_ref, string_arena_->store_string_auto(
-                                                   value.as_string()));
-        }
-        value_ptr = &value_str_ref;
-        vtype = ValueType::STRING;
-        break;
-      }
-      case ValueType::ARRAY: {
-        if (value.holds_array_ref()) {
-          value_arr_ref = value.as_array_ref();
-        } else {
-          return arrow::Status::Invalid(
-              "set_map_entry: raw arrays must be converted to ArrayRef first");
-        }
-        value_ptr = &value_arr_ref;
-        break;
-      }
-      case ValueType::MAP: {
-        if (value.holds_map_ref()) {
-          value_map_ref = value.as_map_ref();
-        } else {
-          return arrow::Status::Invalid(
-              "set_map_entry: maps must be converted to MapRef first");
-        }
-        value_ptr = &value_map_ref;
-        break;
-      }
-      default:
-        return arrow::Status::Invalid("set_map_entry: unsupported value type");
-    }
-
-    auto status = MapArena::set_entry(ref, key_ref, vtype, value_ptr);
-    if (status.IsCapacityError()) {
-      ARROW_ASSIGN_OR_RAISE(MapRef grown,
-                            map_arena_->copy(ref, ref.capacity()));
-      map_arena_->mark_for_deletion(ref);
-      ref = std::move(grown);
-      return MapArena::set_entry(ref, key_ref, vtype, value_ptr);
-    }
-    return status;
-  }
-
-  /** @deprecated Use MapRef::get_value(key) directly. */
-  [[deprecated("Use MapRef::get_value(key) directly")]]
-  static Value get_value(const MapRef& ref, const std::string& key) {
-    return ref.get_value(key);
-  }
-
-  /**
-   * Remove a key from a MapRef.
-   * Returns true if found and removed.
-   */
-  static bool remove_map_entry(MapRef& ref, const std::string& key) {
-    return MapArena::remove_entry(ref, key);
-  }
-
-  /**
-   * COW-copy a MapRef for versioning. The new ref has independent storage.
-   */
-  arrow::Result<MapRef> copy_map(const MapRef& src,
-                                 uint32_t extra_capacity = 0) {
-    return map_arena_->copy(src, extra_capacity);
-  }
-
   /** Reset arenas (keeps chunks). */
   void reset() {
     mem_arena_->reset();
@@ -869,7 +705,8 @@ class NodeArena {
         return arrow::Status::Invalid("Invalid field in apply_updates: ",
                                       upd.field->name());
       }
-      result.push_back({static_cast<uint16_t>(fl->index), upd.value, upd.op});
+      result.push_back(
+          {static_cast<uint16_t>(fl->index), upd.value, upd.op, upd.map_key});
     }
     return result;
   }
@@ -883,6 +720,13 @@ class NodeArena {
         return arrow::Status::IndexError("Field index out of bounds");
       }
       const FieldLayout& fl = layout->get_fields()[upd.field_idx];
+
+      if (upd.map_key.has_value()) {
+        ARROW_RETURN_NOT_OK(apply_map_key_update_non_versioned(
+            handle.ptr, layout, &fl, upd.map_key.value(), upd.value));
+        continue;
+      }
+
       ARROW_RETURN_NOT_OK(
           set_field_value_internal(handle.ptr, layout, &fl, upd.value, upd.op));
     }
@@ -936,6 +780,21 @@ class NodeArena {
     size_t offset = 0;
     for (const auto& upd : schema_updates) {
       const FieldLayout& fl = layout->get_fields()[upd.field_idx];
+
+      if (upd.map_key.has_value()) {
+        ARROW_ASSIGN_OR_RAISE(
+            Value map_val,
+            apply_map_key_update_versioned(handle, layout, fl,
+                                           upd.map_key.value(), upd.value));
+        assert(batch_memory != nullptr);
+        char* field_storage = batch_memory + offset;
+        offset += fl.size;
+        if (!write_value_to_memory(field_storage, fl.type, map_val)) {
+          return arrow::Status::TypeError("Type mismatch writing MAP field");
+        }
+        target_vi->updated_fields[upd.field_idx] = field_storage;
+        continue;
+      }
 
       if (upd.op == UpdateType::SET && upd.value.is_null()) {
         target_vi->updated_fields[upd.field_idx] = nullptr;
@@ -1060,6 +919,178 @@ class NodeArena {
     }
     return arrow::Status::OK();
   }
+
+  // ---- map-key update helpers -----------------------------------------------
+
+  /**
+   * Materialise a Value suitable for storing a scalar into a MapEntry.
+   * Converts std::string → StringRef via the string arena; primitives
+   * are returned unchanged.
+   */
+  arrow::Result<Value> materialise_map_value(const Value& value) {
+    if (value.type() == ValueType::STRING && value.holds_std_string()) {
+      ARROW_ASSIGN_OR_RAISE(
+          StringRef sr, string_arena_->store_string_auto(value.as_string()));
+      return Value{sr, ValueType::STRING};
+    }
+    return value;
+  }
+
+  /**
+   * Set a single key inside an existing (or new) MapRef.
+   * Handles COW growth when the map is full and string materialisation.
+   */
+  arrow::Status set_map_key(MapRef& ref, const std::string& key,
+                            const Value& value) {
+    if (ref.is_null()) {
+      ARROW_ASSIGN_OR_RAISE(ref, map_arena_->allocate());
+    }
+
+    ARROW_ASSIGN_OR_RAISE(Value mat, materialise_map_value(value));
+    ARROW_ASSIGN_OR_RAISE(StringRef key_ref,
+                          string_arena_->store_string_auto(key));
+
+    ValueType vtype = mat.type();
+    // For string-like types stored inside maps the entry type is STRING.
+    if (is_string_type(vtype)) vtype = ValueType::STRING;
+
+    const void* vptr = nullptr;
+    int32_t i32;
+    int64_t i64;
+    double d;
+    float f;
+    bool b;
+    StringRef sr;
+    ArrayRef ar;
+    MapRef mr;
+
+    switch (vtype) {
+      case ValueType::INT32:
+        i32 = mat.as_int32();
+        vptr = &i32;
+        break;
+      case ValueType::INT64:
+        i64 = mat.as_int64();
+        vptr = &i64;
+        break;
+      case ValueType::DOUBLE:
+        d = mat.as_double();
+        vptr = &d;
+        break;
+      case ValueType::FLOAT:
+        f = mat.as_float();
+        vptr = &f;
+        break;
+      case ValueType::BOOL:
+        b = mat.as_bool();
+        vptr = &b;
+        break;
+      case ValueType::STRING:
+        sr = mat.as_string_ref();
+        vptr = &sr;
+        break;
+      case ValueType::ARRAY:
+        if (!mat.holds_array_ref())
+          return arrow::Status::Invalid("map_key: raw arrays not supported");
+        ar = mat.as_array_ref();
+        vptr = &ar;
+        break;
+      case ValueType::MAP:
+        if (!mat.holds_map_ref())
+          return arrow::Status::Invalid("map_key: raw maps not supported");
+        mr = mat.as_map_ref();
+        vptr = &mr;
+        break;
+      default:
+        return arrow::Status::Invalid("map_key: unsupported value type");
+    }
+
+    auto status = MapArena::set_entry(ref, key_ref, vtype, vptr);
+    if (status.IsCapacityError()) {
+      ARROW_ASSIGN_OR_RAISE(MapRef grown,
+                            map_arena_->copy(ref, ref.capacity()));
+      map_arena_->mark_for_deletion(ref);
+      ref = std::move(grown);
+      return MapArena::set_entry(ref, key_ref, vtype, vptr);
+    }
+    return status;
+  }
+
+  /**
+   * Non-versioned map-key update: read current MapRef from base node,
+   * COW-copy, set the key, write back.
+   */
+  arrow::Status apply_map_key_update_non_versioned(
+      void* node_ptr, const std::shared_ptr<SchemaLayout>& layout,
+      const FieldLayout* fl, const std::string& key, const Value& value) {
+    if (!is_map_type(fl->type)) {
+      return arrow::Status::TypeError("map_key update on non-MAP field: ",
+                                      tundradb::to_string(fl->type));
+    }
+
+    auto* base = static_cast<char*>(node_ptr);
+    MapRef current;
+    if (is_field_set(base, fl->index)) {
+      Value old = layout->get_value(base, *fl);
+      if (!old.is_null() && old.holds_map_ref()) current = old.as_map_ref();
+    }
+
+    MapRef copy;
+    if (current.is_null()) {
+      ARROW_ASSIGN_OR_RAISE(copy, map_arena_->allocate());
+    } else {
+      ARROW_ASSIGN_OR_RAISE(copy, map_arena_->copy(current));
+      map_arena_->mark_for_deletion(current);
+    }
+
+    ARROW_RETURN_NOT_OK(set_map_key(copy, key, value));
+
+    if (!layout->set_field_value(base, *fl, Value{std::move(copy)})) {
+      return arrow::Status::Invalid(
+          "Failed to write MAP field after map_key update");
+    }
+    return arrow::Status::OK();
+  }
+
+  /**
+   * Versioned map-key update: read current MapRef from version chain or base,
+   * COW-copy, set the key, return the new MapRef as a Value.
+   */
+  arrow::Result<Value> apply_map_key_update_versioned(
+      const NodeHandle& handle, const std::shared_ptr<SchemaLayout>& layout,
+      const FieldLayout& fl, const std::string& key, const Value& value) {
+    if (!is_map_type(fl.type)) {
+      return arrow::Status::TypeError("map_key update on non-MAP field: ",
+                                      tundradb::to_string(fl.type));
+    }
+
+    MapRef current;
+    if (handle.is_versioned()) {
+      auto [found, ptr] =
+          get_field_ptr_from_version_chain(handle.version_info_, fl.index);
+      if (found && ptr) {
+        current = *reinterpret_cast<const MapRef*>(ptr);
+      } else if (!found) {
+        const char* base_ptr = layout->get_value_ptr(
+            static_cast<const char*>(handle.ptr), fl.index);
+        if (base_ptr) {
+          current = *reinterpret_cast<const MapRef*>(base_ptr);
+        }
+      }
+    }
+
+    MapRef copy;
+    if (current.is_null()) {
+      ARROW_ASSIGN_OR_RAISE(copy, map_arena_->allocate());
+    } else {
+      ARROW_ASSIGN_OR_RAISE(copy, map_arena_->copy(current));
+    }
+
+    ARROW_RETURN_NOT_OK(set_map_key(copy, key, value));
+    return Value{std::move(copy)};
+  }
+
+  // ---- end map-key update helpers -------------------------------------------
 
   /**
    * APPEND implementation for array fields (non-versioned path).

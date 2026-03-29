@@ -49,6 +49,7 @@ class Value {
   explicit Value(bool v) : type_(ValueType::BOOL), data_(v) {}
   Value(int32_t i) : type_(ValueType::INT32), data_(i) {}  // Non-explicit
   Value(int64_t v) : type_(ValueType::INT64), data_(v) {}  // Non-explicit
+  explicit Value(float f) : type_(ValueType::FLOAT), data_(f) {}
   Value(const char* s) : type_(ValueType::STRING), data_(std::string(s)) {}
 
   ValueType type() const { return type_; }
@@ -214,6 +215,8 @@ class Value {
         return Value{*reinterpret_cast<const int32_t*>(ptr)};
       case ValueType::DOUBLE:
         return Value{*reinterpret_cast<const double*>(ptr)};
+      case ValueType::FLOAT:
+        return Value{*reinterpret_cast<const float*>(ptr)};
       case ValueType::BOOL:
         return Value{*reinterpret_cast<const bool*>(ptr)};
       case ValueType::STRING:

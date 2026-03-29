@@ -7,6 +7,7 @@
 #include <memory>
 #include <unordered_map>
 
+#include "../include/field_update.hpp"
 #include "../include/logger.hpp"
 #include "../include/schema.hpp"
 #include "../include/types.hpp"
@@ -791,4 +792,150 @@ TEST_F(NodeTest, NodeArrayStorage) {
       Value::read_value_from_memory(ref.element_ptr(1), ref.elem_type());
   EXPECT_EQ(elem0.to_string(), "one");
   EXPECT_EQ(elem1.to_string(), "two");
+}
+
+// ---------------------------------------------------------------------------
+// MAP field tests (schema: UserWithMap  —  name, age, props: MAP)
+// ---------------------------------------------------------------------------
+
+class NodeMapFieldTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    registry_ = std::make_shared<SchemaRegistry>();
+
+    auto fields = std::vector<std::shared_ptr<arrow::Field>>{
+        arrow::field("name", arrow::utf8(), false),
+        arrow::field("age", arrow::int32(), true),
+        arrow::field("props", arrow::map(arrow::utf8(), arrow::binary()),
+                     true)};
+    ASSERT_TRUE(registry_->create("UserWithMap", arrow::schema(fields)).ok());
+
+    mgr_ = std::make_unique<NodeManager>(registry_);
+  }
+
+  std::shared_ptr<SchemaRegistry> registry_;
+  std::unique_ptr<NodeManager> mgr_;
+};
+
+TEST_F(NodeMapFieldTest, MapFieldIsNullWhenOmitted) {
+  auto node =
+      mgr_->create_node("UserWithMap", {{"name", Value{"Alice"}}}).ValueOrDie();
+
+  auto val = node->get_value("props");
+  ASSERT_TRUE(val.ok());
+  EXPECT_TRUE(val.ValueOrDie().is_null());
+}
+
+TEST_F(NodeMapFieldTest, SetMapKeyViUpdateFields) {
+  auto node =
+      mgr_->create_node("UserWithMap", {{"name", Value{"Bob"}}}).ValueOrDie();
+  auto schema = node->get_schema();
+  auto props = schema->get_field("props");
+
+  ASSERT_TRUE(
+      node->update_fields({FieldUpdate{props, Value{int32_t(42)},
+                                       UpdateType::SET, std::string("answer")}})
+          .ok());
+
+  auto val = node->get_value("props");
+  ASSERT_TRUE(val.ok());
+  Value v = val.ValueOrDie();
+  ASSERT_TRUE(v.holds_map_ref());
+  EXPECT_EQ(v.as_map_ref().get_value("answer").as_int32(), 42);
+}
+
+TEST_F(NodeMapFieldTest, SetMultipleMapKeys) {
+  auto node = mgr_->create_node("UserWithMap", {{"name", Value{"Carol"}},
+                                                {"age", Value{int32_t(30)}}})
+                  .ValueOrDie();
+  auto schema = node->get_schema();
+  auto props = schema->get_field("props");
+
+  ASSERT_TRUE(
+      node->update_fields({FieldUpdate{props, Value{3.14}, UpdateType::SET,
+                                       std::string("score")}})
+          .ok());
+  ASSERT_TRUE(
+      node->update_fields({FieldUpdate{props, Value{true}, UpdateType::SET,
+                                       std::string("active")}})
+          .ok());
+  ASSERT_TRUE(
+      node->update_fields({FieldUpdate{props, Value{"admin"}, UpdateType::SET,
+                                       std::string("role")}})
+          .ok());
+
+  auto m = node->get_value("props").ValueOrDie().as_map_ref();
+  EXPECT_EQ(m.count(), 3u);
+  EXPECT_DOUBLE_EQ(m.get_value("score").as_double(), 3.14);
+  EXPECT_EQ(m.get_value("active").as_bool(), true);
+  EXPECT_EQ(m.get_value("role").as_string(), "admin");
+}
+
+TEST_F(NodeMapFieldTest, OverwriteMapKey) {
+  auto node =
+      mgr_->create_node("UserWithMap", {{"name", Value{"Dave"}}}).ValueOrDie();
+  auto schema = node->get_schema();
+  auto props = schema->get_field("props");
+
+  ASSERT_TRUE(
+      node->update_fields({FieldUpdate{props, Value{int32_t(1)},
+                                       UpdateType::SET, std::string("x")}})
+          .ok());
+  EXPECT_EQ(node->get_value("props")
+                .ValueOrDie()
+                .as_map_ref()
+                .get_value("x")
+                .as_int32(),
+            1);
+
+  ASSERT_TRUE(
+      node->update_fields({FieldUpdate{props, Value{int32_t(99)},
+                                       UpdateType::SET, std::string("x")}})
+          .ok());
+  EXPECT_EQ(node->get_value("props")
+                .ValueOrDie()
+                .as_map_ref()
+                .get_value("x")
+                .as_int32(),
+            99);
+}
+
+TEST_F(NodeMapFieldTest, MixedScalarAndMapKeyUpdates) {
+  auto node = mgr_->create_node("UserWithMap", {{"name", Value{"Frank"}},
+                                                {"age", Value{int32_t(20)}}})
+                  .ValueOrDie();
+  auto schema = node->get_schema();
+  auto age = schema->get_field("age");
+  auto props = schema->get_field("props");
+
+  // Update both a scalar field and a map key in one batch
+  ASSERT_TRUE(
+      node->update_fields({FieldUpdate{age, Value{int32_t(21)}, UpdateType::SET,
+                                       std::nullopt},
+                           FieldUpdate{props, Value{100.0}, UpdateType::SET,
+                                       std::string("score")}})
+          .ok());
+
+  EXPECT_EQ(node->get_value("age").ValueOrDie().as_int32(), 21);
+  EXPECT_DOUBLE_EQ(node->get_value("props")
+                       .ValueOrDie()
+                       .as_map_ref()
+                       .get_value("score")
+                       .as_double(),
+                   100.0);
+}
+
+TEST_F(NodeMapFieldTest, GetValueMissingMapKeyReturnsNull) {
+  auto node =
+      mgr_->create_node("UserWithMap", {{"name", Value{"Grace"}}}).ValueOrDie();
+  auto schema = node->get_schema();
+  auto props = schema->get_field("props");
+
+  ASSERT_TRUE(
+      node->update_fields({FieldUpdate{props, Value{int32_t(1)},
+                                       UpdateType::SET, std::string("a")}})
+          .ok());
+
+  auto m = node->get_value("props").ValueOrDie().as_map_ref();
+  EXPECT_TRUE(m.get_value("nonexistent").is_null());
 }
