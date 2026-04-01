@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "../include/arrow_map_union_types.hpp"
 #include "../include/core.hpp"
 #include "../include/field_update.hpp"
 #include "../include/logger.hpp"
@@ -605,8 +606,9 @@ TEST_F(WhereExpressionTest, TraversalWhereCombinations3) {
 
 TEST_F(WhereExpressionTest, QueryMaterializesMapColumn) {
   auto name_field = arrow::field("name", arrow::utf8());
+  auto map_value_type = map_union_value_type();
   auto props_field =
-      arrow::field("props", arrow::map(arrow::utf8(), arrow::binary()));
+      arrow::field("props", arrow::map(arrow::utf8(), map_value_type));
   auto map_schema = arrow::schema({name_field, props_field});
   db_->get_schema_registry()->create("MapUser", map_schema).ValueOrDie();
 
@@ -639,8 +641,9 @@ TEST_F(WhereExpressionTest, QueryMaterializesMapColumn) {
 
 TEST_F(WhereExpressionTest, QueryFiltersByMapProperty) {
   auto name_field = arrow::field("name", arrow::utf8());
+  auto map_value_type = map_union_value_type();
   auto props_field =
-      arrow::field("props", arrow::map(arrow::utf8(), arrow::binary()));
+      arrow::field("props", arrow::map(arrow::utf8(), map_value_type));
   auto map_schema = arrow::schema({name_field, props_field});
   db_->get_schema_registry()->create("MapUserFilter", map_schema).ValueOrDie();
 

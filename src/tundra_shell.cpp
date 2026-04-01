@@ -26,6 +26,7 @@
 #include "TundraQLBaseVisitor.h"
 #include "TundraQLLexer.h"
 #include "TundraQLParser.h"
+#include "arrow_map_union_types.hpp"
 #include "core.hpp"
 #include "linenoise.h"
 #include "logger.hpp"
@@ -136,8 +137,9 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
       } else if (field_type == "FLOAT64") {
         arrow_type = arrow::float64();
       } else if (field_type == "MAP") {
-        // MAP is serialized as map<utf8, binary> in Arrow.
-        arrow_type = arrow::map(arrow::utf8(), arrow::binary());
+        // MAP is represented as map<utf8, dense_union<...>>.
+        arrow_type =
+            arrow::map(arrow::utf8(), tundradb::map_union_value_type());
       } else {
         throw std::runtime_error("Unsupported data type: " + field_type);
       }

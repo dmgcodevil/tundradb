@@ -819,6 +819,11 @@ class NodeArena {
               ArrayRef arr_ref,
               store_raw_array(fl.type_desc, upd.value.as_raw_array()));
           storage_value = Value{std::move(arr_ref)};
+        } else if (upd.value.type() == ValueType::MAP &&
+                   upd.value.holds_raw_map()) {
+          ARROW_ASSIGN_OR_RAISE(MapRef map_ref,
+                                store_raw_map(upd.value.as_raw_map()));
+          storage_value = Value{std::move(map_ref)};
         }
       }
 
@@ -911,6 +916,16 @@ class NodeArena {
       return arrow::Status::OK();
     }
 
+    // Handle map storage: std::map<std::string, Value> -> MapRef via arena
+    if (value.type() == ValueType::MAP && value.holds_raw_map()) {
+      ARROW_ASSIGN_OR_RAISE(MapRef map_ref, store_raw_map(value.as_raw_map()));
+      if (!layout->set_field_value(static_cast<char*>(node_ptr), *field_layout,
+                                   Value{std::move(map_ref)})) {
+        return arrow::Status::Invalid("Failed to write map field value");
+      }
+      return arrow::Status::OK();
+    }
+
     // Value already holds arena-backed ref (StringRef / ArrayRef) or primitive
     if (!layout->set_field_value(static_cast<char*>(node_ptr), *field_layout,
                                  value)) {
@@ -923,7 +938,7 @@ class NodeArena {
 
   /**
    * Materialise a Value suitable for storing a scalar into a MapEntry.
-   * Converts std::string → StringRef via the string arena; primitives
+   * Converts std::string -> StringRef via the string arena; primitives
    * are returned unchanged.
    */
   arrow::Result<Value> materialise_map_value(const Value& value) {
@@ -1361,6 +1376,23 @@ class NodeArena {
     }
 
     header->length = count;
+    return ref;
+  }
+
+  /**
+   * Convert a raw map (std::map<std::string, Value>) to an arena-backed MapRef.
+   *
+   * @param entries Raw key/value pairs
+   * @return Ok(MapRef) or Error with reason (e.g. allocation failure)
+   */
+  arrow::Result<MapRef> store_raw_map(
+      const std::map<std::string, Value>& entries) {
+    ARROW_ASSIGN_OR_RAISE(
+        MapRef ref,
+        map_arena_->allocate(static_cast<uint32_t>(entries.size())));
+    for (const auto& [key, val] : entries) {
+      ARROW_RETURN_NOT_OK(set_nested_map_key(ref, key, val));
+    }
     return ref;
   }
 

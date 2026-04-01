@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "arrow_map_union_types.hpp"
 #include "file_utils.hpp"
 #include "json.hpp"
 #include "llvm/ADT/SmallVector.h"
@@ -175,6 +176,9 @@ inline arrow::Result<FieldMetadata> ArrowFieldToMetadata(
       result.fixed_size = static_cast<uint32_t>(fsl_type->list_size());
       break;
     }
+    case arrow::Type::MAP:
+      result.type = ValueType::MAP;
+      break;
     default:
       return arrow::Status::NotImplemented("Unsupported Arrow type: ",
                                            dt->ToString());
@@ -230,6 +234,8 @@ inline arrow::Result<std::shared_ptr<arrow::Field>> metadata_to_arrow_field(
     } else {
       type = arrow::list(arrow::field("item", elem_dt));
     }
+  } else if (metadata.type == ValueType::MAP) {
+    type = arrow::map(arrow::utf8(), map_union_value_type());
   } else {
     type = scalar_vt_to_arrow(metadata.type);
     if (!type) {
@@ -485,16 +491,21 @@ class MetadataManager {
 
   arrow::Result<bool> initialize() const;
 
-  arrow::Result<std::string> write_manifest(const Manifest &manifest) const;
-  arrow::Result<Manifest> read_manifest(const std::string &id) const;
+  [[nodiscard]] arrow::Result<std::string> write_manifest(
+      const Manifest &manifest) const;
+  [[nodiscard]] arrow::Result<Manifest> read_manifest(
+      const std::string &id) const;
 
-  arrow::Result<std::string> write_metadata(const Metadata &metadata) const;
-  arrow::Result<Metadata> read_metadata(const std::string &path) const;
+  [[nodiscard]] arrow::Result<std::string> write_metadata(
+      const Metadata &metadata) const;
+  [[nodiscard]] arrow::Result<Metadata> read_metadata(
+      const std::string &path) const;
 
-  arrow::Result<std::string> write_db_info(const DatabaseInfo &db_info) const;
-  arrow::Result<DatabaseInfo> read_db_info() const;
+  [[nodiscard]] arrow::Result<std::string> write_db_info(
+      const DatabaseInfo &db_info) const;
+  [[nodiscard]] arrow::Result<DatabaseInfo> read_db_info() const;
 
-  arrow::Result<Metadata> load_current_metadata() const;
+  [[nodiscard]] arrow::Result<Metadata> load_current_metadata() const;
 
   const std::string &get_metadata_dir() const;
 

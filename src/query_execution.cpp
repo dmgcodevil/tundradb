@@ -3,6 +3,7 @@
 #include <ranges>
 #include <unordered_set>
 
+#include "arrow_map_union_types.hpp"
 #include "arrow_utils.hpp"
 #include "edge_store.hpp"
 #include "logger.hpp"
@@ -47,88 +48,89 @@ arrow::Result<std::string> ensure_edge_shadow_schema(
 }
 
 /**
- * @brief Decode one MAP item payload from Arrow `binary` into a `Value`.
+ * @brief Decode one MAP item from Arrow dense-union storage.
  *
- * The payload format matches `encode_map_value_binary()`:
- * - first byte: `ValueType` tag
- * - remaining bytes: type-specific payload
- *   - numeric/bool: POD bytes
- *   - string/complex fallback: uint32 length + raw bytes
+ * This helper converts a single value at @p idx from a MAP item array
+ * (`DenseUnionArray`) into the engine `Value` representation.
+ *
+ * Assumptions:
+ * - `items` must be a dense union matching `map_union_value_type()`.
+ * - Type-code constants (`kMapUnion*`) are the canonical mapping.
  *
  * Return contract:
- * - returns `optional<Value>` with a value on successful decode
- * - returns empty optional for empty/invalid/truncated payload (treated as NULL)
- * - reserves `Status` errors for exceptional decode failures
+ * - `optional<Value>{}` for null or missing item payload.
+ * - concrete `Value` for supported union variants.
+ * - `Status::Invalid` for type/layout mismatches or unknown type codes.
  */
-arrow::Result<std::optional<Value>> decode_map_item_binary(const uint8_t* data,
-                                                           const int32_t size) {
-  if (!data || size <= 0) {
+arrow::Result<std::optional<Value>> decode_map_item_union(
+    const std::shared_ptr<arrow::Array>& items, const int64_t idx) {
+  auto dense = std::dynamic_pointer_cast<arrow::DenseUnionArray>(items);
+  if (!dense) {
+    return arrow::Status::Invalid(
+        "MAP item array is not DenseUnionArray for union decoding");
+  }
+  if (dense->IsNull(idx)) {
     return std::optional<Value>{};
   }
-  const auto type = static_cast<ValueType>(data[0]);
-  const uint8_t* p = data + 1;
-  int32_t rem = size - 1;
+  const int8_t type_code = dense->type_code(idx);
+  const int child_id = dense->child_id(idx);
+  const int64_t value_offset = dense->value_offset(idx);
+  auto child = dense->field(child_id);
 
-  auto read_len_prefixed_string = [&](std::string& out) -> bool {
-    if (rem < static_cast<int32_t>(sizeof(uint32_t))) return false;
-    uint32_t len = 0;
-    std::memcpy(&len, p, sizeof(uint32_t));
-    p += sizeof(uint32_t);
-    rem -= sizeof(uint32_t);
-    if (rem < static_cast<int32_t>(len)) return false;
-    out.assign(reinterpret_cast<const char*>(p), len);
-    return true;
-  };
-
-  switch (type) {
-    case ValueType::INT32: {
-      if (rem < static_cast<int32_t>(sizeof(int32_t)))
-        return std::optional<Value>{};
-      int32_t v = 0;
-      std::memcpy(&v, p, sizeof(int32_t));
-      return Value(v);
+  switch (type_code) {
+    case kMapUnionInt32: {
+      auto arr = std::dynamic_pointer_cast<arrow::Int32Array>(child);
+      if (!arr || arr->IsNull(value_offset)) return std::optional<Value>{};
+      return Value(arr->Value(value_offset));
     }
-    case ValueType::INT64: {
-      if (rem < static_cast<int32_t>(sizeof(int64_t)))
-        return std::optional<Value>{};
-      int64_t v = 0;
-      std::memcpy(&v, p, sizeof(int64_t));
-      return Value(v);
+    case kMapUnionInt64: {
+      auto arr = std::dynamic_pointer_cast<arrow::Int64Array>(child);
+      if (!arr || arr->IsNull(value_offset)) return std::optional<Value>{};
+      return Value(arr->Value(value_offset));
     }
-    case ValueType::FLOAT: {
-      if (rem < static_cast<int32_t>(sizeof(float)))
-        return std::optional<Value>{};
-      float v = 0.0F;
-      std::memcpy(&v, p, sizeof(float));
-      return Value(v);
+    case kMapUnionFloat: {
+      auto arr = std::dynamic_pointer_cast<arrow::FloatArray>(child);
+      if (!arr || arr->IsNull(value_offset)) return std::optional<Value>{};
+      return Value(arr->Value(value_offset));
     }
-    case ValueType::DOUBLE: {
-      if (rem < static_cast<int32_t>(sizeof(double)))
-        return std::optional<Value>{};
-      double v = 0.0;
-      std::memcpy(&v, p, sizeof(double));
-      return Value(v);
+    case kMapUnionDouble: {
+      auto arr = std::dynamic_pointer_cast<arrow::DoubleArray>(child);
+      if (!arr || arr->IsNull(value_offset)) return std::optional<Value>{};
+      return Value(arr->Value(value_offset));
     }
-    case ValueType::BOOL: {
-      if (rem < 1) return std::optional<Value>{};
-      return Value(*p != 0);
+    case kMapUnionBool: {
+      auto arr = std::dynamic_pointer_cast<arrow::BooleanArray>(child);
+      if (!arr || arr->IsNull(value_offset)) return std::optional<Value>{};
+      return Value(arr->Value(value_offset));
     }
-    case ValueType::STRING:
-    case ValueType::FIXED_STRING16:
-    case ValueType::FIXED_STRING32:
-    case ValueType::FIXED_STRING64:
-    case ValueType::ARRAY:
-    case ValueType::MAP:
-    case ValueType::NA:
-    default: {
-      std::string s;
-      if (!read_len_prefixed_string(s)) return std::optional<Value>{};
-      return Value(s);
+    case kMapUnionString: {
+      auto arr = std::dynamic_pointer_cast<arrow::StringArray>(child);
+      if (!arr || arr->IsNull(value_offset)) return std::optional<Value>{};
+      return Value(arr->GetString(value_offset));
     }
+    default:
+      return arrow::Status::Invalid("Unsupported MAP union type code: ",
+                                    static_cast<int>(type_code));
   }
 }
 
-arrow::Result<std::shared_ptr<arrow::Array>> extract_map_key_array(
+/**
+ * @brief Project one key from a MAP column into a flat Arrow array.
+ *
+ * For each row in @p map_column, this function finds `key_name` in the row's
+ * map entries, decodes the corresponding dense-union item, and emits one output
+ * value (or null if key not present / value null / row map null).
+ *
+ * Output typing:
+ * - Chooses a dominant `ValueType` from observed non-null values.
+ * - If mixed concrete types are observed, falls back to string output.
+ * - If all outputs are null/missing, returns a Null array.
+ *
+ * Preconditions:
+ * - `map_column` chunks must have `arrow::Type::MAP`.
+ * - MAP item type must be `arrow::Type::DENSE_UNION`.
+ */
+arrow::Result<std::shared_ptr<arrow::Array>> extract_map_values_for_key(
     const std::shared_ptr<arrow::ChunkedArray>& map_column,
     const std::string& key_name) {
   std::vector<std::optional<Value>> decoded_values;
@@ -142,7 +144,12 @@ arrow::Result<std::shared_ptr<arrow::Array>> extract_map_key_array(
     }
     auto map_arr = std::static_pointer_cast<arrow::MapArray>(chunk);
     auto keys = std::static_pointer_cast<arrow::StringArray>(map_arr->keys());
-    auto items = std::static_pointer_cast<arrow::BinaryArray>(map_arr->items());
+    auto items = map_arr->items();
+    if (items->type_id() != arrow::Type::DENSE_UNION) {
+      return arrow::Status::Invalid(
+          "Unsupported MAP item type for nested projection: ",
+          items->type()->ToString());
+    }
 
     for (int64_t row = 0; row < map_arr->length(); ++row) {
       if (map_arr->IsNull(row)) {
@@ -158,9 +165,7 @@ arrow::Result<std::shared_ptr<arrow::Array>> extract_map_key_array(
         if (items->IsNull(idx)) {
           hit = std::nullopt;
         } else {
-          int32_t bin_len = 0;
-          const uint8_t* bin_ptr = items->GetValue(idx, &bin_len);
-          ARROW_ASSIGN_OR_RAISE(hit, decode_map_item_binary(bin_ptr, bin_len));
+          ARROW_ASSIGN_OR_RAISE(hit, decode_map_item_union(items, idx));
         }
         break;
       }
@@ -259,6 +264,21 @@ arrow::Result<std::shared_ptr<arrow::Array>> extract_map_key_array(
   }
 }
 
+/**
+ * @brief Materialize one-level nested MAP projections requested by SELECT.
+ *
+ * Scans SELECT fields for dotted paths that are not already present in the
+ * result table (e.g. `u.props.role`), extracts values from base MAP columns,
+ * and appends synthesized columns to the table.
+ *
+ * Current scope:
+ * - Supports one-level nested map lookup only (`nested_path().size() == 1`).
+ * - Ignores unsupported/select fields that are already materialized.
+ *
+ * @param select Parsed SELECT clause.
+ * @param table Base result table.
+ * @return Table enriched with derived nested MAP columns.
+ */
 arrow::Result<std::shared_ptr<arrow::Table>> enrich_nested_select_fields(
     const std::shared_ptr<Select>& select,
     std::shared_ptr<arrow::Table> table) {
@@ -276,8 +296,8 @@ arrow::Result<std::shared_ptr<arrow::Table>> enrich_nested_select_fields(
     auto base = table->GetColumnByName(base_col);
     if (!base || base->type()->id() != arrow::Type::MAP) continue;
 
-    ARROW_ASSIGN_OR_RAISE(auto arr,
-                          extract_map_key_array(base, parsed.nested_path()[0]));
+    ARROW_ASSIGN_OR_RAISE(
+        auto arr, extract_map_values_for_key(base, parsed.nested_path()[0]));
     auto add_res =
         table->AddColumn(table->num_columns(), arrow::field(sf, arr->type()),
                          std::make_shared<arrow::ChunkedArray>(arr));

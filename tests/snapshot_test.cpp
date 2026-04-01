@@ -6,7 +6,9 @@
 #include <string>
 #include <thread>
 
+#include "../include/arrow_map_union_types.hpp"
 #include "../include/core.hpp"
+#include "../include/field_update.hpp"
 #include "../include/logger.hpp"
 
 using namespace std::string_literals;
@@ -35,6 +37,23 @@ void create_user_schema(Database& db) {
   auto schema = arrow::schema({name_field, age_field});
 
   db.get_schema_registry()->create("users", schema).ValueOrDie();
+}
+
+void create_user_map_schema(Database& db) {
+  auto map_value_type = map_union_value_type();
+  auto name_field = arrow::field("name", arrow::utf8());
+  auto props_field =
+      arrow::field("props", arrow::map(arrow::utf8(), map_value_type));
+  auto schema = arrow::schema({name_field, props_field});
+  db.get_schema_registry()->create("users_map", schema).ValueOrDie();
+}
+
+void create_user_array_schema(Database& db) {
+  auto name_field = arrow::field("name", arrow::utf8());
+  auto tags_field =
+      arrow::field("tags", arrow::list(arrow::field("item", arrow::utf8())));
+  auto schema = arrow::schema({name_field, tags_field});
+  db.get_schema_registry()->create("users_array", schema).ValueOrDie();
 }
 
 // Test fixture to handle setup and teardown
@@ -219,6 +238,135 @@ TEST_F(DatabaseSnapshotTest, SnapshotWithAdditionalData) {
   // Step 7: Get table and verify data - should have all 8 users
   auto table = new_db->get_table("users").ValueOrDie();
   verify_user_table(table, 8);
+}
+
+TEST_F(DatabaseSnapshotTest, SnapshotReloadPreservesMapValues) {
+  auto db = create_test_database();
+  ASSERT_TRUE(db->initialize().ValueOrDie());
+  create_user_map_schema(*db);
+
+  auto node =
+      db->create_node("users_map", {{"name", Value{"Alice"}}}).ValueOrDie();
+  auto props = db->get_schema_registry()
+                   ->get("users_map")
+                   .ValueOrDie()
+                   ->get_field("props");
+  ASSERT_NE(props, nullptr);
+  auto update_res = node->update_fields(
+      {FieldUpdate{props, Value{int32_t(42)}, UpdateType::SET, {"score"}},
+       FieldUpdate{props, Value{"admin"}, UpdateType::SET, {"role"}}});
+  ASSERT_TRUE(update_res.ok()) << update_res.status().ToString();
+
+  auto snapshot = db->create_snapshot().ValueOrDie();
+  ASSERT_TRUE(snapshot.id != 0);
+
+  db.reset();
+  auto new_db = create_test_database();
+  create_user_map_schema(*new_db);
+  ASSERT_TRUE(new_db->initialize().ValueOrDie());
+
+  auto restored = new_db->get_node_manager()->get_node("users_map", 0);
+  ASSERT_TRUE(restored.ok()) << restored.status().ToString();
+  auto props_value = restored.ValueOrDie()->get_value("props");
+  ASSERT_TRUE(props_value.ok()) << props_value.status().ToString();
+  ASSERT_EQ(props_value.ValueOrDie().type(), ValueType::MAP);
+
+  const auto map = props_value.ValueOrDie().as_map_ref();
+  EXPECT_EQ(map.get_value("score").as_int32(), 42);
+  EXPECT_EQ(map.get_value("role").as_string(), "admin");
+}
+
+TEST_F(DatabaseSnapshotTest, SnapshotReloadPreservesArrayValues) {
+  auto db = create_test_database();
+  ASSERT_TRUE(db->initialize().ValueOrDie());
+  create_user_array_schema(*db);
+
+  auto node =
+      db->create_node("users_array", {{"name", Value{"Alice"}}}).ValueOrDie();
+  auto tags = db->get_schema_registry()
+                  ->get("users_array")
+                  .ValueOrDie()
+                  ->get_field("tags");
+  ASSERT_NE(tags, nullptr);
+  auto update_res = node->update(
+      tags, Value(std::vector<Value>{Value{"engineer"}, Value{"graph"}}));
+  ASSERT_TRUE(update_res.ok()) << update_res.status().ToString();
+
+  auto snapshot = db->create_snapshot().ValueOrDie();
+  ASSERT_TRUE(snapshot.id != 0);
+
+  db.reset();
+  auto new_db = create_test_database();
+  create_user_array_schema(*new_db);
+  ASSERT_TRUE(new_db->initialize().ValueOrDie());
+
+  auto restored = new_db->get_node_manager()->get_node("users_array", 0);
+  ASSERT_TRUE(restored.ok()) << restored.status().ToString();
+  auto tags_value = restored.ValueOrDie()->get_value("tags");
+  ASSERT_TRUE(tags_value.ok()) << tags_value.status().ToString();
+  ASSERT_EQ(tags_value.ValueOrDie().type(), ValueType::ARRAY);
+  ASSERT_TRUE(tags_value.ValueOrDie().holds_array_ref());
+
+  const auto arr = tags_value.ValueOrDie().as_array_ref();
+  ASSERT_EQ(arr.length(), 2u);
+  EXPECT_EQ(Value::read_value_from_memory(arr.element_ptr(0), arr.elem_type())
+                .as_string(),
+            "engineer");
+  EXPECT_EQ(Value::read_value_from_memory(arr.element_ptr(1), arr.elem_type())
+                .as_string(),
+            "graph");
+}
+
+TEST_F(DatabaseSnapshotTest, SnapshotReloadPreservesEdgeSchemaProperties) {
+  auto db = create_test_database();
+  ASSERT_TRUE(db->initialize().ValueOrDie());
+
+  db->get_schema_registry()
+      ->create("User", arrow::schema({arrow::field("name", arrow::utf8())}))
+      .ValueOrDie();
+  db->get_schema_registry()
+      ->create("Company", arrow::schema({arrow::field("name", arrow::utf8())}))
+      .ValueOrDie();
+  ASSERT_TRUE(
+      db->register_edge_schema(
+            "WORKS_AT", {std::make_shared<Field>("since", ValueType::INT64),
+                         std::make_shared<Field>("role", ValueType::STRING)})
+          .ok());
+
+  db->create_node("User", {{"name", Value{"Alice"}}}).ValueOrDie();
+  db->create_node("Company", {{"name", Value{"Acme"}}}).ValueOrDie();
+  ASSERT_TRUE(db->connect(0, "WORKS_AT", 0,
+                          {{"since", Value{int64_t(2025)}},
+                           {"role", Value{"engineer"}}})
+                  .ok());
+  ASSERT_TRUE(db->create_snapshot().ok());
+
+  db.reset();
+  auto new_db = create_test_database();
+  ASSERT_TRUE(new_db->initialize().ValueOrDie());
+
+  auto q = Query::from("u:User")
+               .traverse("u", "WORKS_AT", "c:Company", TraverseType::Inner, "e")
+               .select({"u.name", "e.since", "e.role"})
+               .build();
+  auto qr = new_db->query(q);
+  ASSERT_TRUE(qr.ok()) << qr.status().ToString();
+  auto table = qr.ValueOrDie()->table();
+  ASSERT_EQ(table->num_rows(), 1);
+
+  auto since_col = table->GetColumnByName("e.since");
+  auto role_col = table->GetColumnByName("e.role");
+  ASSERT_NE(since_col, nullptr);
+  ASSERT_NE(role_col, nullptr);
+
+  auto since_arr =
+      std::static_pointer_cast<arrow::Int64Array>(since_col->chunk(0));
+  auto role_arr =
+      std::static_pointer_cast<arrow::StringArray>(role_col->chunk(0));
+  ASSERT_FALSE(since_arr->IsNull(0));
+  ASSERT_FALSE(role_arr->IsNull(0));
+  EXPECT_EQ(since_arr->Value(0), 2025);
+  EXPECT_EQ(role_arr->GetString(0), "engineer");
 }
 
 int main(int argc, char** argv) {

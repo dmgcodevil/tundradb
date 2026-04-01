@@ -3,15 +3,14 @@
 
 #include <array>
 #include <cassert>
-#include <cstring>
 #include <iostream>
+#include <map>
 #include <string>
 #include <variant>
 #include <vector>
 
 // Arrow includes for type conversion functions
 #include <arrow/api.h>
-#include <arrow/type.h>
 
 #include "array_ref.hpp"
 #include "map_ref.hpp"
@@ -40,6 +39,10 @@ class Value {
 
   // Arena-backed map (already allocated in MapArena)
   explicit Value(MapRef v) : type_(ValueType::MAP), data_(std::move(v)) {}
+
+  // Raw map data - will be converted to MapRef by NodeArena
+  explicit Value(std::map<std::string, Value> v)
+      : type_(ValueType::MAP), data_(std::move(v)) {}
 
   // Raw array data - will be converted to ArrayRef by NodeArena
   // (same pattern as std::string -> StringRef for strings)
@@ -92,6 +95,12 @@ class Value {
     return type_ == ValueType::MAP && std::holds_alternative<MapRef>(data_);
   }
 
+  // Check if the Value contains a raw map (std::map<std::string, Value>)
+  [[nodiscard]] bool holds_raw_map() const {
+    return type_ == ValueType::MAP &&
+           std::holds_alternative<std::map<std::string, Value>>(data_);
+  }
+
   // Check if the Value contains a raw array (std::vector<Value>)
   [[nodiscard]] bool holds_raw_array() const {
     return type_ == ValueType::ARRAY &&
@@ -104,6 +113,14 @@ class Value {
 
   std::vector<Value>& as_raw_array_mut() {
     return std::get<std::vector<Value>>(data_);
+  }
+
+  [[nodiscard]] const std::map<std::string, Value>& as_raw_map() const {
+    return get<std::map<std::string, Value>>();
+  }
+
+  std::map<std::string, Value>& as_raw_map_mut() {
+    return std::get<std::map<std::string, Value>>(data_);
   }
 
   arrow::Status append_element(Value element) {
@@ -197,6 +214,19 @@ class Value {
           result += "}";
           return result;
         }
+        if (holds_raw_map()) {
+          std::string result = "{";
+          bool first = true;
+          for (const auto& [k, v] : as_raw_map()) {
+            if (!first) result += ", ";
+            first = false;
+            result += k;
+            result += ": ";
+            result += v.to_string();
+          }
+          result += "}";
+          return result;
+        }
         return "{}";
       }
       default:
@@ -249,7 +279,8 @@ class Value {
  private:
   ValueType type_;
   std::variant<std::monostate, int32_t, int64_t, float, double, std::string,
-               StringRef, ArrayRef, MapRef, std::vector<Value>, bool>
+               StringRef, ArrayRef, MapRef, std::vector<Value>,
+               std::map<std::string, Value>, bool>
       data_;
 };
 

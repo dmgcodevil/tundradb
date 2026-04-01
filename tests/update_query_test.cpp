@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "../include/arrow_map_union_types.hpp"
 #include "../include/core.hpp"
 #include "../include/query.hpp"
 #include "../include/utils.hpp"
@@ -459,9 +460,10 @@ TEST_F(UpdateQueryTest, SequentialUpdatesAccumulate) {
 }
 
 TEST_F(UpdateQueryTest, UpdateByMatchSupportsMapKeySet) {
+  auto map_value_type = map_union_value_type();
   auto map_schema = arrow::schema({
       arrow::field("name", arrow::utf8()),
-      arrow::field("props", arrow::map(arrow::utf8(), arrow::binary())),
+      arrow::field("props", arrow::map(arrow::utf8(), map_value_type)),
   });
   db_->get_schema_registry()->create("MapUser", map_schema).ValueOrDie();
   db_->create_node("MapUser", {{"name", Value{"Nina"}}}).ValueOrDie();
@@ -496,9 +498,10 @@ TEST_F(UpdateQueryTest, UpdateByMatchSupportsMapKeySet) {
 
 TEST_F(UpdateQueryTest,
        UpdateByMatchNestedPathDepthGreaterThanOneNotImplemented) {
+  auto map_value_type = map_union_value_type();
   auto map_schema = arrow::schema({
       arrow::field("name", arrow::utf8()),
-      arrow::field("props", arrow::map(arrow::utf8(), arrow::binary())),
+      arrow::field("props", arrow::map(arrow::utf8(), map_value_type)),
   });
   db_->get_schema_registry()->create("MapUserDepth", map_schema).ValueOrDie();
   db_->create_node("MapUserDepth", {{"name", Value{"Nina"}}}).ValueOrDie();

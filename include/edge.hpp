@@ -82,6 +82,9 @@ class Edge {
   }
   [[nodiscard]] NodeHandle* get_handle() const { return handle_.get(); }
   [[nodiscard]] NodeArena* get_arena() const { return arena_.get(); }
+  [[nodiscard]] const std::unordered_map<std::string, Value>& get_data() const {
+    return data_;
+  }
 
   // --- Unified field access (via entity_ops) ---
 

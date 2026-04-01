@@ -7,6 +7,7 @@
 #include <llvm/ADT/SmallVector.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -147,8 +148,8 @@ arrow::Status append_array_to_list_builder(const ArrayRef& arr_ref,
 /**
  * @brief Appends a MapRef's contents to an Arrow MapBuilder.
  *
- * Map values are encoded into the map's binary item column.
- * Encoding format is internal and intended for round-trip within TundraDB.
+ * MAP values are represented as map<utf8, dense_union<...>> to preserve
+ * typed values in Arrow.
  *
  * @param map_ref The map reference to append.
  * @param map_builder The Arrow MapBuilder to append into.
@@ -156,6 +157,23 @@ arrow::Status append_array_to_list_builder(const ArrayRef& arr_ref,
  */
 arrow::Status append_map_to_map_builder(const MapRef& map_ref,
                                         arrow::MapBuilder* map_builder);
+
+/**
+ * @brief Converts a MAP dense-union item at @p idx into Value.
+ *
+ * Expects MAP item storage shaped like `map<utf8, dense_union<...>>`.
+ * Returns `std::nullopt` for null union slot or null child value.
+ */
+arrow::Result<std::optional<Value>> map_item_to_value(
+    const std::shared_ptr<arrow::Array>& items, int64_t idx);
+
+/**
+ * @brief Converts one array/list element at @p idx into Value.
+ *
+ * Returns `Value{}` for null element slots.
+ */
+arrow::Result<Value> array_element_to_value(
+    const std::shared_ptr<arrow::Array>& values, int64_t idx);
 
 /**
  * @brief Filters an Arrow table using a WhereExpr predicate.

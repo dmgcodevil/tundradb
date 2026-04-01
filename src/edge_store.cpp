@@ -108,22 +108,64 @@ arrow::Result<std::shared_ptr<Edge>> EdgeStore::create_edge(
 
 arrow::Result<bool> EdgeStore::add(const std::shared_ptr<Edge>& edge) {
   std::unique_lock<std::shared_mutex> lock(edges_mutex_);
+  auto edge_to_store = edge;
 
-  if (this->edges.find(edge->get_id()) != this->edges.end()) {
-    return arrow::Status::KeyError("Edge already exists with id=" +
-                                   std::to_string(edge->get_id()));
+  // Edges loaded from snapshots may arrive as schema-less map-backed objects.
+  // Rehydrate them into arena-backed typed edges when schema is available so
+  // EdgeView/Row materialization can read typed properties via pointers.
+  if (edge_to_store && !edge_to_store->has_schema()) {
+    auto schema_it = edge_schemas_.find(edge_to_store->get_type());
+    if (schema_it != edge_schemas_.end() && schema_it->second) {
+      auto schema = schema_it->second;
+      auto layout =
+          edge_layout_registry_->get_layout(edge_to_store->get_type());
+      if (!layout) {
+        return arrow::Status::Invalid("Missing edge layout for type: ",
+                                      edge_to_store->get_type());
+      }
+
+      auto handle =
+          std::make_unique<NodeHandle>(edge_arena_->allocate_node(layout));
+      if (handle->is_null()) {
+        return arrow::Status::OutOfMemory(
+            "Failed to allocate handle for restored edge");
+      }
+
+      for (const auto& field : schema->fields()) {
+        auto it = edge_to_store->get_data().find(field->name());
+        if (it == edge_to_store->get_data().end() || it->second.is_null()) {
+          continue;
+        }
+        ARROW_RETURN_NOT_OK(edge_arena_->set_field_value_v0(*handle, layout,
+                                                            field, it->second));
+      }
+
+      edge_to_store = std::make_shared<Edge>(
+          edge_to_store->get_id(), edge_to_store->get_source_id(),
+          edge_to_store->get_target_id(), edge_to_store->get_type(),
+          edge_to_store->get_created_ts(), std::move(handle), edge_arena_,
+          schema, layout);
+    }
   }
 
-  this->edges[edge->get_id()] = edge;
-  edge_ids_.insert(edge->get_id());
+  if (this->edges.find(edge_to_store->get_id()) != this->edges.end()) {
+    return arrow::Status::KeyError("Edge already exists with id=" +
+                                   std::to_string(edge_to_store->get_id()));
+  }
 
-  this->edges_by_type_[edge->get_type()].insert(edge->get_id());
-  this->outgoing_edges_[edge->get_source_id()].insert(edge->get_id());
-  this->incoming_edges_[edge->get_target_id()].insert(edge->get_id());
+  this->edges[edge_to_store->get_id()] = edge_to_store;
+  edge_ids_.insert(edge_to_store->get_id());
 
-  auto version_it = this->versions_.find(edge->get_type());
+  this->edges_by_type_[edge_to_store->get_type()].insert(
+      edge_to_store->get_id());
+  this->outgoing_edges_[edge_to_store->get_source_id()].insert(
+      edge_to_store->get_id());
+  this->incoming_edges_[edge_to_store->get_target_id()].insert(
+      edge_to_store->get_id());
+
+  auto version_it = this->versions_.find(edge_to_store->get_type());
   if (version_it == this->versions_.end()) {
-    this->versions_[edge->get_type()].store(1);
+    this->versions_[edge_to_store->get_type()].store(1);
   } else {
     version_it->second.fetch_add(1);
   }

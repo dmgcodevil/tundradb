@@ -8,14 +8,18 @@
 #include <parquet/file_reader.h>
 #include <uuid/uuid.h>
 
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <map>
+#include <optional>
 #include <random>
 #include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
+#include "arrow_utils.hpp"
 #include "json.hpp"
 #include "logger.hpp"
 #include "metadata.hpp"
@@ -24,6 +28,289 @@
 #include "table_info.hpp"
 
 namespace tundradb {
+
+namespace {
+// TODO(arrow-ipc): Delete binary MAP bridge helpers once persistence switches
+// fully to Arrow IPC.
+
+/**
+ * @brief Decode one MAP value from legacy binary payload format.
+ *
+ * This decoder is used when reading persisted MAP columns whose item type is
+ * `binary` (write-time bridge for Parquet compatibility). Payload layout:
+ * - byte 0: `ValueType` tag
+ * - remaining bytes: type-specific payload
+ *   - INT32/INT64/FLOAT/DOUBLE: raw POD bytes
+ *   - BOOL: single byte (`0` or non-zero)
+ *   - default/string-like: `uint32 length` + UTF-8 bytes
+ *
+ * Return contract:
+ * - returns `optional<Value>{}` for null/empty/truncated payloads
+ * - returns decoded `Value` on success
+ * - uses `Status` only for exceptional decode/setup failures
+ */
+// TODO(arrow-ipc): Delete; only used for Parquet binary MAP payloads.
+arrow::Result<std::optional<Value>> decode_map_item_binary(const uint8_t* data,
+                                                           const int32_t size) {
+  if (!data || size <= 0) {
+    return std::optional<Value>{};
+  }
+  const auto type = static_cast<ValueType>(data[0]);
+  const uint8_t* p = data + 1;
+  int32_t rem = size - 1;
+
+  auto read_len_prefixed_string = [&](std::string& out) -> bool {
+    if (rem < static_cast<int32_t>(sizeof(uint32_t))) return false;
+    uint32_t len = 0;
+    std::memcpy(&len, p, sizeof(uint32_t));
+    p += sizeof(uint32_t);
+    rem -= sizeof(uint32_t);
+    if (rem < static_cast<int32_t>(len)) return false;
+    out.assign(reinterpret_cast<const char*>(p), len);
+    return true;
+  };
+
+  switch (type) {
+    case ValueType::INT32: {
+      if (rem < static_cast<int32_t>(sizeof(int32_t)))
+        return std::optional<Value>{};
+      int32_t v = 0;
+      std::memcpy(&v, p, sizeof(int32_t));
+      return Value(v);
+    }
+    case ValueType::INT64: {
+      if (rem < static_cast<int32_t>(sizeof(int64_t)))
+        return std::optional<Value>{};
+      int64_t v = 0;
+      std::memcpy(&v, p, sizeof(int64_t));
+      return Value(v);
+    }
+    case ValueType::FLOAT: {
+      if (rem < static_cast<int32_t>(sizeof(float)))
+        return std::optional<Value>{};
+      float v = 0.0F;
+      std::memcpy(&v, p, sizeof(float));
+      return Value(v);
+    }
+    case ValueType::DOUBLE: {
+      if (rem < static_cast<int32_t>(sizeof(double)))
+        return std::optional<Value>{};
+      double v = 0.0;
+      std::memcpy(&v, p, sizeof(double));
+      return Value(v);
+    }
+    case ValueType::BOOL: {
+      if (rem < 1) return std::optional<Value>{};
+      return Value(*p != 0);
+    }
+    default: {
+      std::string s;
+      if (!read_len_prefixed_string(s)) return std::optional<Value>{};
+      return Value(s);
+    }
+  }
+}
+
+/**
+ * @brief Decode one MAP value from Arrow dense-union item storage.
+ *
+ * Converts the value at @p idx from a MAP item array into engine `Value` using
+ * canonical type codes defined in `arrow_map_union_types.hpp`.
+ *
+ * Preconditions:
+ * - `items` must be a `DenseUnionArray` shaped like `map_union_value_type()`.
+ *
+ * Return contract:
+ * - returns `optional<Value>{}` for null item slot or null child value
+ * - returns decoded `Value` for supported variants
+ * - returns `Status::Invalid` for mismatched layout or unknown type code
+ */
+arrow::Result<std::vector<Value>> decode_array_cell(
+    const std::shared_ptr<arrow::Array>& array_chunk, const int64_t row_idx) {
+  std::shared_ptr<arrow::Array> values;
+  int64_t begin = 0;
+  int64_t end = 0;
+
+  if (array_chunk->type_id() == arrow::Type::LIST) {
+    auto list = std::static_pointer_cast<arrow::ListArray>(array_chunk);
+    begin = list->value_offset(row_idx);
+    end = begin + list->value_length(row_idx);
+    values = list->values();
+  } else if (array_chunk->type_id() == arrow::Type::FIXED_SIZE_LIST) {
+    auto list =
+        std::static_pointer_cast<arrow::FixedSizeListArray>(array_chunk);
+    begin = list->value_offset(row_idx);
+    end = begin + list->value_length(row_idx);
+    values = list->values();
+  } else {
+    return arrow::Status::Invalid(
+        "decode_array_cell expected list chunk, got: ",
+        array_chunk->type()->ToString());
+  }
+
+  std::vector<Value> out;
+  out.reserve(static_cast<size_t>(end - begin));
+  for (int64_t i = begin; i < end; ++i) {
+    ARROW_ASSIGN_OR_RAISE(auto elem, array_element_to_value(values, i));
+    out.push_back(std::move(elem));
+  }
+  return out;
+}
+
+// TODO(arrow-ipc): Delete; only used for Parquet binary MAP payloads.
+std::string encode_map_value_binary(const Value& value) {
+  std::string out;
+  out.reserve(32);
+  out.push_back(static_cast<char>(value.type()));
+
+  auto append_pod = [&](const auto v) {
+    const size_t old_size = out.size();
+    out.resize(old_size + sizeof(v));
+    std::memcpy(out.data() + old_size, &v, sizeof(v));
+  };
+  auto append_bytes = [&](const char* data, const uint32_t len) {
+    append_pod(len);
+    if (len > 0 && data != nullptr) {
+      out.append(data, len);
+    }
+  };
+
+  switch (value.type()) {
+    case ValueType::INT32:
+      append_pod(value.as_int32());
+      break;
+    case ValueType::INT64:
+      append_pod(value.as_int64());
+      break;
+    case ValueType::FLOAT:
+      append_pod(value.as_float());
+      break;
+    case ValueType::DOUBLE:
+      append_pod(value.as_double());
+      break;
+    case ValueType::BOOL:
+      out.push_back(value.as_bool() ? '\x01' : '\x00');
+      break;
+    case ValueType::STRING:
+    case ValueType::FIXED_STRING16:
+    case ValueType::FIXED_STRING32:
+    case ValueType::FIXED_STRING64: {
+      const auto s = value.as_string();
+      append_bytes(s.data(), static_cast<uint32_t>(s.size()));
+      break;
+    }
+    default: {
+      const std::string repr = value.to_string();
+      append_bytes(repr.data(), static_cast<uint32_t>(repr.size()));
+      break;
+    }
+  }
+  return out;
+}
+
+// TODO(arrow-ipc): Delete; only used to down-convert dense-union MAP values
+// to Parquet-compatible binary items.
+arrow::Result<std::shared_ptr<arrow::Array>>
+convert_map_dense_union_chunk_to_binary(
+    const std::shared_ptr<arrow::Array>& chunk) {
+  auto map_arr = std::dynamic_pointer_cast<arrow::MapArray>(chunk);
+  if (!map_arr) {
+    return arrow::Status::Invalid("Expected MapArray chunk");
+  }
+  auto keys = std::dynamic_pointer_cast<arrow::StringArray>(map_arr->keys());
+  auto items = map_arr->items();
+  if (!keys || items->type_id() != arrow::Type::DENSE_UNION) {
+    return arrow::Status::Invalid(
+        "Expected MAP<utf8, dense_union<...>> for conversion");
+  }
+
+  auto key_builder = std::make_shared<arrow::StringBuilder>();
+  auto item_builder = std::make_shared<arrow::BinaryBuilder>();
+  arrow::MapBuilder map_builder(arrow::default_memory_pool(), key_builder,
+                                item_builder);
+
+  for (int64_t row = 0; row < map_arr->length(); ++row) {
+    if (map_arr->IsNull(row)) {
+      ARROW_RETURN_NOT_OK(map_builder.AppendNull());
+      continue;
+    }
+    ARROW_RETURN_NOT_OK(map_builder.Append());
+
+    const int64_t begin = map_arr->value_offset(row);
+    const int64_t end = begin + map_arr->value_length(row);
+    for (int64_t idx = begin; idx < end; ++idx) {
+      if (keys->IsNull(idx)) {
+        ARROW_RETURN_NOT_OK(key_builder->Append(""));
+      } else {
+        ARROW_RETURN_NOT_OK(key_builder->Append(keys->GetString(idx)));
+      }
+
+      if (items->IsNull(idx)) {
+        ARROW_RETURN_NOT_OK(item_builder->AppendNull());
+        continue;
+      }
+      ARROW_ASSIGN_OR_RAISE(auto decoded, map_item_to_value(items, idx));
+      if (!decoded.has_value()) {
+        ARROW_RETURN_NOT_OK(item_builder->AppendNull());
+      } else {
+        const std::string encoded = encode_map_value_binary(decoded.value());
+        ARROW_RETURN_NOT_OK(item_builder->Append(
+            reinterpret_cast<const uint8_t*>(encoded.data()),
+            static_cast<int32_t>(encoded.size())));
+      }
+    }
+  }
+
+  std::shared_ptr<arrow::Array> out;
+  ARROW_RETURN_NOT_OK(map_builder.Finish(&out));
+  return out;
+}
+
+// TODO(arrow-ipc): Delete; Arrow IPC path should write table as-is.
+arrow::Result<std::shared_ptr<arrow::Table>> prepare_table_for_parquet_write(
+    const std::shared_ptr<arrow::Table>& table) {
+  bool changed = false;
+  std::vector<std::shared_ptr<arrow::Field>> out_fields;
+  out_fields.reserve(table->num_columns());
+  std::vector<std::shared_ptr<arrow::ChunkedArray>> out_columns;
+  out_columns.reserve(table->num_columns());
+
+  for (int i = 0; i < table->num_columns(); ++i) {
+    const auto field = table->schema()->field(i);
+    const auto column = table->column(i);
+
+    if (field->type()->id() == arrow::Type::MAP) {
+      auto map_type = std::static_pointer_cast<arrow::MapType>(field->type());
+      if (map_type->item_type()->id() == arrow::Type::DENSE_UNION) {
+        changed = true;
+        std::vector<std::shared_ptr<arrow::Array>> converted_chunks;
+        converted_chunks.reserve(column->num_chunks());
+        for (int c = 0; c < column->num_chunks(); ++c) {
+          ARROW_ASSIGN_OR_RAISE(
+              auto converted,
+              convert_map_dense_union_chunk_to_binary(column->chunk(c)));
+          converted_chunks.push_back(std::move(converted));
+        }
+        out_fields.push_back(arrow::field(
+            field->name(), arrow::map(arrow::utf8(), arrow::binary()),
+            field->nullable()));
+        out_columns.push_back(
+            std::make_shared<arrow::ChunkedArray>(std::move(converted_chunks)));
+        continue;
+      }
+    }
+
+    out_fields.push_back(field);
+    out_columns.push_back(column);
+  }
+
+  if (!changed) {
+    return table;
+  }
+  return arrow::Table::Make(arrow::schema(std::move(out_fields)),
+                            std::move(out_columns));
+}
+}  // namespace
 
 Storage::Storage(std::string data_dir,
                  std::shared_ptr<SchemaRegistry> schema_registry,
@@ -73,8 +360,11 @@ arrow::Result<std::string> Storage::write_table(
                                  .compression(parquet::Compression::SNAPPY)
                                  ->build();
 
+  // TODO(arrow-ipc): Remove pre-write Parquet conversion bridge.
+  ARROW_ASSIGN_OR_RAISE(const auto table_to_write,
+                        prepare_table_for_parquet_write(table));
   ARROW_RETURN_NOT_OK(parquet::arrow::WriteTable(
-      *table, arrow::default_memory_pool(), output_file, chunk_size,
+      *table_to_write, arrow::default_memory_pool(), output_file, chunk_size,
       parquet_props, write_options));
   return file_path;
 }
@@ -107,6 +397,8 @@ arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(
       this->config_.get_shard_capacity(), shard_metadata.min_id,
       shard_metadata.max_id, shard_metadata.chunk_size,
       shard_metadata.schema_name, this->schema_registry_);
+  ARROW_ASSIGN_OR_RAISE(const auto schema, this->schema_registry_->get(
+                                               shard_metadata.schema_name));
 
   TableInfo table_info(table);
 
@@ -178,6 +470,67 @@ arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(
             int32_t value = typed_chunk->Value(chunk_loc.offset_in_chunk);
             node_data[column_name] = Value(value);
           }
+          break;
+        }
+        case arrow::Type::LIST:
+        case arrow::Type::FIXED_SIZE_LIST: {
+          if (chunk->IsNull(chunk_loc.offset_in_chunk)) {
+            node_data[column_name] = Value();
+            break;
+          }
+          ARROW_ASSIGN_OR_RAISE(
+              auto raw_array,
+              decode_array_cell(chunk, chunk_loc.offset_in_chunk));
+          node_data[column_name] = Value(std::move(raw_array));
+          break;
+        }
+        case arrow::Type::MAP: {
+          auto map_chunk = std::static_pointer_cast<arrow::MapArray>(chunk);
+          if (map_chunk->IsNull(chunk_loc.offset_in_chunk)) {
+            break;
+          }
+
+          auto keys =
+              std::static_pointer_cast<arrow::StringArray>(map_chunk->keys());
+          auto items = map_chunk->items();
+          // TODO(arrow-ipc): Remove binary decode branch once MAP items are
+          // read natively as dense-union from Arrow IPC.
+          const bool items_are_binary = items->type_id() == arrow::Type::BINARY;
+          const bool items_are_dense_union =
+              items->type_id() == arrow::Type::DENSE_UNION;
+          std::shared_ptr<arrow::BinaryArray> binary_items;
+          if (items_are_binary) {
+            binary_items = std::static_pointer_cast<arrow::BinaryArray>(items);
+          } else if (!items_are_dense_union) {
+            return arrow::Status::NotImplemented("Unsupported MAP item type: ",
+                                                 items->type()->ToString());
+          }
+
+          std::map<std::string, Value> raw_map;
+          const int64_t begin =
+              map_chunk->value_offset(chunk_loc.offset_in_chunk);
+          const int64_t end =
+              begin + map_chunk->value_length(chunk_loc.offset_in_chunk);
+          for (int64_t idx = begin; idx < end; ++idx) {
+            if (keys->IsNull(idx)) continue;
+            const std::string key = keys->GetString(idx);
+            if (items->IsNull(idx)) {
+              raw_map[key] = Value{};
+              continue;
+            }
+
+            std::optional<Value> decoded;
+            if (items_are_dense_union) {
+              ARROW_ASSIGN_OR_RAISE(decoded, map_item_to_value(items, idx));
+            } else {
+              int32_t bin_len = 0;
+              const uint8_t* bin_ptr = binary_items->GetValue(idx, &bin_len);
+              ARROW_ASSIGN_OR_RAISE(decoded,
+                                    decode_map_item_binary(bin_ptr, bin_len));
+            }
+            raw_map[key] = decoded.has_value() ? decoded.value() : Value{};
+          }
+          node_data[column_name] = Value(std::move(raw_map));
           break;
         }
         // Add more types as needed
