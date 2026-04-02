@@ -99,10 +99,43 @@ class EdgeStore {
 
   // --- Edge CRUD ---
 
+  /**
+   * Creates a new edge at runtime (user API / `connect`).
+   *
+   * - Assigns a fresh edge id from the store counter.
+   * - Sets `created_ts` to the current time.
+   * - If an edge schema is registered for `type`, allocates arena-backed
+   *   storage and writes `properties` into v0; otherwise the edge is
+   *   structural-only and `properties` must be empty.
+   *
+   * The returned edge is not in the store until you call `add()`.
+   */
   arrow::Result<std::shared_ptr<Edge>> create_edge(
       int64_t source_id, const std::string &type, int64_t target_id,
       std::unordered_map<std::string, Value> properties = {});
 
+  /**
+   * Reconstructs an edge from persistence (snapshot / Parquet reload).
+   *
+   * Use this when you already have the persisted identity and timestamps:
+   * - `id`, `source_id`, `target_id`, `created_ts` come from the file.
+   * - `properties` is the decoded row payload (same shape as `create_edge`).
+   *
+   * Differences from `create_edge`:
+   * - Does not allocate a new id; uses the given `id`.
+   * - Does not stamp `created_ts`; uses the given value.
+   * - Bumps the edge id counter if needed so future `create_edge` ids stay
+   *   strictly above restored ids (avoids collisions after reload).
+   *
+   * The returned edge is not in the store until you call `add()` (same as
+   * `create_edge`).
+   */
+  arrow::Result<std::shared_ptr<Edge>> restore_edge(
+      int64_t id, int64_t source_id, const std::string &type, int64_t target_id,
+      int64_t created_ts, std::unordered_map<std::string, Value> properties);
+
+  /** Inserts an edge produced by `create_edge` or `restore_edge` into indexes.
+   */
   arrow::Result<bool> add(const std::shared_ptr<Edge> &edge);
 
   arrow::Result<bool> remove(int64_t edge_id);

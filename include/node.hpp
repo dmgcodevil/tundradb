@@ -6,7 +6,6 @@
 #include <string>
 #include <unordered_map>
 
-#include "entity_ops.hpp"
 #include "logger.hpp"
 #include "node_arena.hpp"
 #include "node_view.hpp"
@@ -19,7 +18,6 @@ namespace tundradb {
 
 class Node {
  private:
-  std::unordered_map<std::string, Value> data_;
   std::unique_ptr<NodeHandle> handle_;
   std::shared_ptr<NodeArena> arena_;
   std::shared_ptr<Schema> schema_;
@@ -30,24 +28,16 @@ class Node {
   std::string schema_name;
 
   explicit Node(const int64_t id, std::string schema_name,
-                std::unordered_map<std::string, Value> initial_data,
                 std::unique_ptr<NodeHandle> handle = nullptr,
                 std::shared_ptr<NodeArena> arena = nullptr,
                 std::shared_ptr<Schema> schema = nullptr,
                 std::shared_ptr<SchemaLayout> layout = nullptr)
-      : data_(std::move(initial_data)),
-        handle_(std::move(handle)),
+      : handle_(std::move(handle)),
         arena_(std::move(arena)),
         schema_(std::move(schema)),
         layout_(std::move(layout)),
         id(id),
         schema_name(std::move(schema_name)) {}
-
-  ~Node() { data_.clear(); }
-
-  void add_field(const std::string &field_name, Value value) {
-    data_[field_name] = std::move(value);
-  }
 
   arrow::Result<const char *> get_value_ptr(
       const std::shared_ptr<Field> &field) const {
@@ -63,11 +53,14 @@ class Node {
     return {ptr, field->type()};
   }
 
-  // --- Unified field access (via entity_ops) ---
+  // --- Unified field access ---
 
   arrow::Result<Value> get_value(const std::shared_ptr<Field> &field) const {
-    return entity_ops::get_value(field, handle_.get(), arena_.get(), layout_,
-                                 data_);
+    if (!arena_ || !handle_) {
+      return arrow::Status::Invalid(
+          "get_value requires arena-backed node with valid handle");
+    }
+    return NodeArena::get_value(*handle_, layout_, field);
   }
 
   [[deprecated]]
@@ -79,11 +72,14 @@ class Node {
   [[nodiscard]] NodeHandle *get_handle() const { return handle_.get(); }
   [[nodiscard]] NodeArena *get_arena() const { return arena_.get(); }
 
-  // --- Unified update (via entity_ops) ---
+  // --- Unified update ---
 
   arrow::Result<bool> update_fields(const std::vector<FieldUpdate> &updates) {
-    return entity_ops::apply_updates(handle_.get(), arena_.get(), layout_,
-                                     data_, updates);
+    if (!arena_ || !handle_) {
+      return arrow::Status::Invalid(
+          "update_fields requires arena-backed node with valid handle");
+    }
+    return arena_->apply_updates(*handle_, layout_, updates);
   }
 
   arrow::Result<bool> update(const std::shared_ptr<Field> &field, Value value,
@@ -237,54 +233,35 @@ class NodeManager {
       id = data.at("id").as_int64();
     }
 
-    if (use_node_arena_) {
-      NodeHandle node_handle = node_arena_->allocate_node(layout_);
-
-      // Initial population of v0: write directly to base node
-      // Use set_field_value_v0 for all fields (doesn't create versions)
-      ARROW_RETURN_NOT_OK(node_arena_->set_field_value_v0(
-          node_handle, layout_, schema_->get_field("id"), Value{id}));
-
-      for (const auto &field : schema_->fields()) {
-        if (field->name() == "id") continue;
-
-        Value value;
-        if (data.contains(field->name())) {
-          value = data.find(field->name())->second;
-        }  // else: Value() = NULL
-
-        ARROW_RETURN_NOT_OK(node_arena_->set_field_value_v0(
-            node_handle, layout_, field, value));
-      }
-
-      auto node = std::make_shared<Node>(
-          id, schema_name, EMPTY_DATA,
-          std::make_unique<NodeHandle>(std::move(node_handle)), node_arena_,
-          schema_, layout_);
-      nodes_[schema_name][id] = node;
-      return node;
-    } else {
-      std::unordered_map<std::string, Value> normalized_data;
-      normalized_data["id"] = Value{id};
-
-      for (const auto &field : schema_->fields()) {
-        if (field->name() == "id") continue;
-        if (!data.contains(field->name())) {
-          normalized_data[field->name()] = Value();
-        } else {
-          const auto value = data.find(field->name())->second;
-          normalized_data[field->name()] = value;
-        }
-      }
-
-      // populate other fields
-
-      auto node = std::make_shared<Node>(id, schema_name, normalized_data,
-                                         std::unique_ptr<NodeHandle>{}, nullptr,
-                                         schema_);
-      nodes_[schema_name][id] = node;
-      return node;
+    if (!use_node_arena_) {
+      return arrow::Status::NotImplemented(
+          "NodeManager without arena is no longer supported");
     }
+
+    NodeHandle node_handle = node_arena_->allocate_node(layout_);
+
+    // Initial population of v0: write directly to base node
+    // Use set_field_value_v0 for all fields (doesn't create versions)
+    ARROW_RETURN_NOT_OK(node_arena_->set_field_value_v0(
+        node_handle, layout_, schema_->get_field("id"), Value{id}));
+
+    for (const auto &field : schema_->fields()) {
+      if (field->name() == "id") continue;
+
+      Value value;
+      if (data.contains(field->name())) {
+        value = data.find(field->name())->second;
+      }  // else: Value() = NULL
+
+      ARROW_RETURN_NOT_OK(
+          node_arena_->set_field_value_v0(node_handle, layout_, field, value));
+    }
+
+    auto node = std::make_shared<Node>(
+        id, schema_name, std::make_unique<NodeHandle>(std::move(node_handle)),
+        node_arena_, schema_, layout_);
+    nodes_[schema_name][id] = node;
+    return node;
   }
 
   void set_id_counter(const std::string &schema_name, const int64_t value) {
@@ -337,8 +314,6 @@ class NodeManager {
 
   // cache layout
   std::shared_ptr<SchemaLayout> layout_;
-
-  const std::unordered_map<std::string, Value> EMPTY_DATA{};
 
   // since node creation is single threaded, we can cache the layout
   // w/o synchronization
@@ -394,8 +369,8 @@ inline arrow::Result<Value> NodeView::get_value(
   const NodeHandle *handle = node_->get_handle();
   assert(handle != nullptr && "Versioned node must have a handle");
 
-  return entity_ops::get_value_at_version(field, *handle, resolved_version_,
-                                          layout_);
+  return NodeArena::get_value_at_version(*handle, resolved_version_, layout_,
+                                         field);
 }
 
 inline bool NodeView::is_visible() const {

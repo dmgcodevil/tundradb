@@ -807,11 +807,15 @@ arrow::Status prepare_query(Query& query, QueryState& query_state) {
   }
 
   // Phase 3: Resolve all ComparisonExpr field references
+  auto where_aliases = query_state.aliases();
+  for (const auto& [edge_alias, edge_type] : query_state.edge_aliases) {
+    where_aliases[edge_alias] = edge_type;
+  }
   for (const auto& clause : query.clauses()) {
     if (clause->type() == Clause::Type::WHERE) {
       auto where_expr = std::dynamic_pointer_cast<WhereExpr>(clause);
       auto res = where_expr->resolve_field_ref(
-          query_state.aliases(), query_state.schema_registry().get());
+          where_aliases, query_state.schema_registry().get());
       if (!res.ok()) {
         return res.status();
       }

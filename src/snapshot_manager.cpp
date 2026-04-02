@@ -151,11 +151,7 @@ arrow::Result<bool> SnapshotManager::initialize() {
 
       log_info("Load edges");
       for (const auto &edge_metadata : this->manifest_->edges) {
-        auto loaded_edges = storage_->read_edges(edge_metadata).ValueOrDie();
-        for (auto &edge : loaded_edges) {
-          edge_store_->add(std::make_shared<Edge>(std::move(edge)))
-              .ValueOrDie();
-        }
+        storage_->read_edges(edge_metadata, edge_store_).ValueOrDie();
       }
       log_info("Edges have been loaded");
       for (const auto &edge_type : edge_store_->get_edge_types()) {

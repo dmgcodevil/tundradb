@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "arrow_utils.hpp"
+#include "edge_store.hpp"
 #include "json.hpp"
 #include "logger.hpp"
 #include "metadata.hpp"
@@ -155,6 +156,87 @@ arrow::Result<std::vector<Value>> decode_array_cell(
     out.push_back(std::move(elem));
   }
   return out;
+}
+
+arrow::Result<Value> decode_map_cell(
+    const std::shared_ptr<arrow::Array>& array_chunk, const int64_t row_idx) {
+  auto map_chunk = std::static_pointer_cast<arrow::MapArray>(array_chunk);
+  if (map_chunk->IsNull(row_idx)) {
+    return Value{};
+  }
+
+  auto keys = std::static_pointer_cast<arrow::StringArray>(map_chunk->keys());
+  auto items = map_chunk->items();
+  // TODO(arrow-ipc): Remove binary decode branch once MAP items are read
+  // natively as dense-union from Arrow IPC.
+  const bool items_are_binary = items->type_id() == arrow::Type::BINARY;
+  const bool items_are_dense_union =
+      items->type_id() == arrow::Type::DENSE_UNION;
+  std::shared_ptr<arrow::BinaryArray> binary_items;
+  if (items_are_binary) {
+    binary_items = std::static_pointer_cast<arrow::BinaryArray>(items);
+  } else if (!items_are_dense_union) {
+    return arrow::Status::NotImplemented("Unsupported MAP item type: ",
+                                         items->type()->ToString());
+  }
+
+  std::map<std::string, Value> raw_map;
+  const int64_t begin = map_chunk->value_offset(row_idx);
+  const int64_t end = begin + map_chunk->value_length(row_idx);
+  for (int64_t idx = begin; idx < end; ++idx) {
+    if (keys->IsNull(idx)) continue;
+    const std::string key = keys->GetString(idx);
+    if (items->IsNull(idx)) {
+      raw_map[key] = Value{};
+      continue;
+    }
+
+    std::optional<Value> decoded;
+    if (items_are_dense_union) {
+      ARROW_ASSIGN_OR_RAISE(decoded, map_item_to_value(items, idx));
+    } else {
+      int32_t bin_len = 0;
+      const uint8_t* bin_ptr = binary_items->GetValue(idx, &bin_len);
+      ARROW_ASSIGN_OR_RAISE(decoded, decode_map_item_binary(bin_ptr, bin_len));
+    }
+    raw_map[key] = decoded.has_value() ? decoded.value() : Value{};
+  }
+  return Value(std::move(raw_map));
+}
+
+arrow::Result<Value> decode_cell_value(
+    const std::shared_ptr<arrow::Array>& chunk, const int64_t offset) {
+  if (chunk->IsNull(offset)) {
+    return Value{};
+  }
+  switch (chunk->type_id()) {
+    case arrow::Type::INT64:
+      return Value(
+          std::static_pointer_cast<arrow::Int64Array>(chunk)->Value(offset));
+    case arrow::Type::STRING:
+      return Value(
+          std::static_pointer_cast<arrow::StringArray>(chunk)->GetString(
+              offset));
+    case arrow::Type::DOUBLE:
+      return Value(
+          std::static_pointer_cast<arrow::DoubleArray>(chunk)->Value(offset));
+    case arrow::Type::BOOL:
+      return Value(
+          std::static_pointer_cast<arrow::BooleanArray>(chunk)->Value(offset));
+    case arrow::Type::INT32:
+      return Value(
+          std::static_pointer_cast<arrow::Int32Array>(chunk)->Value(offset));
+    case arrow::Type::LIST:
+    case arrow::Type::FIXED_SIZE_LIST: {
+      ARROW_ASSIGN_OR_RAISE(auto raw_array, decode_array_cell(chunk, offset));
+      return Value(std::move(raw_array));
+    }
+    case arrow::Type::MAP:
+      return decode_map_cell(chunk, offset);
+    default:
+      return arrow::Status::NotImplemented("Unsupported column type: ",
+                                           chunk->type()->ToString());
+  }
 }
 
 // TODO(arrow-ipc): Delete; only used for Parquet binary MAP payloads.
@@ -397,9 +479,6 @@ arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(
       this->config_.get_shard_capacity(), shard_metadata.min_id,
       shard_metadata.max_id, shard_metadata.chunk_size,
       shard_metadata.schema_name, this->schema_registry_);
-  ARROW_ASSIGN_OR_RAISE(const auto schema, this->schema_registry_->get(
-                                               shard_metadata.schema_name));
-
   TableInfo table_info(table);
 
   for (int64_t row_idx = 0; row_idx < table->num_rows(); ++row_idx) {
@@ -411,132 +490,15 @@ arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(
       auto column = table->column(col_idx);
       auto chunk_loc = table_info.get_chunk_info(col_idx, row_idx);
       auto chunk = column->chunk(chunk_loc.chunk_index);
-
-      switch (chunk->type_id()) {
-        case arrow::Type::INT64: {
-          auto typed_chunk = std::static_pointer_cast<arrow::Int64Array>(chunk);
-          if (typed_chunk->IsNull(chunk_loc.offset_in_chunk)) {
-            node_data[column_name] = Value();  // Null value
-          } else {
-            int64_t value = typed_chunk->Value(chunk_loc.offset_in_chunk);
-            node_data[column_name] = Value(value);
-
-            // Store node ID if this is the ID column
-            if (column_name == "id") {
-              node_id = value;
-            }
-          }
-          break;
+      ARROW_ASSIGN_OR_RAISE(
+          auto value, decode_cell_value(chunk, chunk_loc.offset_in_chunk));
+      node_data[column_name] = value;
+      if (column_name == "id" && !value.is_null()) {
+        if (value.type() != ValueType::INT64) {
+          return arrow::Status::Invalid("Node 'id' has invalid type: ",
+                                        to_string(value.type()));
         }
-        case arrow::Type::STRING: {
-          auto typed_chunk =
-              std::static_pointer_cast<arrow::StringArray>(chunk);
-          if (typed_chunk->IsNull(chunk_loc.offset_in_chunk)) {
-            node_data[column_name] = Value();
-          } else {
-            std::string value =
-                typed_chunk->GetString(chunk_loc.offset_in_chunk);
-            node_data[column_name] = Value(value);
-          }
-          break;
-        }
-        case arrow::Type::DOUBLE: {
-          auto typed_chunk =
-              std::static_pointer_cast<arrow::DoubleArray>(chunk);
-          if (typed_chunk->IsNull(chunk_loc.offset_in_chunk)) {
-            node_data[column_name] = Value();
-          } else {
-            double value = typed_chunk->Value(chunk_loc.offset_in_chunk);
-            node_data[column_name] = Value(value);
-          }
-          break;
-        }
-        case arrow::Type::BOOL: {
-          auto typed_chunk =
-              std::static_pointer_cast<arrow::BooleanArray>(chunk);
-          if (typed_chunk->IsNull(chunk_loc.offset_in_chunk)) {
-            node_data[column_name] = Value();
-          } else {
-            bool value = typed_chunk->Value(chunk_loc.offset_in_chunk);
-            node_data[column_name] = Value(value);
-          }
-          break;
-        }
-        case arrow::Type::INT32: {
-          auto typed_chunk = std::static_pointer_cast<arrow::Int32Array>(chunk);
-          if (typed_chunk->IsNull(chunk_loc.offset_in_chunk)) {
-            node_data[column_name] = Value();
-          } else {
-            int32_t value = typed_chunk->Value(chunk_loc.offset_in_chunk);
-            node_data[column_name] = Value(value);
-          }
-          break;
-        }
-        case arrow::Type::LIST:
-        case arrow::Type::FIXED_SIZE_LIST: {
-          if (chunk->IsNull(chunk_loc.offset_in_chunk)) {
-            node_data[column_name] = Value();
-            break;
-          }
-          ARROW_ASSIGN_OR_RAISE(
-              auto raw_array,
-              decode_array_cell(chunk, chunk_loc.offset_in_chunk));
-          node_data[column_name] = Value(std::move(raw_array));
-          break;
-        }
-        case arrow::Type::MAP: {
-          auto map_chunk = std::static_pointer_cast<arrow::MapArray>(chunk);
-          if (map_chunk->IsNull(chunk_loc.offset_in_chunk)) {
-            break;
-          }
-
-          auto keys =
-              std::static_pointer_cast<arrow::StringArray>(map_chunk->keys());
-          auto items = map_chunk->items();
-          // TODO(arrow-ipc): Remove binary decode branch once MAP items are
-          // read natively as dense-union from Arrow IPC.
-          const bool items_are_binary = items->type_id() == arrow::Type::BINARY;
-          const bool items_are_dense_union =
-              items->type_id() == arrow::Type::DENSE_UNION;
-          std::shared_ptr<arrow::BinaryArray> binary_items;
-          if (items_are_binary) {
-            binary_items = std::static_pointer_cast<arrow::BinaryArray>(items);
-          } else if (!items_are_dense_union) {
-            return arrow::Status::NotImplemented("Unsupported MAP item type: ",
-                                                 items->type()->ToString());
-          }
-
-          std::map<std::string, Value> raw_map;
-          const int64_t begin =
-              map_chunk->value_offset(chunk_loc.offset_in_chunk);
-          const int64_t end =
-              begin + map_chunk->value_length(chunk_loc.offset_in_chunk);
-          for (int64_t idx = begin; idx < end; ++idx) {
-            if (keys->IsNull(idx)) continue;
-            const std::string key = keys->GetString(idx);
-            if (items->IsNull(idx)) {
-              raw_map[key] = Value{};
-              continue;
-            }
-
-            std::optional<Value> decoded;
-            if (items_are_dense_union) {
-              ARROW_ASSIGN_OR_RAISE(decoded, map_item_to_value(items, idx));
-            } else {
-              int32_t bin_len = 0;
-              const uint8_t* bin_ptr = binary_items->GetValue(idx, &bin_len);
-              ARROW_ASSIGN_OR_RAISE(decoded,
-                                    decode_map_item_binary(bin_ptr, bin_len));
-            }
-            raw_map[key] = decoded.has_value() ? decoded.value() : Value{};
-          }
-          node_data[column_name] = Value(std::move(raw_map));
-          break;
-        }
-        // Add more types as needed
-        default:
-          return arrow::Status::NotImplemented("Unsupported column type: ",
-                                               chunk->type()->ToString());
+        node_id = value.as_int64();
       }
     }
 
@@ -561,8 +523,9 @@ arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(
   return shard;
 }
 
-arrow::Result<std::vector<Edge>> Storage::read_edges(
-    const EdgeMetadata& edge_metadata) const {
+arrow::Result<bool> Storage::read_edges(
+    const EdgeMetadata& edge_metadata,
+    const std::shared_ptr<EdgeStore>& edge_store) const {
   ARROW_ASSIGN_OR_RAISE(const auto input_file,
                         arrow::io::ReadableFile::Open(edge_metadata.data_file));
   std::unique_ptr<parquet::arrow::FileReader> reader;
@@ -572,8 +535,6 @@ arrow::Result<std::vector<Edge>> Storage::read_edges(
   std::shared_ptr<arrow::Table> table;
   ARROW_RETURN_NOT_OK(reader->ReadTable(&table));
 
-  std::vector<Edge> edges;
-  edges.reserve(table->num_rows());
   if (table->num_rows() != edge_metadata.record_count) {
     log_warn(
         "edges row count from metadata doesn't match the actual table size");
@@ -590,14 +551,12 @@ arrow::Result<std::vector<Edge>> Storage::read_edges(
   struct PropColInfo {
     std::string name;
     int col_idx;
-    arrow::Type::type arrow_type;
   };
   std::vector<PropColInfo> prop_columns;
 
   for (int col = 4; col < table->num_columns(); ++col) {
     const auto& col_name = table->schema()->field(col)->name();
-    prop_columns.push_back(
-        {col_name, col, table->schema()->field(col)->type()->id()});
+    prop_columns.push_back({col_name, col});
   }
 
   for (int64_t row_idx = 0; row_idx < table->num_rows(); ++row_idx) {
@@ -636,47 +595,22 @@ arrow::Result<std::vector<Edge>> Storage::read_edges(
       const auto chunk =
           table->column(pc.col_idx)->chunk(chunk_info.chunk_index);
 
-      if (chunk->IsNull(chunk_info.offset_in_chunk)) {
-        continue;
-      }
-
-      switch (pc.arrow_type) {
-        case arrow::Type::INT32: {
-          auto typed = std::static_pointer_cast<arrow::Int32Array>(chunk);
-          properties[pc.name] = Value(typed->Value(chunk_info.offset_in_chunk));
-          break;
-        }
-        case arrow::Type::INT64: {
-          auto typed = std::static_pointer_cast<arrow::Int64Array>(chunk);
-          properties[pc.name] = Value(typed->Value(chunk_info.offset_in_chunk));
-          break;
-        }
-        case arrow::Type::DOUBLE: {
-          auto typed = std::static_pointer_cast<arrow::DoubleArray>(chunk);
-          properties[pc.name] = Value(typed->Value(chunk_info.offset_in_chunk));
-          break;
-        }
-        case arrow::Type::STRING: {
-          auto typed = std::static_pointer_cast<arrow::StringArray>(chunk);
-          properties[pc.name] =
-              Value(typed->GetString(chunk_info.offset_in_chunk));
-          break;
-        }
-        case arrow::Type::BOOL: {
-          auto typed = std::static_pointer_cast<arrow::BooleanArray>(chunk);
-          properties[pc.name] = Value(typed->Value(chunk_info.offset_in_chunk));
-          break;
-        }
-        default:
-          break;
+      ARROW_ASSIGN_OR_RAISE(
+          auto value, decode_cell_value(chunk, chunk_info.offset_in_chunk));
+      if (!value.is_null()) {
+        properties[pc.name] = std::move(value);
       }
     }
 
-    edges.emplace_back(id, source_id, target_id, edge_metadata.edge_type,
-                       created_ts, std::move(properties));
+    ARROW_ASSIGN_OR_RAISE(
+        auto edge,
+        edge_store->restore_edge(id, source_id, edge_metadata.edge_type,
+                                 target_id, created_ts, std::move(properties)));
+    ARROW_ASSIGN_OR_RAISE(auto _added, edge_store->add(edge));
+    (void)_added;
   }
 
-  return edges;
+  return true;
 }
 
 }  // namespace tundradb
