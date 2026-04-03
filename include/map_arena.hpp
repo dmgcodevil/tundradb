@@ -293,6 +293,8 @@ class MapArena {
   }
 
   /** Copy value bytes into entry, using copy-constructor for ref-counted types.
+   * For primitive types only the actual type size is read from src, so callers
+   * may safely pass a pointer to a stack variable smaller than VALUE_SIZE.
    */
   static void copy_value_into_entry(MapEntry* entry, ValueType vtype,
                                     const void* src) {
@@ -309,7 +311,20 @@ class MapArena {
       dst->~MapRef();
       new (dst) MapRef(*reinterpret_cast<const MapRef*>(src));
     } else {
-      std::memcpy(entry->value, src, MapEntry::VALUE_SIZE);
+      size_t n = primitive_value_size(vtype);
+      std::memset(entry->value, 0, MapEntry::VALUE_SIZE);
+      std::memcpy(entry->value, src, n);
+    }
+  }
+
+  static constexpr size_t primitive_value_size(ValueType vtype) {
+    switch (vtype) {
+      case ValueType::BOOL:   return sizeof(bool);
+      case ValueType::INT32:  return sizeof(int32_t);
+      case ValueType::INT64:  return sizeof(int64_t);
+      case ValueType::FLOAT:  return sizeof(float);
+      case ValueType::DOUBLE: return sizeof(double);
+      default:                return MapEntry::VALUE_SIZE;
     }
   }
 

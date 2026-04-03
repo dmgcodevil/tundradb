@@ -156,7 +156,7 @@ class NodeManager {
         enable_versioning);
   }
 
-  ~NodeManager() { node_arena_->clear(); }
+  ~NodeManager() = default;
 
   arrow::Result<std::shared_ptr<Node>> get_node(const std::string &schema_name,
                                                 const int64_t id) {
