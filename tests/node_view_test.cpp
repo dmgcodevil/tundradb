@@ -72,7 +72,7 @@ TEST_F(NodeViewTest, CurrentVersionView) {
   NodeHandle handle = node_arena_versioned_->allocate_node("User");
 
   // Create Node wrapper
-  Node node(0, "User", {}, std::make_unique<NodeHandle>(std::move(handle)),
+  Node node(0, "User", std::make_unique<NodeHandle>(std::move(handle)),
             node_arena_versioned_, schema_, layout_);
 
   // Set initial values
@@ -108,7 +108,7 @@ TEST_F(NodeViewTest, TimeTravelValidTime) {
   NodeHandle handle = node_arena_versioned_->allocate_node("User");
 
   // Create Node wrapper
-  Node node(0, "User", {}, std::make_unique<NodeHandle>(std::move(handle)),
+  Node node(0, "User", std::make_unique<NodeHandle>(std::move(handle)),
             node_arena_versioned_, schema_, layout_);
 
   // v0: Alice, age=25, dept=Engineering
@@ -194,7 +194,7 @@ TEST_F(NodeViewTest, TemporalContextCaching) {
   NodeHandle handle = node_arena_versioned_->allocate_node("User");
 
   // Create Node wrapper
-  Node node(0, "User", {}, std::make_unique<NodeHandle>(std::move(handle)),
+  Node node(0, "User", std::make_unique<NodeHandle>(std::move(handle)),
             node_arena_versioned_, schema_, layout_);
 
   node_arena_versioned_->set_field_value_v0(*node.get_handle(), layout_,
@@ -225,7 +225,7 @@ TEST_F(NodeViewTest, NonVersionedNodeView) {
   NodeHandle handle = node_arena_non_versioned_->allocate_node("User");
 
   // Create Node wrapper
-  Node node(0, "User", {}, std::make_unique<NodeHandle>(std::move(handle)),
+  Node node(0, "User", std::make_unique<NodeHandle>(std::move(handle)),
             node_arena_non_versioned_, schema_, layout_);
 
   // Set values (non-versioned, direct writes)
@@ -257,7 +257,7 @@ TEST_F(NodeViewTest, MultipleFieldReadsFromSameView) {
   NodeHandle handle = node_arena_versioned_->allocate_node("User");
 
   // Create Node wrapper
-  Node node(0, "User", {}, std::make_unique<NodeHandle>(std::move(handle)),
+  Node node(0, "User", std::make_unique<NodeHandle>(std::move(handle)),
             node_arena_versioned_, schema_, layout_);
 
   node_arena_versioned_->set_field_value_v0(
