@@ -16,6 +16,7 @@
 #include <unordered_set>
 
 #include "arrow_utils.hpp"
+#include "constants.hpp"
 #include "logger.hpp"
 #include "node.hpp"
 #include "query.hpp"
@@ -36,10 +37,10 @@ constexpr uint64_t NODE_MASK = (1ULL << 48) - 1;
  */
 inline uint16_t compute_tag(const SchemaRef& ref) {
   const std::string& s = ref.value();
-  uint32_t h = 2166136261u;
+  uint32_t h = hash::kFnv1aOffsetBasis;
   for (unsigned char c : s) {
     h ^= c;
-    h *= 16777619u;
+    h *= hash::kFnv1aPrime;
   }
   h ^= (h >> 16);
   return static_cast<uint16_t>(h & 0xFFFFu);

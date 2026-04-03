@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "arrow_utils.hpp"
+#include "constants.hpp"
 #include "edge_store.hpp"
 #include "json.hpp"
 #include "logger.hpp"
@@ -476,7 +477,7 @@ arrow::Result<std::shared_ptr<Shard>> Storage::read_shard(
       ARROW_ASSIGN_OR_RAISE(
           auto value, decode_cell_value(chunk, chunk_loc.offset_in_chunk));
       node_data[column_name] = value;
-      if (column_name == "id" && !value.is_null()) {
+      if (column_name == field_names::kId && !value.is_null()) {
         if (value.type() != ValueType::INT64) {
           return arrow::Status::Invalid("Node 'id' has invalid type: ",
                                         to_string(value.type()));

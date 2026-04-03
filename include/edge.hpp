@@ -7,6 +7,7 @@
 #include <utility>
 #include <vector>
 
+#include "constants.hpp"
 #include "edge_view.hpp"
 #include "node_arena.hpp"
 #include "schema.hpp"
@@ -75,12 +76,16 @@ class Edge {
 
   [[nodiscard]] arrow::Result<Value> get_value(
       const std::shared_ptr<Field>& field) const {
-    if (field && (field->name() == "id" || field->name() == "_edge_id")) {
+    if (field && (field->name() == field_names::kId ||
+                  field->name() == field_names::kEdgeId)) {
       return Value{id_};
     }
-    if (field && field->name() == "source_id") return Value{source_id_};
-    if (field && field->name() == "target_id") return Value{target_id_};
-    if (field && field->name() == "created_ts") return Value{created_ts_};
+    if (field && field->name() == field_names::kSourceId)
+      return Value{source_id_};
+    if (field && field->name() == field_names::kTargetId)
+      return Value{target_id_};
+    if (field && field->name() == field_names::kCreatedTs)
+      return Value{created_ts_};
     if (!arena_ || !handle_) {
       return arrow::Status::Invalid(
           "get_value requires arena-backed edge with valid handle");
@@ -93,14 +98,15 @@ class Edge {
     if (!field) {
       return arrow::Status::Invalid("Field is null");
     }
-    if (field->name() == "id" || field->name() == "_edge_id") {
+    if (field->name() == field_names::kId ||
+        field->name() == field_names::kEdgeId) {
       return reinterpret_cast<const char*>(&id_);
     }
-    if (field->name() == "source_id")
+    if (field->name() == field_names::kSourceId)
       return reinterpret_cast<const char*>(&source_id_);
-    if (field->name() == "target_id")
+    if (field->name() == field_names::kTargetId)
       return reinterpret_cast<const char*>(&target_id_);
-    if (field->name() == "created_ts")
+    if (field->name() == field_names::kCreatedTs)
       return reinterpret_cast<const char*>(&created_ts_);
     if (arena_ && handle_) {
       return NodeArena::get_value_ptr(*handle_, layout_, field);
@@ -151,9 +157,11 @@ inline arrow::Result<const char*> EdgeView::get_value_ptr(
   if (resolved_version_ == nullptr || !layout_) {
     return edge_->get_value_ptr(field);
   }
-  if (field && (field->name() == "id" || field->name() == "_edge_id" ||
-                field->name() == "source_id" || field->name() == "target_id" ||
-                field->name() == "created_ts")) {
+  if (field && (field->name() == field_names::kId ||
+                field->name() == field_names::kEdgeId ||
+                field->name() == field_names::kSourceId ||
+                field->name() == field_names::kTargetId ||
+                field->name() == field_names::kCreatedTs)) {
     return edge_->get_value_ptr(field);
   }
   const NodeHandle* handle = edge_->get_handle();

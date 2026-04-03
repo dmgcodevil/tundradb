@@ -1,7 +1,9 @@
 #include "edge_store.hpp"
 
 #include <algorithm>
+#include <string>
 
+#include "constants.hpp"
 #include "json.hpp"
 #include "logger.hpp"
 #include "metadata.hpp"
@@ -476,10 +478,10 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::generate_table(
 
   // Build Arrow schema: structural + schema props + _properties (JSON)
   std::vector<std::shared_ptr<arrow::Field>> arrow_fields = {
-      arrow::field("id", arrow::int64()),
-      arrow::field("source_id", arrow::int64()),
-      arrow::field("target_id", arrow::int64()),
-      arrow::field("created_ts", arrow::int64())};
+      arrow::field(std::string(field_names::kId), arrow::int64()),
+      arrow::field(std::string(field_names::kSourceId), arrow::int64()),
+      arrow::field(std::string(field_names::kTargetId), arrow::int64()),
+      arrow::field(std::string(field_names::kCreatedTs), arrow::int64())};
 
   auto edge_schema = get_edge_schema(edge_type);
   if (edge_schema) {

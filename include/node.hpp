@@ -6,6 +6,7 @@
 #include <string>
 #include <unordered_map>
 
+#include "constants.hpp"
 #include "logger.hpp"
 #include "node_arena.hpp"
 #include "node_view.hpp"
@@ -214,10 +215,11 @@ class NodeManager {
     // Initial population of v0: write directly to base node
     // Use set_field_value_v0 for all fields (doesn't create versions)
     ARROW_RETURN_NOT_OK(node_arena_->set_field_value_v0(
-        node_handle, layout_, schema_->get_field("id"), Value{id}));
+        node_handle, layout_, schema_->get_field(std::string(field_names::kId)),
+        Value{id}));
 
     for (const auto &field : schema_->fields()) {
-      if (field->name() == "id") continue;
+      if (field->name() == field_names::kId) continue;
 
       Value value;
       if (data.contains(field->name())) {

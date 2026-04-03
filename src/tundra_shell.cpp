@@ -27,6 +27,7 @@
 #include "TundraQLLexer.h"
 #include "TundraQLParser.h"
 #include "arrow_map_union_types.hpp"
+#include "constants.hpp"
 #include "core.hpp"
 #include "linenoise.h"
 #include "logger.hpp"
@@ -234,7 +235,7 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
       auto field_type = field->type();
 
       // Skip the 'id' field as it's automatically generated
-      if (field_name == "id") {
+      if (field_name == tundradb::field_names::kId) {
         continue;
       }
 

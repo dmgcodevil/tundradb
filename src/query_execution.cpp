@@ -5,6 +5,7 @@
 
 #include "arrow_map_union_types.hpp"
 #include "arrow_utils.hpp"
+#include "constants.hpp"
 #include "edge_store.hpp"
 #include "logger.hpp"
 #include "utils.hpp"
@@ -24,7 +25,7 @@ namespace {
  * shadow schema is registered.
  */
 std::string edge_shadow_schema_name(const std::string& edge_type) {
-  return "__edge__" + edge_type;
+  return std::string(schema::kEdgeShadowPrefix) + edge_type;
 }
 
 /**
@@ -65,12 +66,13 @@ arrow::Result<std::string> ensure_edge_shadow_schema(
   }
 
   std::vector<std::shared_ptr<arrow::Field>> fields{
-      arrow::field("_edge_id", arrow::int64()),
-      arrow::field("source_id", arrow::int64()),
-      arrow::field("target_id", arrow::int64()),
-      arrow::field("created_ts", arrow::int64())};
-  std::unordered_set<std::string> seen{"_edge_id", "source_id", "target_id",
-                                       "created_ts"};
+      arrow::field(std::string(field_names::kEdgeId), arrow::int64()),
+      arrow::field(std::string(field_names::kSourceId), arrow::int64()),
+      arrow::field(std::string(field_names::kTargetId), arrow::int64()),
+      arrow::field(std::string(field_names::kCreatedTs), arrow::int64())};
+  std::unordered_set<std::string> seen{
+      std::string(field_names::kEdgeId), std::string(field_names::kSourceId),
+      std::string(field_names::kTargetId), std::string(field_names::kCreatedTs)};
   for (const auto& f : edge_schema->arrow()->fields()) {
     if (seen.insert(f->name()).second) {
       fields.push_back(f);
