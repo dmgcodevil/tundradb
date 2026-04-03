@@ -150,30 +150,31 @@ TEST_F(NodeTest, NodeGetValue) {
   Logger::get_instance().debug("node created");
 
   auto node = node_result.ValueOrDie();
+  auto schema = node->get_schema();
   Logger::get_instance().debug("Test getting values");
   // Test getting values
-  auto name_result = node->get_value("name");
+  auto name_result = node->get_value(schema->get_field("name"));
   ASSERT_TRUE(name_result.ok())
       << "Failed to get name: " << name_result.status().ToString();
   EXPECT_EQ(name_result.ValueOrDie().to_string(), "Alice Cooper");
 
-  auto age_result = node->get_value("age");
+  auto age_result = node->get_value(schema->get_field("age"));
   ASSERT_TRUE(age_result.ok())
       << "Failed to get age: " << age_result.status().ToString();
   EXPECT_EQ(age_result.ValueOrDie().as_int32(), 28);
 
-  auto email_result = node->get_value("email");
+  auto email_result = node->get_value(schema->get_field("email"));
   ASSERT_TRUE(email_result.ok())
       << "Failed to get email: " << email_result.status().ToString();
   EXPECT_EQ(email_result.ValueOrDie().to_string(), "alice@example.com");
 
-  auto score_result = node->get_value("score");
+  auto score_result = node->get_value(schema->get_field("score"));
   ASSERT_TRUE(score_result.ok())
       << "Failed to get score: " << score_result.status().ToString();
   EXPECT_DOUBLE_EQ(score_result.ValueOrDie().as_double(), 88.7);
 
   // Test auto-generated ID
-  auto id_result = node->get_value("id");
+  auto id_result = node->get_value(schema->get_field("id"));
   ASSERT_TRUE(id_result.ok())
       << "Failed to get id: " << id_result.status().ToString();
   EXPECT_EQ(id_result.ValueOrDie().as_int64(), node->id);
@@ -193,43 +194,47 @@ TEST_F(NodeTest, NodeSetValue) {
   ASSERT_TRUE(node_result.ok());
 
   auto node = node_result.ValueOrDie();
+  auto schema = node->get_schema();
 
   Logger::get_instance().debug("Update values");
 
   // Update values
-  auto set_name_result = node->set_value("name", Value{"Charlie Updated"});
+  auto set_name_result =
+      node->set_value(schema->get_field("name"), Value{"Charlie Updated"});
   Logger::get_instance().debug("done");
   Logger::get_instance().debug("set_name_result: {}", set_name_result.ok());
   ASSERT_TRUE(set_name_result.ok())
       << "Failed to set name: " << set_name_result.status().ToString();
 
-  auto name_result = node->get_value("name");
+  auto name_result = node->get_value(schema->get_field("name"));
   ASSERT_TRUE(name_result.ok());
   EXPECT_EQ(name_result.ValueOrDie().to_string(), "Charlie Updated");
 
-  auto set_age_result = node->set_value("age", Value{static_cast<int32_t>(23)});
+  auto set_age_result = node->set_value(schema->get_field("age"),
+                                        Value{static_cast<int32_t>(23)});
   ASSERT_TRUE(set_age_result.ok())
       << "Failed to set age: " << set_age_result.status().ToString();
 
-  auto age_result = node->get_value("age");
+  auto age_result = node->get_value(schema->get_field("age"));
   ASSERT_TRUE(age_result.ok());
   EXPECT_EQ(age_result.ValueOrDie().as_int32(), 23);
 
-  auto set_email_result =
-      node->set_value("email", Value{"charlie.updated@example.com"});
+  auto set_email_result = node->set_value(schema->get_field("email"),
+                                          Value{"charlie.updated@example.com"});
   ASSERT_TRUE(set_email_result.ok())
       << "Failed to set email: " << set_email_result.status().ToString();
 
-  auto email_result = node->get_value("email");
+  auto email_result = node->get_value(schema->get_field("email"));
   ASSERT_TRUE(email_result.ok());
   EXPECT_EQ(email_result.ValueOrDie().to_string(),
             "charlie.updated@example.com");
 
-  auto set_score_result = node->set_value("score", Value{82.5});
+  auto set_score_result =
+      node->set_value(schema->get_field("score"), Value{82.5});
   ASSERT_TRUE(set_score_result.ok())
       << "Failed to set score: " << set_score_result.status().ToString();
 
-  auto score_result = node->get_value("score");
+  auto score_result = node->get_value(schema->get_field("score"));
   ASSERT_TRUE(score_result.ok());
   EXPECT_DOUBLE_EQ(score_result.ValueOrDie().as_double(), 82.5);
 
@@ -248,18 +253,19 @@ TEST_F(NodeTest, NodeNullableFields) {
   ASSERT_TRUE(node_result.ok());
 
   auto node = node_result.ValueOrDie();
+  auto schema = node->get_schema();
 
   // Test required fields
-  auto name_result = node->get_value("name");
+  auto name_result = node->get_value(schema->get_field("name"));
   ASSERT_TRUE(name_result.ok());
   EXPECT_EQ(name_result.ValueOrDie().to_string(), "David Wilson");
 
-  auto score_result = node->get_value("score");
+  auto score_result = node->get_value(schema->get_field("score"));
   ASSERT_TRUE(score_result.ok());
   EXPECT_DOUBLE_EQ(score_result.ValueOrDie().as_double(), 90.0);
 
   // Test nullable fields (should be null)
-  auto age_result = node->get_value("age");
+  auto age_result = node->get_value(schema->get_field("age"));
   ASSERT_TRUE(age_result.ok());
 
   Logger::get_instance().debug("age_result type: {}",
@@ -268,7 +274,7 @@ TEST_F(NodeTest, NodeNullableFields) {
   EXPECT_TRUE(age_result.ValueOrDie().is_null())
       << "Age should be null when not provided";
 
-  auto email_result = node->get_value("email");
+  auto email_result = node->get_value(schema->get_field("email"));
   ASSERT_TRUE(email_result.ok());
   Logger::get_instance().debug("email_result type: {}",
                                to_string(email_result.ValueOrDie().type()));
@@ -343,13 +349,15 @@ TEST_F(NodeTest, DISABLED_ErrorHandlingInvalidField) {
   ASSERT_TRUE(node_result.ok());
 
   auto node = node_result.ValueOrDie();
+  auto schema = node->get_schema();
 
   // Try to get non-existent field
-  auto invalid_result = node->get_value("nonexistent_field");
+  auto invalid_result = node->get_value(schema->get_field("nonexistent_field"));
   EXPECT_FALSE(invalid_result.ok()) << "Should fail for non-existent field";
 
   // Try to set non-existent field
-  auto invalid_set_result = node->set_value("nonexistent_field", Value{"test"});
+  auto invalid_set_result =
+      node->set_value(schema->get_field("nonexistent_field"), Value{"test"});
   EXPECT_FALSE(invalid_set_result.ok())
       << "Should fail when setting non-existent field";
 
@@ -468,7 +476,7 @@ TEST_F(NodeTest, PerformanceTest) {
     ASSERT_TRUE(node_result.ok()) << "Failed to get node " << i;
 
     auto node = node_result.ValueOrDie();
-    auto name_result = node->get_value("name");
+    auto name_result = node->get_value(node->get_schema()->get_field("name"));
     ASSERT_TRUE(name_result.ok());
 
     std::string expected_name = std::string("User_") + std::to_string(i);
@@ -505,9 +513,10 @@ TEST_F(NodeTest, NodeArenaMarkForDeletion) {
   auto node_result = node_manager_->create_node("User", node_data);
   ASSERT_TRUE(node_result.ok());
   auto node = std::move(node_result).ValueOrDie();
+  auto schema = node->get_schema();
 
   // Get original string ref count (should be > 0)
-  auto value1_result = node->get_value("name");
+  auto value1_result = node->get_value(schema->get_field("name"));
   ASSERT_TRUE(value1_result.ok());
   auto value1 = value1_result.ValueOrDie();
   StringRef original_ref = value1.as_string_ref();
@@ -518,7 +527,8 @@ TEST_F(NodeTest, NodeArenaMarkForDeletion) {
   EXPECT_FALSE(original_ref.is_marked_for_deletion());
 
   // Update the name field - this should mark the old string for deletion
-  auto set_result = node->set_value("name", Value{std::string("Updated Name")});
+  auto set_result = node->set_value(schema->get_field("name"),
+                                    Value{std::string("Updated Name")});
   ASSERT_TRUE(set_result.ok());
 
   // The original StringRef should now be marked for deletion
@@ -528,7 +538,7 @@ TEST_F(NodeTest, NodeArenaMarkForDeletion) {
   EXPECT_EQ(original_ref.view(), "Original Name");
 
   // Get the new value
-  auto value2_result = node->get_value("name");
+  auto value2_result = node->get_value(schema->get_field("name"));
   ASSERT_TRUE(value2_result.ok());
   EXPECT_EQ(value2_result.ValueOrDie().to_string(), "Updated Name");
 
@@ -549,9 +559,10 @@ TEST_F(NodeTest, NodeArenaStringStorage) {
   auto node_result = node_manager_->create_node("User", node_data);
   ASSERT_TRUE(node_result.ok());
   auto node = std::move(node_result).ValueOrDie();
+  auto schema = node->get_schema();
 
   // Get the string value back
-  auto value_result = node->get_value("name");
+  auto value_result = node->get_value(schema->get_field("name"));
   ASSERT_TRUE(value_result.ok());
   auto value = value_result.ValueOrDie();
 
@@ -587,9 +598,11 @@ TEST_F(NodeTest, MultipleNodesSharedString) {
     nodes.push_back(std::move(node_result).ValueOrDie());
   }
 
+  auto schema = nodes[0]->get_schema();
+
   // Verify all nodes can read the string
   for (int i = 0; i < 5; i++) {
-    auto value_result = nodes[i]->get_value("name");
+    auto value_result = nodes[i]->get_value(schema->get_field("name"));
     ASSERT_TRUE(value_result.ok());
     EXPECT_EQ(value_result.ValueOrDie().to_string(), shared_string);
   }
@@ -603,7 +616,7 @@ TEST_F(NodeTest, MultipleNodesSharedString) {
 
     // Remaining nodes should still be able to access the string
     for (int j = i + 1; j < 5; j++) {
-      auto value_result = nodes[j]->get_value("name");
+      auto value_result = nodes[j]->get_value(schema->get_field("name"));
       ASSERT_TRUE(value_result.ok());
       EXPECT_EQ(value_result.ValueOrDie().to_string(), shared_string);
     }
@@ -650,8 +663,9 @@ TEST_F(NodeTest, NodeGetValueArray) {
   auto node_result = node_manager_->create_node("UserWithArrays", node_data);
   ASSERT_TRUE(node_result.ok());
   auto node = node_result.ValueOrDie();
+  auto schema = node->get_schema();
 
-  auto tags_result = node->get_value("tags");
+  auto tags_result = node->get_value(schema->get_field("tags"));
   ASSERT_TRUE(tags_result.ok())
       << "Failed to get tags: " << tags_result.status().ToString();
   const Value& tags_value = tags_result.ValueOrDie();
@@ -683,8 +697,9 @@ TEST_F(NodeTest, NodeGetValueInt32Array) {
   auto node_result = node_manager_->create_node("UserWithArrays", node_data);
   ASSERT_TRUE(node_result.ok());
   auto node = node_result.ValueOrDie();
+  auto schema = node->get_schema();
 
-  auto scores_result = node->get_value("scores");
+  auto scores_result = node->get_value(schema->get_field("scores"));
   ASSERT_TRUE(scores_result.ok());
   const Value& scores_value = scores_result.ValueOrDie();
 
@@ -705,17 +720,18 @@ TEST_F(NodeTest, NodeSetValueArray) {
   auto node_result = node_manager_->create_node("UserWithArrays", node_data);
   ASSERT_TRUE(node_result.ok());
   auto node = node_result.ValueOrDie();
+  auto schema = node->get_schema();
 
-  auto get_before = node->get_value("tags");
+  auto get_before = node->get_value(schema->get_field("tags"));
   ASSERT_TRUE(get_before.ok());
   EXPECT_EQ(get_before.ValueOrDie().to_string(), "[old1, old2]");
 
   std::vector<Value> new_tags = {Value{"new1"}, Value{"new2"}, Value{"new3"}};
-  auto set_result = node->set_value("tags", Value{new_tags});
+  auto set_result = node->set_value(schema->get_field("tags"), Value{new_tags});
   ASSERT_TRUE(set_result.ok())
       << "Failed to set tags: " << set_result.status().ToString();
 
-  auto get_after = node->get_value("tags");
+  auto get_after = node->get_value(schema->get_field("tags"));
   ASSERT_TRUE(get_after.ok());
   EXPECT_EQ(get_after.ValueOrDie().to_string(), "[new1, new2, new3]");
 }
@@ -730,8 +746,9 @@ TEST_F(NodeTest, NodeArrayEmpty) {
   auto node_result = node_manager_->create_node("UserWithArrays", node_data);
   ASSERT_TRUE(node_result.ok());
   auto node = node_result.ValueOrDie();
+  auto schema = node->get_schema();
 
-  auto tags_result = node->get_value("tags");
+  auto tags_result = node->get_value(schema->get_field("tags"));
   ASSERT_TRUE(tags_result.ok());
   const Value& tags_value = tags_result.ValueOrDie();
 
@@ -752,12 +769,13 @@ TEST_F(NodeTest, NodeArrayNullableOmitted) {
   auto node_result = node_manager_->create_node("UserWithArrays", node_data);
   ASSERT_TRUE(node_result.ok());
   auto node = node_result.ValueOrDie();
+  auto schema = node->get_schema();
 
-  auto tags_result = node->get_value("tags");
+  auto tags_result = node->get_value(schema->get_field("tags"));
   ASSERT_TRUE(tags_result.ok());
   EXPECT_TRUE(tags_result.ValueOrDie().is_null());
 
-  auto scores_result = node->get_value("scores");
+  auto scores_result = node->get_value(schema->get_field("scores"));
   ASSERT_TRUE(scores_result.ok());
   EXPECT_TRUE(scores_result.ValueOrDie().is_null());
 }
@@ -773,8 +791,9 @@ TEST_F(NodeTest, NodeArrayStorage) {
   auto node_result = node_manager_->create_node("UserWithArrays", node_data);
   ASSERT_TRUE(node_result.ok());
   auto node = node_result.ValueOrDie();
+  auto schema = node->get_schema();
 
-  auto tags_result = node->get_value("tags");
+  auto tags_result = node->get_value(schema->get_field("tags"));
   ASSERT_TRUE(tags_result.ok());
   const Value& v = tags_result.ValueOrDie();
 
@@ -820,8 +839,9 @@ class NodeMapFieldTest : public ::testing::Test {
 TEST_F(NodeMapFieldTest, MapFieldIsNullWhenOmitted) {
   auto node =
       mgr_->create_node("UserWithMap", {{"name", Value{"Alice"}}}).ValueOrDie();
+  auto schema = node->get_schema();
 
-  auto val = node->get_value("props");
+  auto val = node->get_value(schema->get_field("props"));
   ASSERT_TRUE(val.ok());
   EXPECT_TRUE(val.ValueOrDie().is_null());
 }
@@ -837,7 +857,7 @@ TEST_F(NodeMapFieldTest, SetMapKeyViUpdateFields) {
                                    std::vector<std::string>{"answer"}}})
                   .ok());
 
-  auto val = node->get_value("props");
+  auto val = node->get_value(schema->get_field("props"));
   ASSERT_TRUE(val.ok());
   Value v = val.ValueOrDie();
   ASSERT_TRUE(v.holds_map_ref());
@@ -864,7 +884,8 @@ TEST_F(NodeMapFieldTest, SetMultipleMapKeys) {
                                        std::vector<std::string>{"role"}}})
           .ok());
 
-  auto m = node->get_value("props").ValueOrDie().as_map_ref();
+  auto m =
+      node->get_value(schema->get_field("props")).ValueOrDie().as_map_ref();
   EXPECT_EQ(m.count(), 3u);
   EXPECT_DOUBLE_EQ(m.get_value("score").as_double(), 3.14);
   EXPECT_EQ(m.get_value("active").as_bool(), true);
@@ -881,7 +902,7 @@ TEST_F(NodeMapFieldTest, OverwriteMapKey) {
                       {FieldUpdate{props, Value{int32_t(1)}, UpdateType::SET,
                                    std::vector<std::string>{"x"}}})
                   .ok());
-  EXPECT_EQ(node->get_value("props")
+  EXPECT_EQ(node->get_value(schema->get_field("props"))
                 .ValueOrDie()
                 .as_map_ref()
                 .get_value("x")
@@ -892,7 +913,7 @@ TEST_F(NodeMapFieldTest, OverwriteMapKey) {
                       {FieldUpdate{props, Value{int32_t(99)}, UpdateType::SET,
                                    std::vector<std::string>{"x"}}})
                   .ok());
-  EXPECT_EQ(node->get_value("props")
+  EXPECT_EQ(node->get_value(schema->get_field("props"))
                 .ValueOrDie()
                 .as_map_ref()
                 .get_value("x")
@@ -916,8 +937,9 @@ TEST_F(NodeMapFieldTest, MixedScalarAndMapKeyUpdates) {
                            std::vector<std::string>{"score"}}})
           .ok());
 
-  EXPECT_EQ(node->get_value("age").ValueOrDie().as_int32(), 21);
-  EXPECT_DOUBLE_EQ(node->get_value("props")
+  EXPECT_EQ(node->get_value(schema->get_field("age")).ValueOrDie().as_int32(),
+            21);
+  EXPECT_DOUBLE_EQ(node->get_value(schema->get_field("props"))
                        .ValueOrDie()
                        .as_map_ref()
                        .get_value("score")
@@ -936,6 +958,7 @@ TEST_F(NodeMapFieldTest, GetValueMissingMapKeyReturnsNull) {
                                    std::vector<std::string>{"a"}}})
                   .ok());
 
-  auto m = node->get_value("props").ValueOrDie().as_map_ref();
+  auto m =
+      node->get_value(schema->get_field("props")).ValueOrDie().as_map_ref();
   EXPECT_TRUE(m.get_value("nonexistent").is_null());
 }

@@ -7,6 +7,8 @@
 #include <string_view>
 #include <type_traits>
 
+#include "constants.hpp"
+
 namespace tundradb {
 
 // Forward declaration
@@ -47,9 +49,9 @@ class StringRef {
     uint32_t padding;  // 4 bytes - Ensure 16-byte alignment
 
     [[nodiscard]] bool is_marked_for_deletion() const {
-      return (flags & 0x1) != 0;
+      return (flags & arena_flags::kMarkedForDeletion) != 0;
     }
-    void mark_for_deletion() { flags |= 0x1; }
+    void mark_for_deletion() { flags |= arena_flags::kMarkedForDeletion; }
   };
 
   static constexpr size_t HEADER_SIZE = sizeof(StringHeader);  // 16 bytes

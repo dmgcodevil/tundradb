@@ -114,25 +114,119 @@ open coverage_html/index.html
 
 ## Build with Sanitizers
 
+Sanitizers instrument the binary at compile time to detect memory errors,
+undefined behavior, and data races. They are controlled by two CMake options:
+
+| Option | Values | Default |
+|---|---|---|
+| `ENABLE_SANITIZERS` | `ON` / `OFF` | `OFF` |
+| `SANITIZER_TYPE` | `address`, `undefined`, `thread`, `memory` | `address` |
+
+### AddressSanitizer (ASan) — recommended default
+
+ASan detects use-after-free, buffer overflows (heap, stack, global), and
+memory leaks. It catches bugs that are invisible on macOS without
+instrumentation (see `docs/INCIDENT_MAP_ENTRY_BUFFER_OVERFLOW.md`).
+
 ```bash
-mkdir -p build_asan && cd build_asan
-cmake .. \
-  -DCMAKE_BUILD_TYPE=Debug \
-  -DENABLE_SANITIZERS=ON \
-  -DSANITIZER_TYPE=address
-cmake --build . -j$(nproc)
-ctest --output-on-failure
+cmake -B build_asan -DCMAKE_BUILD_TYPE=Debug \
+  -DENABLE_SANITIZERS=ON -DSANITIZER_TYPE=address
+cmake --build build_asan -j$(sysctl -n hw.ncpu)
+ctest --test-dir build_asan --output-on-failure
 ```
 
-Supported sanitizer types: `address`, `thread`, `undefined`, `memory`.
+Run a single test under ASan:
+
+```bash
+./build_asan/tests/map_arena_test
+./build_asan/tests/snapshot_test --gtest_filter='*PreservesMapValues*'
+```
+
+ASan slows execution by ~2x and increases memory usage ~2x. This is
+acceptable for test runs but not for benchmarks or profiling.
+
+### UndefinedBehaviorSanitizer (UBSan)
+
+Detects signed integer overflow, null pointer dereference, misaligned
+access, and other undefined behavior.
+
+```bash
+cmake -B build_ubsan -DCMAKE_BUILD_TYPE=Debug \
+  -DENABLE_SANITIZERS=ON -DSANITIZER_TYPE=undefined
+cmake --build build_ubsan -j$(sysctl -n hw.ncpu)
+ctest --test-dir build_ubsan --output-on-failure
+```
+
+### ThreadSanitizer (TSan)
+
+Detects data races. Cannot be combined with ASan in the same build.
+
+```bash
+cmake -B build_tsan -DCMAKE_BUILD_TYPE=Debug \
+  -DENABLE_SANITIZERS=ON -DSANITIZER_TYPE=thread
+cmake --build build_tsan -j$(sysctl -n hw.ncpu)
+ctest --test-dir build_tsan --output-on-failure
+```
+
+TSan suppression rules are in `tests/tsan_suppressions.txt`.
+
+### Switching between sanitizer and normal builds
+
+Each sanitizer should use its own build directory (`build_asan`,
+`build_ubsan`, `build_tsan`) to avoid mixing instrumented and
+non-instrumented object files. Keep a separate `build` directory for
+normal development:
+
+```
+build/            # normal Debug or Release, no sanitizers
+build_asan/       # Debug + ASan
+build_ubsan/      # Debug + UBSan
+build_tsan/       # Debug + TSan
+build_cov/        # Debug + coverage
+```
+
+### Reading ASan output
+
+When ASan detects an error it prints a report like:
+
+```
+==PID==ERROR: AddressSanitizer: stack-buffer-overflow on address 0x...
+READ of size 16 at 0x...
+    #0 SomeFunction (file.cpp:123)
+    #1 CallerFunction (file.cpp:456)
+```
+
+Key things to look for:
+- **Error type**: `stack-buffer-overflow`, `heap-use-after-free`,
+  `heap-buffer-overflow`, `stack-use-after-return`, etc.
+- **READ vs WRITE**: tells you whether the bug is an over-read (reading
+  past the object) or an over-write (corrupting adjacent memory).
+- **Stack trace**: the `#0` frame is where the bad access happens;
+  frames below it show who called it.
+- **Variable annotation**: ASan marks which variable was overflowed,
+  e.g., `[48, 52) 'i32' <== Memory access at offset 48 partially
+  overflows this variable`.
+
+### CI sanitizer matrix
+
+GitHub Actions runs three configurations on every push/PR to `main`:
+
+| Name | Build type | Sanitizer |
+|---|---|---|
+| Release | Release | none |
+| Debug + ASan | Debug | address |
+| Debug + UBSan | Debug | undefined |
+
+See `.github/workflows/cmake-single-platform.yml`.
 
 ## Quick Reference
 
 | What | Command |
 |---|---|
-| Build all tests | `cmake --build . -j$(nproc)` |
-| Run all tests | `ctest --output-on-failure` |
-| Run one test | `./tests/<name>_test` |
-| Filter tests | `./tests/<name>_test --gtest_filter='Suite.Case'` |
-| List tests | `./tests/<name>_test --gtest_list_tests` |
-| Coverage report | See steps 1-5 above |
+| Build (normal) | `cmake -B build -DCMAKE_BUILD_TYPE=Debug && cmake --build build -j$(sysctl -n hw.ncpu)` |
+| Build (ASan) | `cmake -B build_asan -DCMAKE_BUILD_TYPE=Debug -DENABLE_SANITIZERS=ON && cmake --build build_asan -j$(sysctl -n hw.ncpu)` |
+| Run all tests | `ctest --test-dir build --output-on-failure` |
+| Run one test | `./build/tests/<name>_test` |
+| Filter tests | `./build/tests/<name>_test --gtest_filter='Suite.Case'` |
+| List tests | `./build/tests/<name>_test --gtest_list_tests` |
+| Coverage report | See coverage steps above |

@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "constants.hpp"
 #include "edge.hpp"
 #include "logger.hpp"
 #include "node.hpp"
@@ -187,8 +188,9 @@ struct Row {
       if (!field) continue;
       const auto& name = field->name();
       const bool structural =
-          (name == "id" || name == "_edge_id" || name == "source_id" ||
-           name == "target_id" || name == "created_ts");
+          (name == field_names::kId || name == field_names::kEdgeId ||
+           name == field_names::kSourceId || name == field_names::kTargetId ||
+           name == field_names::kCreatedTs);
       if (!structural && edge_schema) {
         auto real_field = edge_schema->get_field(name);
         if (!real_field) continue;
@@ -225,7 +227,7 @@ struct Row {
       size_t dot_pos = field_name.find('.');
       if (dot_pos != std::string::npos) {
         std::string schema = field_name.substr(0, dot_pos);
-        if (field_name.substr(dot_pos + 1) == "id") {
+        if (field_name.substr(dot_pos + 1) == field_names::kId) {
           ids[schema] = value.as_int64();
         }
       }

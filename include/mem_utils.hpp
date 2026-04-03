@@ -51,13 +51,6 @@ inline size_t get_alignment_overhead(size_t alignment) {
   return (alignment > alignof(std::max_align_t)) ? (alignment - 1) : 0;
 }
 
-/**
- * Check if a pointer is properly aligned
- */
-inline bool is_aligned(const void* ptr, size_t alignment) {
-  return (reinterpret_cast<uintptr_t>(ptr) % alignment) == 0;
-}
-
 }  // namespace tundradb
 
 #endif  // MEM_UTILS_HPP

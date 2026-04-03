@@ -11,13 +11,6 @@
 
 namespace tundradb {
 
-arrow::Result<bool> write_to_file(const std::string& file_path,
-                                  const std::string& content);
-
-arrow::Result<std::string> read_from_file(const std::string& file_path);
-
-bool file_exists(const std::string& file_path);
-
 template <typename T>
 arrow::Result<T> read_json_file(const std::string& file_path) {
   try {

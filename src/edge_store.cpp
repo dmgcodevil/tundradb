@@ -1,7 +1,9 @@
 #include "edge_store.hpp"
 
 #include <algorithm>
+#include <string>
 
+#include "constants.hpp"
 #include "json.hpp"
 #include "logger.hpp"
 #include "metadata.hpp"
@@ -349,28 +351,6 @@ std::set<std::string> EdgeStore::get_edge_types() const {
 
 namespace {
 
-std::shared_ptr<arrow::DataType> value_type_to_arrow(ValueType vt) {
-  switch (vt) {
-    case ValueType::INT32:
-      return arrow::int32();
-    case ValueType::INT64:
-      return arrow::int64();
-    case ValueType::DOUBLE:
-      return arrow::float64();
-    case ValueType::FLOAT:
-      return arrow::float32();
-    case ValueType::STRING:
-    case ValueType::FIXED_STRING16:
-    case ValueType::FIXED_STRING32:
-    case ValueType::FIXED_STRING64:
-      return arrow::utf8();
-    case ValueType::BOOL:
-      return arrow::boolean();
-    default:
-      return nullptr;
-  }
-}
-
 arrow::Status append_value_to_builder(arrow::ArrayBuilder* builder,
                                       ValueType type, const Value& value) {
   if (value.is_null()) {
@@ -405,25 +385,11 @@ arrow::Status append_value_to_builder(arrow::ArrayBuilder* builder,
 }
 
 std::unique_ptr<arrow::ArrayBuilder> make_builder(ValueType type) {
-  switch (type) {
-    case ValueType::INT32:
-      return std::make_unique<arrow::Int32Builder>();
-    case ValueType::INT64:
-      return std::make_unique<arrow::Int64Builder>();
-    case ValueType::DOUBLE:
-      return std::make_unique<arrow::DoubleBuilder>();
-    case ValueType::FLOAT:
-      return std::make_unique<arrow::FloatBuilder>();
-    case ValueType::STRING:
-    case ValueType::FIXED_STRING16:
-    case ValueType::FIXED_STRING32:
-    case ValueType::FIXED_STRING64:
-      return std::make_unique<arrow::StringBuilder>();
-    case ValueType::BOOL:
-      return std::make_unique<arrow::BooleanBuilder>();
-    default:
-      return nullptr;
-  }
+  auto arrow_type = scalar_vt_to_arrow(type);
+  if (!arrow_type) return nullptr;
+  auto result = arrow::MakeBuilder(arrow_type);
+  if (!result.ok()) return nullptr;
+  return std::move(*result);
 }
 
 std::string properties_to_json(
@@ -498,15 +464,15 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::generate_table(
 
   // Build Arrow schema: structural + schema props + _properties (JSON)
   std::vector<std::shared_ptr<arrow::Field>> arrow_fields = {
-      arrow::field("id", arrow::int64()),
-      arrow::field("source_id", arrow::int64()),
-      arrow::field("target_id", arrow::int64()),
-      arrow::field("created_ts", arrow::int64())};
+      arrow::field(std::string(field_names::kId), arrow::int64()),
+      arrow::field(std::string(field_names::kSourceId), arrow::int64()),
+      arrow::field(std::string(field_names::kTargetId), arrow::int64()),
+      arrow::field(std::string(field_names::kCreatedTs), arrow::int64())};
 
   auto edge_schema = get_edge_schema(edge_type);
   if (edge_schema) {
     for (const auto& field : edge_schema->fields()) {
-      auto arrow_type = value_type_to_arrow(field->type());
+      auto arrow_type = scalar_vt_to_arrow(field->type());
       if (arrow_type) {
         arrow_fields.push_back(
             arrow::field(field->name(), arrow_type, field->nullable()));

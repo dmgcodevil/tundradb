@@ -6,6 +6,7 @@
 #include <string>
 #include <unordered_map>
 
+#include "constants.hpp"
 #include "logger.hpp"
 #include "node_arena.hpp"
 #include "node_view.hpp"
@@ -63,11 +64,6 @@ class Node {
     return NodeArena::get_value(*handle_, layout_, field);
   }
 
-  [[deprecated]]
-  arrow::Result<Value> get_value(const std::string &field) const {
-    return get_value(schema_->get_field(field));
-  }
-
   [[nodiscard]] std::shared_ptr<Schema> get_schema() const { return schema_; }
   [[nodiscard]] NodeHandle *get_handle() const { return handle_.get(); }
   [[nodiscard]] NodeArena *get_arena() const { return arena_.get(); }
@@ -85,30 +81,6 @@ class Node {
   arrow::Result<bool> update(const std::shared_ptr<Field> &field, Value value,
                              UpdateType update_type = UpdateType::SET) {
     return update_fields({{field, std::move(value), update_type}});
-  }
-
-  // Legacy overload: pair-based batch with single UpdateType
-  arrow::Result<bool> update_fields(
-      const std::vector<std::pair<std::shared_ptr<Field>, Value>>
-          &field_updates,
-      const UpdateType update_type) {
-    std::vector<FieldUpdate> updates;
-    updates.reserve(field_updates.size());
-    for (const auto &[f, v] : field_updates) {
-      updates.push_back({f, v, update_type});
-    }
-    return update_fields(updates);
-  }
-
-  [[deprecated]]
-  arrow::Result<bool> update(const std::string &field, Value value,
-                             UpdateType update_type) {
-    return update(schema_->get_field(field), std::move(value), update_type);
-  }
-
-  [[deprecated]]
-  arrow::Result<bool> set_value(const std::string &field, const Value &value) {
-    return update(schema_->get_field(field), value, UpdateType::SET);
   }
 
   arrow::Result<bool> set_value(const std::shared_ptr<Field> &field,
@@ -243,10 +215,11 @@ class NodeManager {
     // Initial population of v0: write directly to base node
     // Use set_field_value_v0 for all fields (doesn't create versions)
     ARROW_RETURN_NOT_OK(node_arena_->set_field_value_v0(
-        node_handle, layout_, schema_->get_field("id"), Value{id}));
+        node_handle, layout_, schema_->get_field(std::string(field_names::kId)),
+        Value{id}));
 
     for (const auto &field : schema_->fields()) {
-      if (field->name() == "id") continue;
+      if (field->name() == field_names::kId) continue;
 
       Value value;
       if (data.contains(field->name())) {

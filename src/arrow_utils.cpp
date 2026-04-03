@@ -106,49 +106,6 @@ bool initialize_arrow_compute() {
   return initialized;
 }
 
-// Arrow utility function implementations
-arrow::Result<std::shared_ptr<arrow::Array>> create_int64_array(
-    const int64_t value) {
-  arrow::Int64Builder int64_builder;
-  ARROW_RETURN_NOT_OK(int64_builder.Reserve(1));
-  ARROW_RETURN_NOT_OK(int64_builder.Append(value));
-  std::shared_ptr<arrow::Array> int64_array;
-  ARROW_RETURN_NOT_OK(int64_builder.Finish(&int64_array));
-  return int64_array;
-}
-
-arrow::Result<std::shared_ptr<arrow::Array>> create_str_array(
-    const std::string& value) {
-  arrow::StringBuilder builder;
-  ARROW_RETURN_NOT_OK(builder.Append(value));
-  std::shared_ptr<arrow::Array> string_arr;
-  ARROW_RETURN_NOT_OK(builder.Finish(&string_arr));
-  return string_arr;
-}
-
-arrow::Result<std::shared_ptr<arrow::Array>> create_null_array(
-    const std::shared_ptr<arrow::DataType>& type) {
-  switch (type->id()) {
-    case arrow::Type::INT64: {
-      arrow::Int64Builder builder;
-      ARROW_RETURN_NOT_OK(builder.AppendNull());
-      std::shared_ptr<arrow::Array> array;
-      ARROW_RETURN_NOT_OK(builder.Finish(&array));
-      return array;
-    }
-    case arrow::Type::STRING: {
-      arrow::StringBuilder builder;
-      ARROW_RETURN_NOT_OK(builder.AppendNull());
-      std::shared_ptr<arrow::Array> array;
-      ARROW_RETURN_NOT_OK(builder.Finish(&array));
-      return array;
-    }
-    default:
-      return arrow::Status::NotImplemented("Unsupported type: ",
-                                           type->ToString());
-  }
-}
-
 std::shared_ptr<arrow::Schema> prepend_field(
     const std::shared_ptr<arrow::Field>& field,
     const std::shared_ptr<arrow::Schema>& target_schema) {
@@ -167,28 +124,6 @@ std::shared_ptr<arrow::Schema> prepend_field(
 std::shared_ptr<arrow::Schema> prepend_id_field(
     const std::shared_ptr<arrow::Schema>& target_schema) {
   return prepend_field(arrow::field("id", arrow::int64()), target_schema);
-}
-
-arrow::Result<std::shared_ptr<arrow::Scalar>> value_to_arrow_scalar(
-    const Value& value) {
-  switch (value.type()) {
-    case ValueType::INT32:
-      return arrow::MakeScalar(value.as_int32());
-    case ValueType::INT64:
-      return arrow::MakeScalar(value.as_int64());
-    case ValueType::DOUBLE:
-      return arrow::MakeScalar(value.as_double());
-    case ValueType::STRING:
-      return arrow::MakeScalar(value.as_string());
-    case ValueType::BOOL:
-      return arrow::MakeScalar(value.as_bool());
-    case ValueType::NA:
-      return arrow::MakeNullScalar(arrow::null());
-    default:
-      return arrow::Status::NotImplemented(
-          "Unsupported Value type for Arrow scalar conversion: ",
-          tundradb::to_string(value.type()));
-  }
 }
 
 arrow::Result<std::shared_ptr<arrow::Scalar>> value_ptr_to_arrow_scalar(
@@ -580,53 +515,9 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_empty_table(
   std::vector<std::shared_ptr<arrow::Array>> empty_arrays;
 
   for (const auto& field : schema->fields()) {
+    ARROW_ASSIGN_OR_RAISE(auto builder, arrow::MakeBuilder(field->type()));
     std::shared_ptr<arrow::Array> empty_array;
-
-    switch (field->type()->id()) {
-      case arrow::Type::INT64: {
-        arrow::Int64Builder builder;
-        ARROW_RETURN_NOT_OK(builder.Finish(&empty_array));
-        break;
-      }
-      case arrow::Type::STRING: {
-        arrow::StringBuilder builder;
-        ARROW_RETURN_NOT_OK(builder.Finish(&empty_array));
-        break;
-      }
-      case arrow::Type::DOUBLE: {
-        arrow::DoubleBuilder builder;
-        ARROW_RETURN_NOT_OK(builder.Finish(&empty_array));
-        break;
-      }
-      case arrow::Type::BOOL: {
-        arrow::BooleanBuilder builder;
-        ARROW_RETURN_NOT_OK(builder.Finish(&empty_array));
-        break;
-      }
-      case arrow::Type::INT32: {
-        arrow::Int32Builder builder;
-        ARROW_RETURN_NOT_OK(builder.Finish(&empty_array));
-        break;
-      }
-      case arrow::Type::LIST:
-      case arrow::Type::FIXED_SIZE_LIST: {
-        std::unique_ptr<arrow::ArrayBuilder> builder;
-        ARROW_RETURN_NOT_OK(arrow::MakeBuilder(arrow::default_memory_pool(),
-                                               field->type(), &builder));
-        ARROW_RETURN_NOT_OK(builder->Finish(&empty_array));
-        break;
-      }
-      case arrow::Type::MAP: {
-        std::unique_ptr<arrow::ArrayBuilder> builder;
-        ARROW_RETURN_NOT_OK(arrow::MakeBuilder(arrow::default_memory_pool(),
-                                               field->type(), &builder));
-        ARROW_RETURN_NOT_OK(builder->Finish(&empty_array));
-        break;
-      }
-      default:
-        empty_array = std::make_shared<arrow::NullArray>(0);
-    }
-
+    ARROW_RETURN_NOT_OK(builder->Finish(&empty_array));
     empty_arrays.push_back(empty_array);
   }
 

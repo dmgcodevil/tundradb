@@ -7,6 +7,7 @@
 #include <cstring>
 #include <type_traits>
 
+#include "constants.hpp"
 #include "value_type.hpp"
 
 namespace tundradb {
@@ -55,9 +56,9 @@ class ArrayRef {
     ArrayArena* arena;               // 8 bytes - owning arena (for dealloc)
 
     [[nodiscard]] bool is_marked_for_deletion() const {
-      return (flags & 0x1) != 0;
+      return (flags & arena_flags::kMarkedForDeletion) != 0;
     }
-    void mark_for_deletion() { flags |= 0x1; }
+    void mark_for_deletion() { flags |= arena_flags::kMarkedForDeletion; }
   };
 
   static constexpr size_t HEADER_SIZE = sizeof(ArrayHeader);  // 24 bytes

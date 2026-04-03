@@ -9,13 +9,14 @@
 #include <llvm/ADT/DenseSet.h>
 #include <uuid/uuid.h>
 
-#include <iostream>
 #include <set>
 #include <source_location>
+#include <sstream>
 #include <string>
 #include <unordered_set>
 
 #include "arrow_utils.hpp"
+#include "constants.hpp"
 #include "logger.hpp"
 #include "node.hpp"
 #include "query.hpp"
@@ -36,10 +37,10 @@ constexpr uint64_t NODE_MASK = (1ULL << 48) - 1;
  */
 inline uint16_t compute_tag(const SchemaRef& ref) {
   const std::string& s = ref.value();
-  uint32_t h = 2166136261u;
+  uint32_t h = hash::kFnv1aOffsetBasis;
   for (unsigned char c : s) {
     h ^= c;
-    h *= 16777619u;
+    h *= hash::kFnv1aPrime;
   }
   h ^= (h >> 16);
   return static_cast<uint16_t>(h & 0xFFFFu);
@@ -234,44 +235,8 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
 
   std::vector<std::unique_ptr<arrow::ArrayBuilder>> builders;
   for (const auto& field : arrow_schema->fields()) {
-    switch (field->type()->id()) {
-      case arrow::Type::INT32:
-        builders.push_back(std::make_unique<arrow::Int32Builder>());
-        break;
-      case arrow::Type::INT64:
-        builders.push_back(std::make_unique<arrow::Int64Builder>());
-        break;
-      case arrow::Type::FLOAT:
-        builders.push_back(std::make_unique<arrow::FloatBuilder>());
-        break;
-      case arrow::Type::DOUBLE:
-        builders.push_back(std::make_unique<arrow::DoubleBuilder>());
-        break;
-      case arrow::Type::STRING:
-        builders.push_back(std::make_unique<arrow::StringBuilder>());
-        break;
-      case arrow::Type::BOOL:
-        builders.push_back(std::make_unique<arrow::BooleanBuilder>());
-        break;
-      case arrow::Type::LIST:
-      case arrow::Type::FIXED_SIZE_LIST: {
-        std::unique_ptr<arrow::ArrayBuilder> list_builder;
-        ARROW_RETURN_NOT_OK(arrow::MakeBuilder(arrow::default_memory_pool(),
-                                               field->type(), &list_builder));
-        builders.push_back(std::move(list_builder));
-        break;
-      }
-      case arrow::Type::MAP: {
-        std::unique_ptr<arrow::ArrayBuilder> map_builder;
-        ARROW_RETURN_NOT_OK(arrow::MakeBuilder(arrow::default_memory_pool(),
-                                               field->type(), &map_builder));
-        builders.push_back(std::move(map_builder));
-        break;
-      }
-      default:
-        return arrow::Status::NotImplemented("Unsupported type: ",
-                                             field->type()->ToString());
-    }
+    ARROW_ASSIGN_OR_RAISE(auto builder, arrow::MakeBuilder(field->type()));
+    builders.push_back(std::move(builder));
   }
 
   std::vector<std::vector<std::shared_ptr<arrow::Array>>> chunks_per_field(
@@ -417,181 +382,6 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
 }
 
 /**
- * @brief Prints a single row of an Arrow table to stdout (tab-separated).
- *
- * @param table The table to read from.
- * @param row_index Zero-based row index to print.
- */
-static void print_row(const std::shared_ptr<arrow::Table>& table,
-                      const int64_t row_index) {
-  for (int j = 0; j < table->num_columns(); ++j) {
-    const auto column = table->column(j);
-    if (!column || column->num_chunks() == 0) {
-      std::cout << "NULL\t";
-      continue;
-    }
-
-    int64_t accumulated_length = 0;
-    std::shared_ptr<arrow::Array> chunk;
-    int64_t chunk_offset = row_index;
-
-    for (int c = 0; c < column->num_chunks(); ++c) {
-      chunk = column->chunk(c);
-      if (accumulated_length + chunk->length() > row_index) {
-        chunk_offset = row_index - accumulated_length;
-        break;
-      }
-      accumulated_length += chunk->length();
-    }
-
-    if (!chunk || chunk_offset >= chunk->length() ||
-        chunk->IsNull(chunk_offset)) {
-      std::cout << "NULL\t";
-      continue;
-    }
-
-    switch (chunk->type_id()) {
-      case arrow::Type::INT32:
-        std::cout << std::static_pointer_cast<arrow::Int32Array>(chunk)->Value(
-            chunk_offset);
-        break;
-      case arrow::Type::INT64:
-        std::cout << std::static_pointer_cast<arrow::Int64Array>(chunk)->Value(
-            chunk_offset);
-        break;
-      case arrow::Type::FLOAT:
-        std::cout << std::static_pointer_cast<arrow::FloatArray>(chunk)->Value(
-            chunk_offset);
-        break;
-      case arrow::Type::DOUBLE:
-        std::cout << std::static_pointer_cast<arrow::DoubleArray>(chunk)->Value(
-            chunk_offset);
-        break;
-      case arrow::Type::BOOL:
-        std::cout << (std::static_pointer_cast<arrow::BooleanArray>(chunk)
-                              ->Value(chunk_offset)
-                          ? "true"
-                          : "false");
-        break;
-      case arrow::Type::STRING:
-        try {
-          auto str_array = std::static_pointer_cast<arrow::StringArray>(chunk);
-          if (chunk_offset < str_array->length()) {
-            std::cout << str_array->GetString(chunk_offset);
-          } else {
-            std::cout << "NULL";
-          }
-        } catch ([[maybe_unused]] const std::exception& e) {
-          std::cout << "ERROR";
-        }
-        break;
-      case arrow::Type::TIMESTAMP:
-        std::cout << std::static_pointer_cast<arrow::TimestampArray>(chunk)
-                         ->Value(chunk_offset);
-        break;
-      default:
-        std::cout << "Unsupported";
-    }
-    std::cout << "\t";
-  }
-  std::cout << std::endl;
-}
-
-/**
- * @brief Prints an Arrow table to stdout (schema, chunk info, and data).
- *
- * If the table has more than @p max_rows rows, the first and last halves
- * are printed with an ellipsis in between.
- *
- * @param table The table to print.
- * @param max_rows Maximum rows to display (0 = unlimited).
- */
-static void print_table(const std::shared_ptr<arrow::Table>& table,
-                        int64_t max_rows = 100) {
-  if (!table) {
-    std::cout << "Null table" << std::endl;
-    return;
-  }
-
-  std::cout << "Table Schema:" << std::endl;
-  std::cout << table->schema()->ToString() << std::endl;
-
-  std::cout << "\nChunk Information:" << std::endl;
-  for (int j = 0; j < table->num_columns(); ++j) {
-    auto column = table->column(j);
-    std::cout << "Column '" << table->schema()->field(j)->name()
-              << "': " << column->num_chunks();
-
-    if (column->num_chunks() > 0) {
-      std::cout << " chunk sizes = [ ";
-      for (int c = 0; c < column->num_chunks(); c++) {
-        std::cout << column->chunk(c)->length();
-        if (c < column->num_chunks() - 1) std::cout << ", ";
-      }
-      std::cout << " ]";
-    }
-    std::cout << std::endl;
-  }
-
-  const int64_t total_rows = table->num_rows();
-  std::cout << "\nTable Data (" << total_rows << " rows):" << std::endl;
-
-  try {
-    bool use_ellipsis = max_rows > 0 && total_rows > max_rows;
-    int64_t rows_to_print = use_ellipsis ? max_rows / 2 : total_rows;
-
-    std::cout << "First " << rows_to_print << " rows:" << std::endl;
-    for (int64_t i = 0; i < rows_to_print && i < total_rows; ++i) {
-      print_row(table, i);
-    }
-
-    if (use_ellipsis) {
-      std::cout << "....\n" << std::endl;
-
-      std::cout << "Last " << rows_to_print << " rows:" << std::endl;
-      for (int64_t i = total_rows - rows_to_print; i < total_rows; ++i) {
-        print_row(table, i);
-      }
-    }
-  } catch (const std::exception& e) {
-    std::cout << "Error while printing table: " << e.what() << std::endl;
-  }
-}
-
-/**
- * @brief Extracts the value from an Arrow Result, logging context on failure.
- *
- * @tparam T The result value type.
- * @param result The Arrow Result to unwrap.
- * @param context A human-readable label for the operation (used in the error
- * log).
- * @param location Source location (auto-captured).
- * @return The contained value.
- */
-template <typename T>
-T ValueOrDieWithContext(
-    const arrow::Result<T>& result, const std::string& context,
-    const std::source_location& location = std::source_location::current()) {
-  if (!result.ok()) {
-    std::string_view path(location.file_name());
-    size_t pos = path.find_last_of("/\\");
-    std::string_view filename =
-        (pos == std::string_view::npos) ? path : path.substr(pos + 1);
-    std::string error_msg = "Operation failed [" + context + "] - " +
-                            result.status().ToString() + " [at " +
-                            std::string(filename) + ":" +
-                            std::to_string(location.line()) + "]";
-    log_error(error_msg);
-
-    return result.ValueOrDie();
-  }
-  return result.ValueOrDie();
-}
-
-#define VALUE_OR_DIE_CTX(result, context) \
-  ValueOrDieWithContext((result), (context))
-
-/**
  * @brief Converts a scalar value in a ChunkedArray to its string
  * representation.
  *
@@ -673,93 +463,6 @@ arrow::Result<std::vector<T>> get_column_values(
 }
 
 /**
- * @brief Concatenates all chunks of a column into a single contiguous Arrow
- * Array.
- *
- * @param table The table containing the column.
- * @param column_name Name of the column.
- * @return The concatenated array, or an error if the column is missing.
- */
-inline arrow::Result<std::shared_ptr<arrow::Array>> get_column_as_array(
-    const std::shared_ptr<arrow::Table>& table,
-    const std::string& column_name) {
-  const auto column = table->GetColumnByName(column_name);
-  if (!column) {
-    return arrow::Status::Invalid("Column '", column_name, "' not found");
-  }
-
-  ARROW_ASSIGN_OR_RAISE(auto combined_array,
-                        arrow::Concatenate(column->chunks()));
-
-  return combined_array;
-}
-
-/**
- * @brief Returns the first non-null value from a typed Arrow Array.
- *
- * @tparam T One of int64_t, double, bool, or std::string.
- * @param array The array to read.
- * @return The first element, or an error if the array is empty/null/wrong type.
- */
-template <typename T>
-arrow::Result<T> get_first_value_from_array(
-    const std::shared_ptr<arrow::Array>& array) {
-  if (!array || array->length() == 0) {
-    return arrow::Status::Invalid("Array is null or empty");
-  }
-
-  if (array->IsNull(0)) {
-    return arrow::Status::Invalid("First value is null");
-  }
-
-  if constexpr (std::is_same_v<T, int64_t>) {
-    if (array->type_id() != arrow::Type::INT64) {
-      return arrow::Status::Invalid("Expected Int64 array, got: ",
-                                    array->type()->ToString());
-    }
-    const auto typed_array = std::static_pointer_cast<arrow::Int64Array>(array);
-    return typed_array->Value(0);
-  } else if constexpr (std::is_same_v<T, std::string>) {
-    if (array->type_id() != arrow::Type::STRING) {
-      return arrow::Status::Invalid("Expected String array, got: ",
-                                    array->type()->ToString());
-    }
-    const auto typed_array =
-        std::static_pointer_cast<arrow::StringArray>(array);
-    return typed_array->GetString(0);
-  } else if constexpr (std::is_same_v<T, double>) {
-    if (array->type_id() != arrow::Type::DOUBLE) {
-      return arrow::Status::Invalid("Expected Double array, got: ",
-                                    array->type()->ToString());
-    }
-    const auto typed_array =
-        std::static_pointer_cast<arrow::DoubleArray>(array);
-    return typed_array->Value(0);
-  } else if constexpr (std::is_same_v<T, bool>) {
-    if (array->type_id() != arrow::Type::BOOL) {
-      return arrow::Status::Invalid("Expected Boolean array, got: ",
-                                    array->type()->ToString());
-    }
-    auto typed_array = std::static_pointer_cast<arrow::BooleanArray>(array);
-    return typed_array->Value(0);
-  } else {
-    return arrow::Status::NotImplemented("Unsupported type");
-  }
-}
-
-/** @brief Convenience wrapper: extracts the first int64 from an array. */
-inline arrow::Result<int64_t> get_first_int64(
-    const std::shared_ptr<arrow::Array>& array) {
-  return get_first_value_from_array<int64_t>(array);
-}
-
-/** @brief Convenience wrapper: extracts the first string from an array. */
-inline arrow::Result<std::string> get_first_string(
-    const std::shared_ptr<arrow::Array>& array) {
-  return get_first_value_from_array<std::string>(array);
-}
-
-/**
  * @brief Evaluates a WHERE expression against a single node.
  *
  * @param where_expr The condition to test.
@@ -785,32 +488,6 @@ inline arrow::Result<bool> apply_where_to_edge(
   return where_expr->matches_edge(edge);
 }
 
-/**
- * @brief Filters a vector of nodes by a WHERE expression.
- *
- * @param nodes The candidate nodes.
- * @param where_expr The predicate to apply.
- * @return A vector of nodes that satisfy the expression.
- */
-inline arrow::Result<std::vector<std::shared_ptr<Node>>> filter_nodes_by_where(
-    const std::vector<std::shared_ptr<Node>>& nodes,
-    const std::shared_ptr<WhereExpr>& where_expr) {
-  if (!where_expr) {
-    return arrow::Status::Invalid("WHERE expression is null");
-  }
-
-  std::vector<std::shared_ptr<Node>> filtered_nodes;
-  filtered_nodes.reserve(nodes.size());
-
-  for (const auto& node : nodes) {
-    ARROW_ASSIGN_OR_RAISE(bool matches, where_expr->matches(node));
-    if (matches) {
-      filtered_nodes.push_back(node);
-    }
-  }
-
-  return filtered_nodes;
-}
 }  // namespace tundradb
 
 #endif  // UTILS_HPP

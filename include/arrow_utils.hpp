@@ -40,32 +40,6 @@ arrow::Result<llvm::DenseSet<int64_t>> get_ids_from_table(
 bool initialize_arrow_compute();
 
 /**
- * @brief Creates a single-element Int64 Arrow array.
- *
- * @param value The integer value.
- * @return A one-element array.
- */
-arrow::Result<std::shared_ptr<arrow::Array>> create_int64_array(int64_t value);
-
-/**
- * @brief Creates a single-element String Arrow array.
- *
- * @param value The string value.
- * @return A one-element array.
- */
-arrow::Result<std::shared_ptr<arrow::Array>> create_str_array(
-    const std::string& value);
-
-/**
- * @brief Creates a single-element null Arrow array of the given type.
- *
- * @param type The Arrow data type.
- * @return A one-element array containing a null value.
- */
-arrow::Result<std::shared_ptr<arrow::Array>> create_null_array(
-    const std::shared_ptr<arrow::DataType>& type);
-
-/**
  * @brief Prepends a field to an Arrow schema.
  *
  * @param field The field to insert at position 0.
@@ -79,15 +53,6 @@ std::shared_ptr<arrow::Schema> prepend_field(
 /** @deprecated Scheduled for removal. Use prepend_field() directly. */
 std::shared_ptr<arrow::Schema> prepend_id_field(
     const std::shared_ptr<arrow::Schema>& target_schema);
-
-/**
- * @brief Converts a Value to an Arrow Scalar.
- *
- * @param value The database value to convert.
- * @return The corresponding Arrow scalar, or an error for unsupported types.
- */
-arrow::Result<std::shared_ptr<arrow::Scalar>> value_to_arrow_scalar(
-    const Value& value);
 
 /**
  * @brief Converts a raw pointer + type tag to an Arrow Scalar.
