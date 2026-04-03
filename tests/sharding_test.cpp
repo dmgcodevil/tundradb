@@ -6,6 +6,7 @@
 
 #include "../include/arrow_utils.hpp"
 #include "../include/core.hpp"
+#include "../include/debug_utils.hpp"
 using namespace tundradb;
 
 class ShardingTest : public ::testing::Test {

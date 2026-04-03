@@ -267,7 +267,9 @@ TEST_F(DatabaseSnapshotTest, SnapshotReloadPreservesMapValues) {
 
   auto restored = new_db->get_node_manager()->get_node("users_map", 0);
   ASSERT_TRUE(restored.ok()) << restored.status().ToString();
-  auto props_value = restored.ValueOrDie()->get_value("props");
+  auto restored_node = restored.ValueOrDie();
+  auto props_value =
+      restored_node->get_value(restored_node->get_schema()->get_field("props"));
   ASSERT_TRUE(props_value.ok()) << props_value.status().ToString();
   ASSERT_EQ(props_value.ValueOrDie().type(), ValueType::MAP);
 
@@ -302,7 +304,9 @@ TEST_F(DatabaseSnapshotTest, SnapshotReloadPreservesArrayValues) {
 
   auto restored = new_db->get_node_manager()->get_node("users_array", 0);
   ASSERT_TRUE(restored.ok()) << restored.status().ToString();
-  auto tags_value = restored.ValueOrDie()->get_value("tags");
+  auto restored_node = restored.ValueOrDie();
+  auto tags_value =
+      restored_node->get_value(restored_node->get_schema()->get_field("tags"));
   ASSERT_TRUE(tags_value.ok()) << tags_value.status().ToString();
   ASSERT_EQ(tags_value.ValueOrDie().type(), ValueType::ARRAY);
   ASSERT_TRUE(tags_value.ValueOrDie().holds_array_ref());

@@ -63,11 +63,6 @@ class Node {
     return NodeArena::get_value(*handle_, layout_, field);
   }
 
-  [[deprecated]]
-  arrow::Result<Value> get_value(const std::string &field) const {
-    return get_value(schema_->get_field(field));
-  }
-
   [[nodiscard]] std::shared_ptr<Schema> get_schema() const { return schema_; }
   [[nodiscard]] NodeHandle *get_handle() const { return handle_.get(); }
   [[nodiscard]] NodeArena *get_arena() const { return arena_.get(); }
@@ -85,17 +80,6 @@ class Node {
   arrow::Result<bool> update(const std::shared_ptr<Field> &field, Value value,
                              UpdateType update_type = UpdateType::SET) {
     return update_fields({{field, std::move(value), update_type}});
-  }
-
-  [[deprecated]]
-  arrow::Result<bool> update(const std::string &field, Value value,
-                             UpdateType update_type) {
-    return update(schema_->get_field(field), std::move(value), update_type);
-  }
-
-  [[deprecated]]
-  arrow::Result<bool> set_value(const std::string &field, const Value &value) {
-    return update(schema_->get_field(field), value, UpdateType::SET);
   }
 
   arrow::Result<bool> set_value(const std::shared_ptr<Field> &field,
