@@ -349,28 +349,6 @@ std::set<std::string> EdgeStore::get_edge_types() const {
 
 namespace {
 
-std::shared_ptr<arrow::DataType> value_type_to_arrow(ValueType vt) {
-  switch (vt) {
-    case ValueType::INT32:
-      return arrow::int32();
-    case ValueType::INT64:
-      return arrow::int64();
-    case ValueType::DOUBLE:
-      return arrow::float64();
-    case ValueType::FLOAT:
-      return arrow::float32();
-    case ValueType::STRING:
-    case ValueType::FIXED_STRING16:
-    case ValueType::FIXED_STRING32:
-    case ValueType::FIXED_STRING64:
-      return arrow::utf8();
-    case ValueType::BOOL:
-      return arrow::boolean();
-    default:
-      return nullptr;
-  }
-}
-
 arrow::Status append_value_to_builder(arrow::ArrayBuilder* builder,
                                       ValueType type, const Value& value) {
   if (value.is_null()) {
@@ -506,7 +484,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> EdgeStore::generate_table(
   auto edge_schema = get_edge_schema(edge_type);
   if (edge_schema) {
     for (const auto& field : edge_schema->fields()) {
-      auto arrow_type = value_type_to_arrow(field->type());
+      auto arrow_type = scalar_vt_to_arrow(field->type());
       if (arrow_type) {
         arrow_fields.push_back(
             arrow::field(field->name(), arrow_type, field->nullable()));

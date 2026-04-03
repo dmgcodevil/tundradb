@@ -4,6 +4,7 @@
 
 #include "arrow_map_union_types.hpp"
 #include "arrow_utils.hpp"
+#include "metadata.hpp"
 
 namespace tundradb {
 
@@ -88,33 +89,11 @@ arrow::Result<Field> Field::from_arrow(
     case ValueType::FIXED_STRING64:
       return arrow::field(name_, arrow::utf8());
     case ValueType::ARRAY: {
-      // Convert element type to Arrow, then wrap in list
-      auto elem_arrow = TypeDescriptor{{type_desc_.element_type}};
-      // Map element ValueType to arrow type
-      std::shared_ptr<arrow::DataType> elem_dt;
-      switch (type_desc_.element_type) {
-        case ValueType::INT32:
-          elem_dt = arrow::int32();
-          break;
-        case ValueType::INT64:
-          elem_dt = arrow::int64();
-          break;
-        case ValueType::FLOAT:
-          elem_dt = arrow::float32();
-          break;
-        case ValueType::DOUBLE:
-          elem_dt = arrow::float64();
-          break;
-        case ValueType::BOOL:
-          elem_dt = arrow::boolean();
-          break;
-        case ValueType::STRING:
-          elem_dt = arrow::utf8();
-          break;
-        default:
-          return arrow::Status::NotImplemented(
-              "Unsupported array element type: ",
-              static_cast<int>(type_desc_.element_type));
+      auto elem_dt = scalar_vt_to_arrow(type_desc_.element_type);
+      if (!elem_dt) {
+        return arrow::Status::NotImplemented(
+            "Unsupported array element type: ",
+            static_cast<int>(type_desc_.element_type));
       }
       if (type_desc_.fixed_size > 0) {
         return arrow::field(name_,

@@ -210,22 +210,6 @@ arrow::Result<Value> decode_cell_value(
     return Value{};
   }
   switch (chunk->type_id()) {
-    case arrow::Type::INT64:
-      return Value(
-          std::static_pointer_cast<arrow::Int64Array>(chunk)->Value(offset));
-    case arrow::Type::STRING:
-      return Value(
-          std::static_pointer_cast<arrow::StringArray>(chunk)->GetString(
-              offset));
-    case arrow::Type::DOUBLE:
-      return Value(
-          std::static_pointer_cast<arrow::DoubleArray>(chunk)->Value(offset));
-    case arrow::Type::BOOL:
-      return Value(
-          std::static_pointer_cast<arrow::BooleanArray>(chunk)->Value(offset));
-    case arrow::Type::INT32:
-      return Value(
-          std::static_pointer_cast<arrow::Int32Array>(chunk)->Value(offset));
     case arrow::Type::LIST:
     case arrow::Type::FIXED_SIZE_LIST: {
       ARROW_ASSIGN_OR_RAISE(auto raw_array, decode_array_cell(chunk, offset));
@@ -234,8 +218,7 @@ arrow::Result<Value> decode_cell_value(
     case arrow::Type::MAP:
       return decode_map_cell(chunk, offset);
     default:
-      return arrow::Status::NotImplemented("Unsupported column type: ",
-                                           chunk->type()->ToString());
+      return array_element_to_value(chunk, offset);
   }
 }
 

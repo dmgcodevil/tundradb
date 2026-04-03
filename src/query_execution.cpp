@@ -81,73 +81,6 @@ arrow::Result<std::string> ensure_edge_shadow_schema(
 }
 
 /**
- * @brief Decode one MAP item from Arrow dense-union storage.
- *
- * This helper converts a single value at @p idx from a MAP item array
- * (`DenseUnionArray`) into the engine `Value` representation.
- *
- * Assumptions:
- * - `items` must be a dense union matching `map_union_value_type()`.
- * - Type-code constants (`kMapUnion*`) are the canonical mapping.
- *
- * Return contract:
- * - `optional<Value>{}` for null or missing item payload.
- * - concrete `Value` for supported union variants.
- * - `Status::Invalid` for type/layout mismatches or unknown type codes.
- */
-arrow::Result<std::optional<Value>> decode_map_item_union(
-    const std::shared_ptr<arrow::Array>& items, const int64_t idx) {
-  auto dense = std::dynamic_pointer_cast<arrow::DenseUnionArray>(items);
-  if (!dense) {
-    return arrow::Status::Invalid(
-        "MAP item array is not DenseUnionArray for union decoding");
-  }
-  if (dense->IsNull(idx)) {
-    return std::optional<Value>{};
-  }
-  const int8_t type_code = dense->type_code(idx);
-  const int child_id = dense->child_id(idx);
-  const int64_t value_offset = dense->value_offset(idx);
-  auto child = dense->field(child_id);
-
-  switch (type_code) {
-    case kMapUnionInt32: {
-      auto arr = std::dynamic_pointer_cast<arrow::Int32Array>(child);
-      if (!arr || arr->IsNull(value_offset)) return std::optional<Value>{};
-      return Value(arr->Value(value_offset));
-    }
-    case kMapUnionInt64: {
-      auto arr = std::dynamic_pointer_cast<arrow::Int64Array>(child);
-      if (!arr || arr->IsNull(value_offset)) return std::optional<Value>{};
-      return Value(arr->Value(value_offset));
-    }
-    case kMapUnionFloat: {
-      auto arr = std::dynamic_pointer_cast<arrow::FloatArray>(child);
-      if (!arr || arr->IsNull(value_offset)) return std::optional<Value>{};
-      return Value(arr->Value(value_offset));
-    }
-    case kMapUnionDouble: {
-      auto arr = std::dynamic_pointer_cast<arrow::DoubleArray>(child);
-      if (!arr || arr->IsNull(value_offset)) return std::optional<Value>{};
-      return Value(arr->Value(value_offset));
-    }
-    case kMapUnionBool: {
-      auto arr = std::dynamic_pointer_cast<arrow::BooleanArray>(child);
-      if (!arr || arr->IsNull(value_offset)) return std::optional<Value>{};
-      return Value(arr->Value(value_offset));
-    }
-    case kMapUnionString: {
-      auto arr = std::dynamic_pointer_cast<arrow::StringArray>(child);
-      if (!arr || arr->IsNull(value_offset)) return std::optional<Value>{};
-      return Value(arr->GetString(value_offset));
-    }
-    default:
-      return arrow::Status::Invalid("Unsupported MAP union type code: ",
-                                    static_cast<int>(type_code));
-  }
-}
-
-/**
  * @brief Project one key from a MAP column into a flat Arrow array.
  *
  * For each row in @p map_column, this function finds `key_name` in the row's
@@ -198,7 +131,7 @@ arrow::Result<std::shared_ptr<arrow::Array>> extract_map_values_for_key(
         if (items->IsNull(idx)) {
           hit = std::nullopt;
         } else {
-          ARROW_ASSIGN_OR_RAISE(hit, decode_map_item_union(items, idx));
+          ARROW_ASSIGN_OR_RAISE(hit, map_item_to_value(items, idx));
         }
         break;
       }
