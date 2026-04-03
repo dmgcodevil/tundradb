@@ -87,19 +87,6 @@ class Node {
     return update_fields({{field, std::move(value), update_type}});
   }
 
-  // Legacy overload: pair-based batch with single UpdateType
-  arrow::Result<bool> update_fields(
-      const std::vector<std::pair<std::shared_ptr<Field>, Value>>
-          &field_updates,
-      const UpdateType update_type) {
-    std::vector<FieldUpdate> updates;
-    updates.reserve(field_updates.size());
-    for (const auto &[f, v] : field_updates) {
-      updates.push_back({f, v, update_type});
-    }
-    return update_fields(updates);
-  }
-
   [[deprecated]]
   arrow::Result<bool> update(const std::string &field, Value value,
                              UpdateType update_type) {

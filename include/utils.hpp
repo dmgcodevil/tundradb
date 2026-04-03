@@ -559,39 +559,6 @@ static void print_table(const std::shared_ptr<arrow::Table>& table,
 }
 
 /**
- * @brief Extracts the value from an Arrow Result, logging context on failure.
- *
- * @tparam T The result value type.
- * @param result The Arrow Result to unwrap.
- * @param context A human-readable label for the operation (used in the error
- * log).
- * @param location Source location (auto-captured).
- * @return The contained value.
- */
-template <typename T>
-T ValueOrDieWithContext(
-    const arrow::Result<T>& result, const std::string& context,
-    const std::source_location& location = std::source_location::current()) {
-  if (!result.ok()) {
-    std::string_view path(location.file_name());
-    size_t pos = path.find_last_of("/\\");
-    std::string_view filename =
-        (pos == std::string_view::npos) ? path : path.substr(pos + 1);
-    std::string error_msg = "Operation failed [" + context + "] - " +
-                            result.status().ToString() + " [at " +
-                            std::string(filename) + ":" +
-                            std::to_string(location.line()) + "]";
-    log_error(error_msg);
-
-    return result.ValueOrDie();
-  }
-  return result.ValueOrDie();
-}
-
-#define VALUE_OR_DIE_CTX(result, context) \
-  ValueOrDieWithContext((result), (context))
-
-/**
  * @brief Converts a scalar value in a ChunkedArray to its string
  * representation.
  *
@@ -673,93 +640,6 @@ arrow::Result<std::vector<T>> get_column_values(
 }
 
 /**
- * @brief Concatenates all chunks of a column into a single contiguous Arrow
- * Array.
- *
- * @param table The table containing the column.
- * @param column_name Name of the column.
- * @return The concatenated array, or an error if the column is missing.
- */
-inline arrow::Result<std::shared_ptr<arrow::Array>> get_column_as_array(
-    const std::shared_ptr<arrow::Table>& table,
-    const std::string& column_name) {
-  const auto column = table->GetColumnByName(column_name);
-  if (!column) {
-    return arrow::Status::Invalid("Column '", column_name, "' not found");
-  }
-
-  ARROW_ASSIGN_OR_RAISE(auto combined_array,
-                        arrow::Concatenate(column->chunks()));
-
-  return combined_array;
-}
-
-/**
- * @brief Returns the first non-null value from a typed Arrow Array.
- *
- * @tparam T One of int64_t, double, bool, or std::string.
- * @param array The array to read.
- * @return The first element, or an error if the array is empty/null/wrong type.
- */
-template <typename T>
-arrow::Result<T> get_first_value_from_array(
-    const std::shared_ptr<arrow::Array>& array) {
-  if (!array || array->length() == 0) {
-    return arrow::Status::Invalid("Array is null or empty");
-  }
-
-  if (array->IsNull(0)) {
-    return arrow::Status::Invalid("First value is null");
-  }
-
-  if constexpr (std::is_same_v<T, int64_t>) {
-    if (array->type_id() != arrow::Type::INT64) {
-      return arrow::Status::Invalid("Expected Int64 array, got: ",
-                                    array->type()->ToString());
-    }
-    const auto typed_array = std::static_pointer_cast<arrow::Int64Array>(array);
-    return typed_array->Value(0);
-  } else if constexpr (std::is_same_v<T, std::string>) {
-    if (array->type_id() != arrow::Type::STRING) {
-      return arrow::Status::Invalid("Expected String array, got: ",
-                                    array->type()->ToString());
-    }
-    const auto typed_array =
-        std::static_pointer_cast<arrow::StringArray>(array);
-    return typed_array->GetString(0);
-  } else if constexpr (std::is_same_v<T, double>) {
-    if (array->type_id() != arrow::Type::DOUBLE) {
-      return arrow::Status::Invalid("Expected Double array, got: ",
-                                    array->type()->ToString());
-    }
-    const auto typed_array =
-        std::static_pointer_cast<arrow::DoubleArray>(array);
-    return typed_array->Value(0);
-  } else if constexpr (std::is_same_v<T, bool>) {
-    if (array->type_id() != arrow::Type::BOOL) {
-      return arrow::Status::Invalid("Expected Boolean array, got: ",
-                                    array->type()->ToString());
-    }
-    auto typed_array = std::static_pointer_cast<arrow::BooleanArray>(array);
-    return typed_array->Value(0);
-  } else {
-    return arrow::Status::NotImplemented("Unsupported type");
-  }
-}
-
-/** @brief Convenience wrapper: extracts the first int64 from an array. */
-inline arrow::Result<int64_t> get_first_int64(
-    const std::shared_ptr<arrow::Array>& array) {
-  return get_first_value_from_array<int64_t>(array);
-}
-
-/** @brief Convenience wrapper: extracts the first string from an array. */
-inline arrow::Result<std::string> get_first_string(
-    const std::shared_ptr<arrow::Array>& array) {
-  return get_first_value_from_array<std::string>(array);
-}
-
-/**
  * @brief Evaluates a WHERE expression against a single node.
  *
  * @param where_expr The condition to test.
@@ -785,32 +665,6 @@ inline arrow::Result<bool> apply_where_to_edge(
   return where_expr->matches_edge(edge);
 }
 
-/**
- * @brief Filters a vector of nodes by a WHERE expression.
- *
- * @param nodes The candidate nodes.
- * @param where_expr The predicate to apply.
- * @return A vector of nodes that satisfy the expression.
- */
-inline arrow::Result<std::vector<std::shared_ptr<Node>>> filter_nodes_by_where(
-    const std::vector<std::shared_ptr<Node>>& nodes,
-    const std::shared_ptr<WhereExpr>& where_expr) {
-  if (!where_expr) {
-    return arrow::Status::Invalid("WHERE expression is null");
-  }
-
-  std::vector<std::shared_ptr<Node>> filtered_nodes;
-  filtered_nodes.reserve(nodes.size());
-
-  for (const auto& node : nodes) {
-    ARROW_ASSIGN_OR_RAISE(bool matches, where_expr->matches(node));
-    if (matches) {
-      filtered_nodes.push_back(node);
-    }
-  }
-
-  return filtered_nodes;
-}
 }  // namespace tundradb
 
 #endif  // UTILS_HPP

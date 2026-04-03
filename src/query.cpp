@@ -217,64 +217,6 @@ template bool ComparisonExpr::apply_comparison<std::string>(const std::string&,
 template bool ComparisonExpr::apply_comparison<bool>(const bool&, CompareOp,
                                                      const bool&);
 
-template <typename T>
-bool ComparisonExpr::apply_comparison(const T& field_val, const T& where_val,
-                                      CompareOp op) {
-  switch (op) {
-    case CompareOp::Eq:
-      return field_val == where_val;
-    case CompareOp::NotEq:
-      return field_val != where_val;
-    case CompareOp::Gt:
-      return field_val > where_val;
-    case CompareOp::Lt:
-      return field_val < where_val;
-    case CompareOp::Gte:
-      return field_val >= where_val;
-    case CompareOp::Lte:
-      return field_val <= where_val;
-    case CompareOp::Contains:
-      if constexpr (std::is_same_v<T, std::string>) {
-        return field_val.find(where_val) != std::string::npos;
-      } else {
-        return false;
-      }
-    case CompareOp::StartsWith:
-      if constexpr (std::is_same_v<T, std::string>) {
-        return field_val.find(where_val) == 0;
-      } else {
-        return false;
-      }
-    case CompareOp::EndsWith:
-      if constexpr (std::is_same_v<T, std::string>) {
-        return field_val.size() >= where_val.size() &&
-               field_val.substr(field_val.size() - where_val.size()) ==
-                   where_val;
-      } else {
-        return false;
-      }
-  }
-  return false;
-}
-
-// Explicit template instantiations for the second overload
-template bool ComparisonExpr::apply_comparison<int32_t>(const int32_t&,
-                                                        const int32_t&,
-                                                        CompareOp);
-template bool ComparisonExpr::apply_comparison<int64_t>(const int64_t&,
-                                                        const int64_t&,
-                                                        CompareOp);
-template bool ComparisonExpr::apply_comparison<float>(const float&,
-                                                      const float&, CompareOp);
-template bool ComparisonExpr::apply_comparison<double>(const double&,
-                                                       const double&,
-                                                       CompareOp);
-template bool ComparisonExpr::apply_comparison<std::string>(const std::string&,
-                                                            const std::string&,
-                                                            CompareOp);
-template bool ComparisonExpr::apply_comparison<bool>(const bool&, const bool&,
-                                                     CompareOp);
-
 std::string ComparisonExpr::toString() const {
   std::stringstream ss;
   ss << "WHERE " << field_ref_.to_string();

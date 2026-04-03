@@ -329,10 +329,6 @@ class ComparisonExpr : public Clause, public WhereExpr {
   static bool apply_comparison(const T& field_val, CompareOp op,
                                const T& where_val);
 
-  template <typename T>
-  static bool apply_comparison(const T& field_val, const T& where_val,
-                               CompareOp op);
-
  public:
   ComparisonExpr(FieldRef field_ref, CompareOp op, Value value)
       : field_ref_(std::move(field_ref)), op_(op), value_(std::move(value)) {}
