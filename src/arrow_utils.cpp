@@ -515,53 +515,9 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_empty_table(
   std::vector<std::shared_ptr<arrow::Array>> empty_arrays;
 
   for (const auto& field : schema->fields()) {
+    ARROW_ASSIGN_OR_RAISE(auto builder, arrow::MakeBuilder(field->type()));
     std::shared_ptr<arrow::Array> empty_array;
-
-    switch (field->type()->id()) {
-      case arrow::Type::INT64: {
-        arrow::Int64Builder builder;
-        ARROW_RETURN_NOT_OK(builder.Finish(&empty_array));
-        break;
-      }
-      case arrow::Type::STRING: {
-        arrow::StringBuilder builder;
-        ARROW_RETURN_NOT_OK(builder.Finish(&empty_array));
-        break;
-      }
-      case arrow::Type::DOUBLE: {
-        arrow::DoubleBuilder builder;
-        ARROW_RETURN_NOT_OK(builder.Finish(&empty_array));
-        break;
-      }
-      case arrow::Type::BOOL: {
-        arrow::BooleanBuilder builder;
-        ARROW_RETURN_NOT_OK(builder.Finish(&empty_array));
-        break;
-      }
-      case arrow::Type::INT32: {
-        arrow::Int32Builder builder;
-        ARROW_RETURN_NOT_OK(builder.Finish(&empty_array));
-        break;
-      }
-      case arrow::Type::LIST:
-      case arrow::Type::FIXED_SIZE_LIST: {
-        std::unique_ptr<arrow::ArrayBuilder> builder;
-        ARROW_RETURN_NOT_OK(arrow::MakeBuilder(arrow::default_memory_pool(),
-                                               field->type(), &builder));
-        ARROW_RETURN_NOT_OK(builder->Finish(&empty_array));
-        break;
-      }
-      case arrow::Type::MAP: {
-        std::unique_ptr<arrow::ArrayBuilder> builder;
-        ARROW_RETURN_NOT_OK(arrow::MakeBuilder(arrow::default_memory_pool(),
-                                               field->type(), &builder));
-        ARROW_RETURN_NOT_OK(builder->Finish(&empty_array));
-        break;
-      }
-      default:
-        empty_array = std::make_shared<arrow::NullArray>(0);
-    }
-
+    ARROW_RETURN_NOT_OK(builder->Finish(&empty_array));
     empty_arrays.push_back(empty_array);
   }
 

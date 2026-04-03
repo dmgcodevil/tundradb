@@ -385,25 +385,11 @@ arrow::Status append_value_to_builder(arrow::ArrayBuilder* builder,
 }
 
 std::unique_ptr<arrow::ArrayBuilder> make_builder(ValueType type) {
-  switch (type) {
-    case ValueType::INT32:
-      return std::make_unique<arrow::Int32Builder>();
-    case ValueType::INT64:
-      return std::make_unique<arrow::Int64Builder>();
-    case ValueType::DOUBLE:
-      return std::make_unique<arrow::DoubleBuilder>();
-    case ValueType::FLOAT:
-      return std::make_unique<arrow::FloatBuilder>();
-    case ValueType::STRING:
-    case ValueType::FIXED_STRING16:
-    case ValueType::FIXED_STRING32:
-    case ValueType::FIXED_STRING64:
-      return std::make_unique<arrow::StringBuilder>();
-    case ValueType::BOOL:
-      return std::make_unique<arrow::BooleanBuilder>();
-    default:
-      return nullptr;
-  }
+  auto arrow_type = scalar_vt_to_arrow(type);
+  if (!arrow_type) return nullptr;
+  auto result = arrow::MakeBuilder(arrow_type);
+  if (!result.ok()) return nullptr;
+  return std::move(*result);
 }
 
 std::string properties_to_json(

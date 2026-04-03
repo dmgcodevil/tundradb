@@ -210,8 +210,8 @@ TEST_F(NodeTest, NodeSetValue) {
   ASSERT_TRUE(name_result.ok());
   EXPECT_EQ(name_result.ValueOrDie().to_string(), "Charlie Updated");
 
-  auto set_age_result =
-      node->set_value(schema->get_field("age"), Value{static_cast<int32_t>(23)});
+  auto set_age_result = node->set_value(schema->get_field("age"),
+                                        Value{static_cast<int32_t>(23)});
   ASSERT_TRUE(set_age_result.ok())
       << "Failed to set age: " << set_age_result.status().ToString();
 
@@ -727,8 +727,7 @@ TEST_F(NodeTest, NodeSetValueArray) {
   EXPECT_EQ(get_before.ValueOrDie().to_string(), "[old1, old2]");
 
   std::vector<Value> new_tags = {Value{"new1"}, Value{"new2"}, Value{"new3"}};
-  auto set_result =
-      node->set_value(schema->get_field("tags"), Value{new_tags});
+  auto set_result = node->set_value(schema->get_field("tags"), Value{new_tags});
   ASSERT_TRUE(set_result.ok())
       << "Failed to set tags: " << set_result.status().ToString();
 
@@ -885,9 +884,8 @@ TEST_F(NodeMapFieldTest, SetMultipleMapKeys) {
                                        std::vector<std::string>{"role"}}})
           .ok());
 
-  auto m = node->get_value(schema->get_field("props"))
-               .ValueOrDie()
-               .as_map_ref();
+  auto m =
+      node->get_value(schema->get_field("props")).ValueOrDie().as_map_ref();
   EXPECT_EQ(m.count(), 3u);
   EXPECT_DOUBLE_EQ(m.get_value("score").as_double(), 3.14);
   EXPECT_EQ(m.get_value("active").as_bool(), true);
@@ -960,8 +958,7 @@ TEST_F(NodeMapFieldTest, GetValueMissingMapKeyReturnsNull) {
                                    std::vector<std::string>{"a"}}})
                   .ok());
 
-  auto m = node->get_value(schema->get_field("props"))
-               .ValueOrDie()
-               .as_map_ref();
+  auto m =
+      node->get_value(schema->get_field("props")).ValueOrDie().as_map_ref();
   EXPECT_TRUE(m.get_value("nonexistent").is_null());
 }

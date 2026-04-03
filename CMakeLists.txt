@@ -241,7 +241,7 @@ add_library(core
         src/shard.cpp
         src/storage.cpp
         src/metadata.cpp
-        src/file_utils.cpp
+
         src/snapshot_manager.cpp
         src/edge_store.cpp
         src/table_info.cpp

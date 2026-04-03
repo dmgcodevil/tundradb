@@ -70,9 +70,10 @@ arrow::Result<std::string> ensure_edge_shadow_schema(
       arrow::field(std::string(field_names::kSourceId), arrow::int64()),
       arrow::field(std::string(field_names::kTargetId), arrow::int64()),
       arrow::field(std::string(field_names::kCreatedTs), arrow::int64())};
-  std::unordered_set<std::string> seen{
-      std::string(field_names::kEdgeId), std::string(field_names::kSourceId),
-      std::string(field_names::kTargetId), std::string(field_names::kCreatedTs)};
+  std::unordered_set<std::string> seen{std::string(field_names::kEdgeId),
+                                       std::string(field_names::kSourceId),
+                                       std::string(field_names::kTargetId),
+                                       std::string(field_names::kCreatedTs)};
   for (const auto& f : edge_schema->arrow()->fields()) {
     if (seen.insert(f->name()).second) {
       fields.push_back(f);

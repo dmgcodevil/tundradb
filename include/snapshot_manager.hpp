@@ -30,6 +30,20 @@ class SnapshotManager {
   std::shared_ptr<Manifest> get_manifest();
 
  private:
+  // --- Commit phases (called by commit()) ---
+
+  void compact_and_preserve_flags();
+  void commit_edges(
+      const std::unordered_map<std::string, EdgeMetadata> &curr_edge_metadata,
+      Manifest &new_manifest);
+  void commit_shards(
+      const std::unordered_map<std::string,
+                               std::unordered_map<int64_t, ShardMetadata>>
+          &curr_shard_metadata,
+      Manifest &new_manifest);
+  void commit_schemas(Snapshot &new_snapshot, const Manifest &new_manifest);
+  void finalize_commit(const Manifest &new_manifest, int64_t timestamp_ms);
+
   // --- Initialization phases (called by initialize()) ---
 
   /**

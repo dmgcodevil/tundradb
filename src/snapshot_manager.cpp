@@ -167,10 +167,7 @@ arrow::Status SnapshotManager::restore_edges() {
   return arrow::Status::OK();
 }
 
-arrow::Result<Snapshot> SnapshotManager::commit() {
-  log_info("Creating new snapshot");
-  auto timestamp_ms = now_millis();
-
+void SnapshotManager::compact_and_preserve_flags() {
   std::unordered_map<std::string, std::unordered_map<int64_t, bool>>
       original_update_states;
   for (const auto &schema_name : this->shard_manager_->get_schema_names()) {
@@ -187,8 +184,6 @@ arrow::Result<Snapshot> SnapshotManager::commit() {
              compact_result.status().ToString());
   }
 
-  // Restore the original updated status for shards whose content didn't
-  // actually change
   for (const auto &schema_name : this->shard_manager_->get_schema_names()) {
     for (const auto &shard :
          this->shard_manager_->get_shards(schema_name).ValueOrDie()) {
@@ -199,6 +194,129 @@ arrow::Result<Snapshot> SnapshotManager::commit() {
       }
     }
   }
+}
+
+void SnapshotManager::commit_edges(
+    const std::unordered_map<std::string, EdgeMetadata> &curr_edge_metadata,
+    Manifest &new_manifest) {
+  for (const auto &edge_type : edge_store_->get_edge_types()) {
+    if (curr_edge_metadata.contains(edge_type) &&
+        curr_edge_metadata.at(edge_type).record_count ==
+            edge_store_->get_count_by_type(edge_type)) {
+      log_debug("edges type '" + edge_type + "' has not changed");
+      new_manifest.edges.push_back(curr_edge_metadata.at(edge_type));
+    } else {
+      log_debug("store edges type '" + edge_type + "'");
+      EdgeMetadata new_edge_metadata;
+      auto table = edge_store_->get_table(edge_type).ValueOrDie();
+      new_edge_metadata.edge_type = edge_type;
+      new_edge_metadata.data_file =
+          storage_->write_table(table, edge_store_->get_chunk_size(), "edges")
+              .ValueOrDie();
+      new_edge_metadata.record_count =
+          edge_store_->get_count_by_type(edge_type);
+
+      if (auto es = edge_store_->get_edge_schema(edge_type)) {
+        new_edge_metadata.schema_version = static_cast<int32_t>(es->version());
+      }
+
+      new_manifest.edges.push_back(new_edge_metadata);
+    }
+  }
+}
+
+void SnapshotManager::commit_shards(
+    const std::unordered_map<std::string,
+                             std::unordered_map<int64_t, ShardMetadata>>
+        &curr_shard_metadata,
+    Manifest &new_manifest) {
+  for (const auto &schema_name : this->shard_manager_->get_schema_names()) {
+    log_info("Writing shards for schema: " + schema_name);
+    for (const auto &shard :
+         this->shard_manager_->get_shards(schema_name).ValueOrDie()) {
+      log_debug("Snapshotting shard id: " + std::to_string(shard->id));
+      log_debug("Snapshotting shard size: " + std::to_string(shard->size()));
+
+      if (shard->is_updated()) {
+        ShardMetadata shard_metadata;
+        shard_metadata.id = shard->id;
+        shard_metadata.schema_name = schema_name;
+        shard_metadata.timestamp_ms = shard->get_updated_ts();
+        shard_metadata.min_id = shard->min_id;
+        shard_metadata.max_id = shard->max_id;
+        shard_metadata.record_count = shard->size();
+        shard_metadata.chunk_size = shard->chunk_size;
+        shard_metadata.index = shard->index;
+        shard_metadata.data_file =
+            this->storage_->write_shard(shard).ValueOrDie();
+        new_manifest.shards.push_back(shard_metadata);
+      } else if (curr_shard_metadata.contains(shard->schema_name) &&
+                 curr_shard_metadata.at(shard->schema_name)
+                     .contains(shard->id)) {
+        new_manifest.shards.push_back(
+            curr_shard_metadata.at(shard->schema_name).at(shard->id));
+      }
+    }
+  }
+}
+
+void SnapshotManager::commit_schemas(Snapshot &new_snapshot,
+                                     const Manifest &new_manifest) {
+  new_snapshot.manifest_location =
+      this->metadata_manager_->write_manifest(new_manifest).ValueOrDie();
+  log_info("Created manifest: " + new_manifest.id + " at " +
+           new_snapshot.manifest_location);
+  this->metadata_.snapshots.push_back(new_snapshot);
+  this->metadata_.current_snapshot_index = this->metadata_.snapshots.size() - 1;
+  log_info("Updating schemas");
+  std::vector<SchemaMetadata> schemas;
+  for (const auto &name : this->schema_registry_->get_schema_names()) {
+    auto arrow_shema = this->schema_registry_->get_arrow(name).ValueOrDie();
+    schemas.push_back(arrow_schema_to_metadata(name, arrow_shema).ValueOrDie());
+  }
+  log_info("schemas count {}", schemas.size());
+  this->metadata_.schemas = schemas;
+
+  std::vector<SchemaMetadata> edge_schemas;
+  for (const auto &edge_type : edge_store_->get_edge_types()) {
+    if (auto es = edge_store_->get_edge_schema(edge_type)) {
+      SchemaMetadata sm;
+      sm.name = es->name();
+      sm.version = es->version();
+      for (const auto &field : es->fields()) {
+        sm.fields.push_back(FieldMetadata::from_type_descriptor(
+            field->name(), field->type_descriptor(), field->nullable()));
+      }
+      edge_schemas.push_back(sm);
+    }
+  }
+  this->metadata_.edge_schemas = edge_schemas;
+}
+
+void SnapshotManager::finalize_commit(const Manifest &new_manifest,
+                                      int64_t timestamp_ms) {
+  std::string metadata_location =
+      this->metadata_manager_->write_metadata(this->metadata_).ValueOrDie();
+  log_info("Saved metadata to: " + metadata_location);
+  DatabaseInfo db_info;
+  db_info.metadata_location = metadata_location;
+  db_info.timestamp_ms = timestamp_ms;
+  this->metadata_manager_->write_db_info(db_info).ValueOrDie();
+  log_info("Updated database info to point to new metadata");
+  if (auto reset_result = shard_manager_->reset_all_updated();
+      !reset_result.ok()) {
+    log_warn("Failed to reset shard updated flags: " +
+             reset_result.status().ToString());
+  }
+  this->manifest_.reset();
+  this->manifest_ = std::make_shared<Manifest>(new_manifest);
+}
+
+arrow::Result<Snapshot> SnapshotManager::commit() {
+  log_info("Creating new snapshot");
+  auto timestamp_ms = now_millis();
+
+  compact_and_preserve_flags();
 
   Snapshot new_snapshot;
   new_snapshot.id = generate_unique_snapshot_id();
@@ -244,104 +362,11 @@ arrow::Result<Snapshot> SnapshotManager::commit() {
            ", node_id_seq_per_schema=" + node_counters_str.str() +
            ", shard_id_seq=" + std::to_string(new_manifest.shard_id_seq));
 
-  for (const auto &edge_type : edge_store_->get_edge_types()) {
-    if (curr_edge_metadata.contains(edge_type) &&
-        curr_edge_metadata[edge_type].record_count ==
-            edge_store_->get_count_by_type(edge_type)) {
-      log_debug("edges type '" + edge_type + "' has not changed");
-      new_manifest.edges.push_back(curr_edge_metadata[edge_type]);
-    } else {
-      log_debug("store edges type '" + edge_type + "'");
-      EdgeMetadata new_edge_metadata;
-      auto table = edge_store_->get_table(edge_type).ValueOrDie();
-      new_edge_metadata.edge_type = edge_type;
-      new_edge_metadata.data_file =
-          storage_->write_table(table, edge_store_->get_chunk_size(), "edges")
-              .ValueOrDie();
-      new_edge_metadata.record_count =
-          edge_store_->get_count_by_type(edge_type);
+  commit_edges(curr_edge_metadata, new_manifest);
+  commit_shards(curr_shard_metadata, new_manifest);
+  commit_schemas(new_snapshot, new_manifest);
+  finalize_commit(new_manifest, timestamp_ms);
 
-      if (auto es = edge_store_->get_edge_schema(edge_type)) {
-        new_edge_metadata.schema_version = static_cast<int32_t>(es->version());
-      }
-
-      new_manifest.edges.push_back(new_edge_metadata);
-    }
-  }
-
-  for (const auto &schema_name : this->shard_manager_->get_schema_names()) {
-    log_info("Writing shards for schema: " + schema_name);
-    for (const auto &shard :
-         this->shard_manager_->get_shards(schema_name).ValueOrDie()) {
-      log_debug("Snapshotting shard id: " + std::to_string(shard->id));
-      log_debug("Snapshotting shard size: " + std::to_string(shard->size()));
-
-      if (shard->is_updated()) {
-        ShardMetadata shard_metadata;
-        shard_metadata.id = shard->id;
-        shard_metadata.schema_name = schema_name;
-        shard_metadata.timestamp_ms = shard->get_updated_ts();
-        shard_metadata.min_id = shard->min_id;
-        shard_metadata.max_id = shard->max_id;
-        shard_metadata.record_count = shard->size();
-        shard_metadata.chunk_size = shard->chunk_size;
-        shard_metadata.index = shard->index;
-        shard_metadata.data_file =
-            this->storage_->write_shard(shard).ValueOrDie();
-        new_manifest.shards.push_back(shard_metadata);
-      } else if (curr_shard_metadata.contains(shard->schema_name) &&
-                 curr_shard_metadata[shard->schema_name].contains(shard->id)) {
-        new_manifest.shards.push_back(
-            curr_shard_metadata[shard->schema_name][shard->id]);
-      }
-    }
-  }
-
-  new_snapshot.manifest_location =
-      this->metadata_manager_->write_manifest(new_manifest).ValueOrDie();
-  log_info("Created manifest: " + new_manifest.id + " at " +
-           new_snapshot.manifest_location);
-  this->metadata_.snapshots.push_back(new_snapshot);
-  this->metadata_.current_snapshot_index = this->metadata_.snapshots.size() - 1;
-  log_info("Updating schemas");
-  std::vector<SchemaMetadata> schemas;
-  for (const auto &name : this->schema_registry_->get_schema_names()) {
-    auto arrow_shema = this->schema_registry_->get_arrow(name).ValueOrDie();
-    schemas.push_back(arrow_schema_to_metadata(name, arrow_shema).ValueOrDie());
-  }
-  log_info("schemas count {}", schemas.size());
-  this->metadata_.schemas = schemas;
-
-  // Save edge schemas to metadata
-  std::vector<SchemaMetadata> edge_schemas;
-  for (const auto &edge_type : edge_store_->get_edge_types()) {
-    if (auto es = edge_store_->get_edge_schema(edge_type)) {
-      SchemaMetadata sm;
-      sm.name = es->name();
-      sm.version = es->version();
-      for (const auto &field : es->fields()) {
-        sm.fields.push_back(FieldMetadata::from_type_descriptor(
-            field->name(), field->type_descriptor(), field->nullable()));
-      }
-      edge_schemas.push_back(sm);
-    }
-  }
-  this->metadata_.edge_schemas = edge_schemas;
-  std::string metadata_location =
-      this->metadata_manager_->write_metadata(this->metadata_).ValueOrDie();
-  log_info("Saved metadata to: " + metadata_location);
-  DatabaseInfo db_info;
-  db_info.metadata_location = metadata_location;
-  db_info.timestamp_ms = timestamp_ms;
-  this->metadata_manager_->write_db_info(db_info).ValueOrDie();
-  log_info("Updated database info to point to new metadata");
-  if (auto reset_result = shard_manager_->reset_all_updated();
-      !reset_result.ok()) {
-    log_warn("Failed to reset shard updated flags: " +
-             reset_result.status().ToString());
-  }
-  this->manifest_.reset();
-  this->manifest_ = std::make_shared<Manifest>(new_manifest);
   return new_snapshot;
 }
 

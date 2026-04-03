@@ -10,8 +10,8 @@
 #include <uuid/uuid.h>
 
 #include <set>
-#include <sstream>
 #include <source_location>
+#include <sstream>
 #include <string>
 #include <unordered_set>
 
@@ -235,44 +235,8 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
 
   std::vector<std::unique_ptr<arrow::ArrayBuilder>> builders;
   for (const auto& field : arrow_schema->fields()) {
-    switch (field->type()->id()) {
-      case arrow::Type::INT32:
-        builders.push_back(std::make_unique<arrow::Int32Builder>());
-        break;
-      case arrow::Type::INT64:
-        builders.push_back(std::make_unique<arrow::Int64Builder>());
-        break;
-      case arrow::Type::FLOAT:
-        builders.push_back(std::make_unique<arrow::FloatBuilder>());
-        break;
-      case arrow::Type::DOUBLE:
-        builders.push_back(std::make_unique<arrow::DoubleBuilder>());
-        break;
-      case arrow::Type::STRING:
-        builders.push_back(std::make_unique<arrow::StringBuilder>());
-        break;
-      case arrow::Type::BOOL:
-        builders.push_back(std::make_unique<arrow::BooleanBuilder>());
-        break;
-      case arrow::Type::LIST:
-      case arrow::Type::FIXED_SIZE_LIST: {
-        std::unique_ptr<arrow::ArrayBuilder> list_builder;
-        ARROW_RETURN_NOT_OK(arrow::MakeBuilder(arrow::default_memory_pool(),
-                                               field->type(), &list_builder));
-        builders.push_back(std::move(list_builder));
-        break;
-      }
-      case arrow::Type::MAP: {
-        std::unique_ptr<arrow::ArrayBuilder> map_builder;
-        ARROW_RETURN_NOT_OK(arrow::MakeBuilder(arrow::default_memory_pool(),
-                                               field->type(), &map_builder));
-        builders.push_back(std::move(map_builder));
-        break;
-      }
-      default:
-        return arrow::Status::NotImplemented("Unsupported type: ",
-                                             field->type()->ToString());
-    }
+    ARROW_ASSIGN_OR_RAISE(auto builder, arrow::MakeBuilder(field->type()));
+    builders.push_back(std::move(builder));
   }
 
   std::vector<std::vector<std::shared_ptr<arrow::Array>>> chunks_per_field(
