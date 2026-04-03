@@ -426,6 +426,28 @@ std::set<std::string> ComparisonExpr::get_all_variables() const {
   return variables;
 }
 
+/**
+ * Binds this expression's symbolic FieldRef to a concrete Field object.
+ *
+ * Resolution steps:
+ *  1. Look up the variable name (e.g. "e") in the alias map to find the
+ *     schema name (e.g. "__edge__WORKS_AT" for edges, or "User" for nodes).
+ *  2. Retrieve the Schema from the SchemaRegistry.
+ *  3. Find the named field (e.g. "since") in that schema.
+ *  4. Call `FieldRef::resolve(field)` to bind the concrete Field pointer.
+ *
+ * After a successful call, `field_ref_.is_resolved()` returns true and
+ * subsequent evaluation can use the Field directly (correct index, type,
+ * etc.) without further lookups.
+ *
+ * This method is idempotent: calling it again after resolution is a no-op.
+ *
+ * @param aliases          Variable -> schema-name map (includes both node
+ *                         and edge shadow schemas).
+ * @param schema_registry  Registry to look up schemas by name.
+ * @return true on success, or a KeyError if the variable, schema, or field
+ *         cannot be found.
+ */
 arrow::Result<bool> ComparisonExpr::resolve_field_ref(
     const std::unordered_map<std::string, std::string>& aliases,
     const SchemaRegistry* schema_registry) {
@@ -436,7 +458,6 @@ arrow::Result<bool> ComparisonExpr::resolve_field_ref(
   const std::string& variable = field_ref_.variable();
   const std::string& field_name = field_ref_.field_name();
 
-  // Find the actual schema for this variable
   auto it = aliases.find(variable);
   if (it == aliases.end()) {
     return arrow::Status::KeyError("Unknown variable '", variable,

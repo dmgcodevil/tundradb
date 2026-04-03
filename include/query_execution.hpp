@@ -435,6 +435,18 @@ struct QueryState {
     return schemas.register_schema(ref);
   }
 
+  /**
+   * Records a mapping from an edge alias to its raw edge type name.
+   *
+   * This is separate from the schema alias (which maps the alias to the
+   * shadow schema name like "__edge__WORKS_AT").  The raw edge type is
+   * needed later by the traversal engine to query EdgeStore by type.
+   *
+   * @param alias      The edge variable (e.g. "e").
+   * @param edge_type  The raw edge type (e.g. "WORKS_AT").
+   * @return true, or Invalid if the alias is empty or already bound to a
+   *         different type.
+   */
   arrow::Result<bool> register_edge_alias(const std::string& alias,
                                           const std::string& edge_type) {
     if (alias.empty()) {

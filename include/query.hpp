@@ -83,12 +83,25 @@ enum class CompareOp {
 };
 
 /**
- * @brief Structured field reference that supports both unresolved and resolved
- * states
+ * Symbolic reference to a schema field, resolved lazily during query
+ * preparation.
  *
- * Unresolved: "u.age" -> variable="u", field_name="age", field=nullptr
- * Resolved: variable="u", field_name="age", field=Field{name="age", type=INT32,
- * index=2}
+ * Lifecycle:
+ *  1. **Unresolved** (after parsing): holds the textual pieces only.
+ *       "e.since"  ->  variable_="e", field_name_="since", field_=nullptr
+ *  2. **Resolved** (after `prepare_query` Phase 3): `field_` points to the
+ *     canonical `Field` object from the schema, giving access to the correct
+ *     column index, type descriptor, and arena offset.
+ *       variable_="e", field_name_="since",
+ *       field_=Field{name="since", type=INT64, index=4}
+ *
+ * Resolution is performed by `ComparisonExpr::resolve_field_ref`, which
+ * maps the variable through the alias table to a schema name, then looks
+ * up the field by name.  For edge aliases the schema is the shadow schema
+ * (e.g. "__edge__WORKS_AT").
+ *
+ * Nested paths (e.g. "u.props.score") are stored in `nested_path_` for
+ * MAP sub-key access during query evaluation.
  */
 struct FieldRef {
   FieldRef(const std::string& var, const std::string& fname,
@@ -137,7 +150,8 @@ struct FieldRef {
   std::shared_ptr<Field> field_ =
       nullptr;  // Resolved Field object (null until schema resolution)
 
-  // Resolve this FieldRef with actual Field from schema
+  /** Binds this reference to a concrete schema Field. Called once during
+   *  query preparation; after this, `is_resolved()` returns true. */
   void resolve(std::shared_ptr<Field> resolved_field) {
     field_ = std::move(resolved_field);
   }
@@ -182,7 +196,22 @@ class WhereExpr {
  public:
   virtual ~WhereExpr() = default;
 
-  /** @brief Resolves symbolic field references against the schema registry. */
+  /**
+   * Binds symbolic field references to concrete Field objects.
+   *
+   * Called by `prepare_query` (Phase 3) after all aliases have been
+   * registered.  Each `FieldRef` inside this expression tree is resolved
+   * by looking up its variable in @p aliases to find the schema name,
+   * then fetching the Field from @p schema_registry.
+   *
+   * For edge aliases the schema name is the shadow schema
+   * (e.g. "__edge__WORKS_AT"), not the raw edge type.
+   *
+   * @param aliases          Variable -> schema-name map (node aliases and
+   *                         edge shadow aliases).
+   * @param schema_registry  Registry holding all node and shadow schemas.
+   * @return true when all references are resolved, or an error status.
+   */
   virtual arrow::Result<bool> resolve_field_ref(
       const std::unordered_map<std::string, std::string>& aliases,
       const SchemaRegistry* schema_registry) = 0;

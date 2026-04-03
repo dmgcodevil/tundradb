@@ -12,10 +12,43 @@
 namespace tundradb {
 
 namespace {
+
+/**
+ * Returns the canonical shadow-schema name for an edge type.
+ *
+ * Edge types like "WORKS_AT" are not node schemas, so they cannot be
+ * stored directly in the SchemaRegistry.  Instead we create a synthetic
+ * "shadow" schema (prefixed with "__edge__") that merges the structural
+ * edge columns (_edge_id, source_id, target_id, created_ts) with the
+ * user-defined edge properties.  This name is the key under which that
+ * shadow schema is registered.
+ */
 std::string edge_shadow_schema_name(const std::string& edge_type) {
   return "__edge__" + edge_type;
 }
 
+/**
+ * Lazily creates and registers a shadow Arrow schema for the given edge type.
+ *
+ * On first call for a given edge_type, this function:
+ *  1. Looks up the edge schema from `EdgeStore` (user-defined fields like
+ *     "since", "role").
+ *  2. Prepends the four structural edge columns (_edge_id, source_id,
+ *     target_id, created_ts).
+ *  3. Registers the combined Arrow schema in the SchemaRegistry under the
+ *     shadow name (e.g. "__edge__WORKS_AT").
+ *
+ * Subsequent calls for the same edge_type return the cached shadow name.
+ *
+ * The shadow schema allows the query engine to resolve edge field
+ * references (e.g. `e.since`) through the same SchemaRegistry /
+ * FieldRef resolution pipeline used for node fields.
+ *
+ * @param query_state  Mutable query state (provides schema registry and edge
+ *                     store).
+ * @param edge_type    The edge type name (e.g. "WORKS_AT").
+ * @return The shadow schema name, or an error if the edge schema is missing.
+ */
 arrow::Result<std::string> ensure_edge_shadow_schema(
     QueryState& query_state, const std::string& edge_type) {
   const std::string shadow = edge_shadow_schema_name(edge_type);
@@ -723,6 +756,20 @@ std::shared_ptr<arrow::Table> apply_select(
   return result.ValueOrDie();
 }
 
+/**
+ * Collects WHERE expressions that can be inlined (pushed down) into a
+ * single-table scan for @p target_var.
+ *
+ * Starting from clause index @p i, this scans forward through the clause
+ * list and returns every WhereExpr whose predicate references only
+ * @p target_var.  These predicates can be applied as early filters before
+ * the traversal join, reducing the number of rows that enter the BFS.
+ *
+ * @param target_var  The variable to check inlinability against (e.g. "u").
+ * @param i           Starting clause index in @p clauses.
+ * @param clauses     The full clause list from the query.
+ * @return A (possibly empty) vector of inlinable WHERE expressions.
+ */
 std::vector<std::shared_ptr<WhereExpr>> get_where_to_inline(
     const std::string& target_var, size_t i,
     const std::vector<std::shared_ptr<Clause>>& clauses) {
@@ -741,6 +788,20 @@ std::vector<std::shared_ptr<WhereExpr>> get_where_to_inline(
   return inlined;
 }
 
+/**
+ * Applies inlined WHERE predicates to a table, filtering rows early.
+ *
+ * Each expression in @p where_exprs is applied sequentially as an Arrow
+ * compute filter on @p table.  After each successful filter the
+ * QueryState's cached table is updated, and the expression is marked as
+ * inlined so it won't be re-evaluated later during the main WHERE pass.
+ *
+ * @param ref          Schema reference identifying the table in QueryState.
+ * @param table        The table to filter.
+ * @param query_state  Mutable query state (table cache is updated).
+ * @param where_exprs  Predicates to apply (from `get_where_to_inline`).
+ * @return The filtered table, or an error status.
+ */
 arrow::Result<std::shared_ptr<arrow::Table>> inline_where(
     const SchemaRef& ref, std::shared_ptr<arrow::Table> table,
     QueryState& query_state,
@@ -762,6 +823,39 @@ arrow::Result<std::shared_ptr<arrow::Table>> inline_where(
   return curr_table;
 }
 
+/**
+ * Prepares a Query for execution by resolving all symbolic references.
+ *
+ * This is the first step before any data is read.  It runs three phases
+ * that progressively bind abstract query syntax to concrete schemas and
+ * fields:
+ *
+ *  Phase 1 — FROM: registers the root schema alias (e.g. "u" -> "User").
+ *
+ *  Phase 2 — TRAVERSE: for each traversal clause:
+ *    - Registers source / target node aliases.
+ *    - If an edge alias is present (e.g. `[e:WORKS_AT]`), creates a
+ *      shadow schema via `ensure_edge_shadow_schema` and registers the
+ *      alias (e.g. "e" -> "__edge__WORKS_AT") so that edge fields can
+ *      be resolved through the standard schema registry.
+ *    - Records the edge alias -> raw edge type mapping separately in
+ *      `query_state.edge_aliases` (used later by the traversal engine
+ *      to look up edges in EdgeStore).
+ *    - Computes BFS tags for source/target.
+ *
+ *  Phase 3 — WHERE: resolves every `FieldRef` inside `ComparisonExpr`
+ *    nodes.  Each symbolic reference like "e.since" is looked up in the
+ *    alias map ("e" -> "__edge__WORKS_AT"), then the field "since" is
+ *    resolved from that schema's `Field` object and bound to the
+ *    `FieldRef`.  After this phase, every `FieldRef::is_resolved()`
+ *    returns true.
+ *
+ * @param query        The query to prepare (may be mutated: tags set on
+ *                     traversal sources/targets).
+ * @param query_state  Mutable query state accumulating aliases, traversals,
+ *                     and the schema registry.
+ * @return OK on success, or a KeyError / Invalid status if resolution fails.
+ */
 arrow::Status prepare_query(Query& query, QueryState& query_state) {
   // Phase 1: Process FROM clause to populate aliases
   {
@@ -806,11 +900,11 @@ arrow::Status prepare_query(Query& query, QueryState& query_state) {
     }
   }
 
-  // Phase 3: Resolve all ComparisonExpr field references
-  auto where_aliases = query_state.aliases();
-  for (const auto& [edge_alias, edge_type] : query_state.edge_aliases) {
-    where_aliases[edge_alias] = edge_type;
-  }
+  // Phase 3: Resolve all ComparisonExpr field references.
+  // query_state.aliases() already maps edge aliases to their shadow schema
+  // names (e.g. "e" -> "__edge__WORKS_AT") from the register_schema call in
+  // Phase 2, so no override is needed here.
+  const auto& where_aliases = query_state.aliases();
   for (const auto& clause : query.clauses()) {
     if (clause->type() == Clause::Type::WHERE) {
       auto where_expr = std::dynamic_pointer_cast<WhereExpr>(clause);
