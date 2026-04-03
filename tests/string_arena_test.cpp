@@ -85,8 +85,10 @@ TEST_F(StringPoolTest, GetTotalReferencesWithDedup) {
 }
 
 TEST_F(StringPoolTest, ResetClearsEverything) {
-  auto ref = pool_->store_string(std::string("data"), 100).ValueOrDie();
-  EXPECT_GT(pool_->get_used_bytes(), 0u);
+  {
+    auto ref = pool_->store_string(std::string("data"), 100).ValueOrDie();
+    EXPECT_GT(pool_->get_used_bytes(), 0u);
+  }
   pool_->reset();
   EXPECT_EQ(pool_->get_used_bytes(), 0u);
 }
@@ -195,12 +197,16 @@ TEST_F(StringArenaTest, EnableDeduplication) {
 }
 
 TEST_F(StringArenaTest, ResetAllPools) {
-  auto ref = arena_->store_string_auto(std::string("reset_me")).ValueOrDie();
+  {
+    auto ref = arena_->store_string_auto(std::string("reset_me")).ValueOrDie();
+  }
   arena_->reset();
 }
 
 TEST_F(StringArenaTest, ClearAllPools) {
-  auto ref = arena_->store_string_auto(std::string("clear_me")).ValueOrDie();
+  {
+    auto ref = arena_->store_string_auto(std::string("clear_me")).ValueOrDie();
+  }
   arena_->clear();
 }
 
