@@ -55,9 +55,10 @@ class TemporalContext {
  private:
   TemporalSnapshot snapshot_;
 
-  // Cache: node_id -> resolved VersionInfo*
-  // This avoids re-traversing version chains for the same node
-  std::unordered_map<int64_t, VersionInfo*> version_cache_;
+  // Cache resolved versions separately for nodes and edges to avoid ID-space
+  // collisions once edge versioning is enabled.
+  std::unordered_map<int64_t, VersionInfo*> node_version_cache_;
+  std::unordered_map<int64_t, VersionInfo*> edge_version_cache_;
 
  public:
   explicit TemporalContext(TemporalSnapshot snapshot) : snapshot_(snapshot) {}
@@ -65,31 +66,40 @@ class TemporalContext {
   // Get the snapshot
   [[nodiscard]] const TemporalSnapshot& snapshot() const { return snapshot_; }
 
-  /**
-   * Resolve the visible version for a node at this snapshot.
-   * Returns nullptr if no version is visible (e.g., node didn't exist yet).
-   *
-   * Note: naive O(n) implementation, we should use binary search
-   */
+  /** Resolve visible node version at this snapshot. */
+  VersionInfo* resolve_node_version(int64_t node_id, const NodeHandle& handle) {
+    return resolve_with_cache(node_version_cache_, node_id, handle);
+  }
+
+  /** Resolve visible edge version at this snapshot. */
+  VersionInfo* resolve_edge_version(int64_t edge_id, const NodeHandle& handle) {
+    return resolve_with_cache(edge_version_cache_, edge_id, handle);
+  }
+
+  // Backward-compatible alias for existing call sites.
   VersionInfo* resolve_version(int64_t node_id, const NodeHandle& handle) {
-    if (const auto it = version_cache_.find(node_id);
-        it != version_cache_.end()) {
-      return it->second;
-    }
-
-    // Find a visible version by traversing the chain
-    VersionInfo* resolved = find_visible_version(handle, snapshot_);
-
-    // Cache result (even if nullptr)
-    version_cache_[node_id] = resolved;
-
-    return resolved;
+    return resolve_node_version(node_id, handle);
   }
 
   // Clear cache (useful between query stages or for testing)
-  void clear_cache() { version_cache_.clear(); }
+  void clear_cache() {
+    node_version_cache_.clear();
+    edge_version_cache_.clear();
+  }
 
  private:
+  VersionInfo* resolve_with_cache(
+      std::unordered_map<int64_t, VersionInfo*>& cache, const int64_t entity_id,
+      const NodeHandle& handle) {
+    if (const auto it = cache.find(entity_id); it != cache.end()) {
+      return it->second;
+    }
+
+    VersionInfo* resolved = find_visible_version(handle, snapshot_);
+    cache[entity_id] = resolved;  // cache miss result too (including nullptr)
+    return resolved;
+  }
+
   /**
    * Find the visible version in the chain at the given snapshot.
    *

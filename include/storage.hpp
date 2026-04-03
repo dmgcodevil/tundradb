@@ -15,6 +15,7 @@ namespace tundradb {
 class SchemaRegistry;
 class NodeManager;
 class Shard;
+class EdgeStore;
 
 class Storage {
  private:
@@ -43,8 +44,9 @@ class Storage {
   arrow::Result<std::shared_ptr<Shard>> read_shard(
       const ShardMetadata& shard_metadata);
 
-  [[nodiscard]] arrow::Result<std::vector<Edge>> read_edges(
-      const EdgeMetadata& edge_metadata) const;
+  [[nodiscard]] arrow::Result<bool> read_edges(
+      const EdgeMetadata& edge_metadata,
+      const std::shared_ptr<EdgeStore>& edge_store) const;
 };
 
 }  // namespace tundradb

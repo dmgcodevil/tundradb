@@ -4,10 +4,12 @@
 #include <arrow/result.h>
 
 #include <filesystem>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
 
+#include "arrow_map_union_types.hpp"
 #include "file_utils.hpp"
 #include "json.hpp"
 #include "llvm/ADT/SmallVector.h"
@@ -174,6 +176,9 @@ inline arrow::Result<FieldMetadata> ArrowFieldToMetadata(
       result.fixed_size = static_cast<uint32_t>(fsl_type->list_size());
       break;
     }
+    case arrow::Type::MAP:
+      result.type = ValueType::MAP;
+      break;
     default:
       return arrow::Status::NotImplemented("Unsupported Arrow type: ",
                                            dt->ToString());
@@ -229,6 +234,8 @@ inline arrow::Result<std::shared_ptr<arrow::Field>> metadata_to_arrow_field(
     } else {
       type = arrow::list(arrow::field("item", elem_dt));
     }
+  } else if (metadata.type == ValueType::MAP) {
+    type = arrow::map(arrow::utf8(), map_union_value_type());
   } else {
     type = scalar_vt_to_arrow(metadata.type);
     if (!type) {
@@ -308,6 +315,7 @@ struct Metadata {
   int current_snapshot_index = -1;
   std::vector<Snapshot> snapshots;
   std::vector<SchemaMetadata> schemas;
+  std::vector<SchemaMetadata> edge_schemas;
 
   Snapshot *get_current_snapshot() {
     if (current_snapshot_index >= 0 &&
@@ -327,6 +335,7 @@ struct Metadata {
 
   friend void to_json(nlohmann::json &j, const Metadata &m) {
     j = nlohmann::json{{"schemas", m.schemas},
+                       {"edge_schemas", m.edge_schemas},
                        {"snapshots", m.snapshots},
                        {"current_snapshot_index", m.current_snapshot_index}};
   }
@@ -334,6 +343,9 @@ struct Metadata {
   friend void from_json(const nlohmann::json &j, Metadata &m) {
     j.at("snapshots").get_to(m.snapshots);
     j.at("schemas").get_to(m.schemas);
+    if (j.contains("edge_schemas")) {
+      j.at("edge_schemas").get_to(m.edge_schemas);
+    }
     m.current_snapshot_index = j.value("current_snapshot_index", -1);
   }
 
@@ -410,9 +422,23 @@ struct EdgeMetadata {
   std::string edge_type;
   std::string data_file;
   int64_t record_count = 0;
+  int32_t schema_version = -1;  // -1 = schema-less
 
-  NLOHMANN_DEFINE_TYPE_INTRUSIVE(EdgeMetadata, edge_type, data_file,
-                                 record_count);
+  friend void to_json(nlohmann::json &j, const EdgeMetadata &em) {
+    j = nlohmann::json{{"edge_type", em.edge_type},
+                       {"data_file", em.data_file},
+                       {"record_count", em.record_count}};
+    if (em.schema_version >= 0) {
+      j["schema_version"] = em.schema_version;
+    }
+  }
+
+  friend void from_json(const nlohmann::json &j, EdgeMetadata &em) {
+    j.at("edge_type").get_to(em.edge_type);
+    j.at("data_file").get_to(em.data_file);
+    j.at("record_count").get_to(em.record_count);
+    em.schema_version = j.value("schema_version", -1);
+  }
 };
 
 struct Manifest {
@@ -465,16 +491,21 @@ class MetadataManager {
 
   arrow::Result<bool> initialize() const;
 
-  arrow::Result<std::string> write_manifest(const Manifest &manifest) const;
-  arrow::Result<Manifest> read_manifest(const std::string &id) const;
+  [[nodiscard]] arrow::Result<std::string> write_manifest(
+      const Manifest &manifest) const;
+  [[nodiscard]] arrow::Result<Manifest> read_manifest(
+      const std::string &id) const;
 
-  arrow::Result<std::string> write_metadata(const Metadata &metadata) const;
-  arrow::Result<Metadata> read_metadata(const std::string &path) const;
+  [[nodiscard]] arrow::Result<std::string> write_metadata(
+      const Metadata &metadata) const;
+  [[nodiscard]] arrow::Result<Metadata> read_metadata(
+      const std::string &path) const;
 
-  arrow::Result<std::string> write_db_info(const DatabaseInfo &db_info) const;
-  arrow::Result<DatabaseInfo> read_db_info() const;
+  [[nodiscard]] arrow::Result<std::string> write_db_info(
+      const DatabaseInfo &db_info) const;
+  [[nodiscard]] arrow::Result<DatabaseInfo> read_db_info() const;
 
-  arrow::Result<Metadata> load_current_metadata() const;
+  [[nodiscard]] arrow::Result<Metadata> load_current_metadata() const;
 
   const std::string &get_metadata_dir() const;
 

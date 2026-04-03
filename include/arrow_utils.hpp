@@ -7,6 +7,7 @@
 #include <llvm/ADT/SmallVector.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -143,6 +144,36 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_empty_table(
  */
 arrow::Status append_array_to_list_builder(const ArrayRef& arr_ref,
                                            arrow::ListBuilder* list_builder);
+
+/**
+ * @brief Appends a MapRef's contents to an Arrow MapBuilder.
+ *
+ * MAP values are represented as map<utf8, dense_union<...>> to preserve
+ * typed values in Arrow.
+ *
+ * @param map_ref The map reference to append.
+ * @param map_builder The Arrow MapBuilder to append into.
+ * @return OK on success, or an error for unsupported/corrupt value types.
+ */
+arrow::Status append_map_to_map_builder(const MapRef& map_ref,
+                                        arrow::MapBuilder* map_builder);
+
+/**
+ * @brief Converts a MAP dense-union item at @p idx into Value.
+ *
+ * Expects MAP item storage shaped like `map<utf8, dense_union<...>>`.
+ * Returns `std::nullopt` for null union slot or null child value.
+ */
+arrow::Result<std::optional<Value>> map_item_to_value(
+    const std::shared_ptr<arrow::Array>& items, int64_t idx);
+
+/**
+ * @brief Converts one array/list element at @p idx into Value.
+ *
+ * Returns `Value{}` for null element slots.
+ */
+arrow::Result<Value> array_element_to_value(
+    const std::shared_ptr<arrow::Array>& values, int64_t idx);
 
 /**
  * @brief Filters an Arrow table using a WhereExpr predicate.

@@ -158,9 +158,29 @@ add_executable(update_query_join_test
 add_executable(array_query_test
         array_query_test.cpp)
 
+# Map arena + node/edge MAP field tests
+add_executable(map_arena_test
+        map_arena_test.cpp)
+
+# Type conversion round-trip tests (TundraDB <-> Arrow)
+add_executable(type_conversion_test
+        type_conversion_test.cpp)
+
 # Arena leak detection test
 add_executable(arena_leak_test
         arena_leak_test.cpp)
+
+# ArrayArena unit tests
+add_executable(array_arena_test
+        array_arena_test.cpp)
+
+# StringArena / StringPool unit tests
+add_executable(string_arena_test
+        string_arena_test.cpp)
+
+# TypeDescriptor / ValueType unit tests
+add_executable(type_system_test
+        type_system_test.cpp)
 
 # Link against Arrow and GTest
 target_link_libraries(sharding_test
@@ -324,8 +344,11 @@ target_link_libraries(free_list_arena_test
 target_link_libraries(node_arena_test
         PRIVATE
         core
+        Arrow::arrow_shared
         GTest::GTest
         GTest::Main
+        pthread
+        TBB::tbb
         spdlog::spdlog
         LLVMSupport LLVMCore
 )
@@ -424,6 +447,28 @@ target_link_libraries(array_query_test
         LLVMSupport LLVMCore
 )
 
+target_link_libraries(map_arena_test
+        PRIVATE
+        core
+        Arrow::arrow_shared
+        GTest::GTest
+        GTest::Main
+        pthread
+        TBB::tbb
+        spdlog::spdlog
+        LLVMSupport LLVMCore
+)
+
+target_link_libraries(type_conversion_test
+        PRIVATE
+        core
+        Arrow::arrow_shared
+        GTest::GTest
+        GTest::Main
+        spdlog::spdlog
+        LLVMSupport LLVMCore
+)
+
 target_link_libraries(arena_leak_test
         PRIVATE
         core
@@ -435,6 +480,36 @@ target_link_libraries(arena_leak_test
         TBB::tbb
         spdlog::spdlog
         LLVMSupport LLVMCore
+)
+
+target_link_libraries(array_arena_test
+        PRIVATE
+        core
+        Arrow::arrow_shared
+        GTest::GTest
+        GTest::Main
+        pthread
+        TBB::tbb
+        spdlog::spdlog
+        LLVMSupport LLVMCore
+)
+
+target_link_libraries(string_arena_test
+        PRIVATE
+        core
+        Arrow::arrow_shared
+        GTest::GTest
+        GTest::Main
+        pthread
+        TBB::tbb
+        spdlog::spdlog
+        LLVMSupport LLVMCore
+)
+
+target_link_libraries(type_system_test
+        PRIVATE
+        GTest::GTest
+        GTest::Main
 )
 
 # Apply sanitizer flags to all test targets if enabled
@@ -487,8 +562,17 @@ if(ENABLE_SANITIZERS)
     target_compile_options(array_query_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
     target_link_options(array_query_test PRIVATE ${SANITIZER_LINK_FLAGS})
 
+    target_compile_options(map_arena_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
+    target_link_options(map_arena_test PRIVATE ${SANITIZER_LINK_FLAGS})
+
+    target_compile_options(type_conversion_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
+    target_link_options(type_conversion_test PRIVATE ${SANITIZER_LINK_FLAGS})
+
     target_compile_options(arena_leak_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
     target_link_options(arena_leak_test PRIVATE ${SANITIZER_LINK_FLAGS})
+
+    target_compile_options(type_system_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
+    target_link_options(type_system_test PRIVATE ${SANITIZER_LINK_FLAGS})
 endif()
 
 # Simple test registration
@@ -513,7 +597,12 @@ add_test(NAME TemporalQueryTest COMMAND temporal_query_test)
 add_test(NAME UpdateQueryTest COMMAND update_query_test)
 add_test(NAME UpdateQueryJoinTest COMMAND update_query_join_test)
 add_test(NAME ArrayQueryTest COMMAND array_query_test)
+add_test(NAME MapArenaTest COMMAND map_arena_test)
+add_test(NAME TypeConversionTest COMMAND type_conversion_test)
 add_test(NAME ArenaLeakTest COMMAND arena_leak_test)
+add_test(NAME ArrayArenaTest COMMAND array_arena_test)
+add_test(NAME StringArenaTest COMMAND string_arena_test)
+add_test(NAME TypeSystemTest COMMAND type_system_test)
 
 # Set TSan options for tests after they've been registered
 if(ENABLE_SANITIZERS AND SANITIZER_TYPE STREQUAL "thread" AND EXISTS ${TSAN_SUPPRESSIONS_FILE})
@@ -539,6 +628,7 @@ set_tests_properties(
         FreeListArenaTest
         UpdateQueryTest
         UpdateQueryJoinTest
+        TypeSystemTest
         PROPERTIES
         ISOLATED TRUE  # This ensures tests run in isolation
 )

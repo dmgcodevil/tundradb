@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "config.hpp"
+#include "field_update.hpp"
 #include "node.hpp"
 #include "schema.hpp"
 
@@ -70,9 +71,7 @@ class Shard {
                              const Value &value, UpdateType update_type);
 
   arrow::Result<bool> update_fields(
-      int64_t node_id,
-      const std::vector<std::pair<std::shared_ptr<Field>, Value>>
-          &field_updates,
+      int64_t node_id, const std::vector<FieldUpdate> &field_updates,
       UpdateType update_type);
 
   arrow::Result<std::shared_ptr<arrow::Table>> get_table(TemporalContext *ctx);
@@ -142,9 +141,7 @@ class ShardManager {
 
   arrow::Result<bool> update_node_fields(
       const std::string &schema_name, int64_t id,
-      const std::vector<std::pair<std::shared_ptr<Field>, Value>>
-          &field_updates,
-      UpdateType update_type);
+      const std::vector<FieldUpdate> &field_updates, UpdateType update_type);
 
   arrow::Result<std::vector<std::shared_ptr<Node>>> get_nodes(
       const std::string &schema_name);

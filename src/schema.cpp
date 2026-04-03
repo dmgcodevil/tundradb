@@ -2,6 +2,7 @@
 
 #include <iostream>
 
+#include "arrow_map_union_types.hpp"
 #include "arrow_utils.hpp"
 
 namespace tundradb {
@@ -53,6 +54,12 @@ arrow::Result<Field> Field::from_arrow(
                           arrow_elem_to_value_type(fsl_type->value_type()));
     return Field(field->name(),
                  TypeDescriptor::array(elem_vt, fsl_type->list_size()),
+                 field->nullable());
+  }
+
+  // Handle map -> MAP
+  if (dt->id() == arrow::Type::MAP) {
+    return Field(field->name(), TypeDescriptor::properties(),
                  field->nullable());
   }
 
@@ -117,6 +124,11 @@ arrow::Result<Field> Field::from_arrow(
       }
       return arrow::field(name_, arrow::list(arrow::field("item", elem_dt)));
     }
+    case ValueType::MAP:
+      // MAP (properties) -> Arrow map<utf8, dense_union<...>> for portable
+      // typed values.
+      return arrow::field(
+          name_, arrow::map(arrow::utf8(), map_union_value_type()), nullable_);
     default:
       return arrow::Status::NotImplemented("Unsupported ValueType: ",
                                            static_cast<int>(base));

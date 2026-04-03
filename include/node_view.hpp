@@ -3,6 +3,8 @@
 
 #include <arrow/api.h>
 
+#include <unordered_map>
+
 #include "node_arena.hpp"
 #include "schema.hpp"
 #include "temporal_context.hpp"

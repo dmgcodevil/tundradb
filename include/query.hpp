@@ -27,6 +27,7 @@ namespace tundradb {
 
 class WhereExpr;
 class ComparisonExpr;
+class Edge;
 
 /**
  * @brief A reference to a schema, optionally aliased (e.g. "u:User" or just
@@ -82,22 +83,45 @@ enum class CompareOp {
 };
 
 /**
- * @brief Structured field reference that supports both unresolved and resolved
- * states
+ * Symbolic reference to a schema field, resolved lazily during query
+ * preparation.
  *
- * Unresolved: "u.age" -> variable="u", field_name="age", field=nullptr
- * Resolved: variable="u", field_name="age", field=Field{name="age", type=INT32,
- * index=2}
+ * Lifecycle:
+ *  1. **Unresolved** (after parsing): holds the textual pieces only.
+ *       "e.since"  ->  variable_="e", field_name_="since", field_=nullptr
+ *  2. **Resolved** (after `prepare_query` Phase 3): `field_` points to the
+ *     canonical `Field` object from the schema, giving access to the correct
+ *     column index, type descriptor, and arena offset.
+ *       variable_="e", field_name_="since",
+ *       field_=Field{name="since", type=INT64, index=4}
+ *
+ * Resolution is performed by `ComparisonExpr::resolve_field_ref`, which
+ * maps the variable through the alias table to a schema name, then looks
+ * up the field by name.  For edge aliases the schema is the shadow schema
+ * (e.g. "__edge__WORKS_AT").
+ *
+ * Nested paths (e.g. "u.props.score") are stored in `nested_path_` for
+ * MAP sub-key access during query evaluation.
  */
 struct FieldRef {
   FieldRef(const std::string& var, const std::string& fname,
-           std::shared_ptr<Field> fld)
-      : variable_(var), field_name_(fname), field_(std::move(fld)) {
+           std::vector<std::string> nested_path, std::shared_ptr<Field> fld)
+      : variable_(var),
+        field_name_(fname),
+        nested_path_(std::move(nested_path)),
+        field_(std::move(fld)) {
     value_ = var.empty() ? fname : var + "." + fname;
+    for (const auto& segment : nested_path_) {
+      value_ += "." + segment;
+    }
   }
 
   FieldRef(const std::string& var, const std::string& fname)
-      : FieldRef(var, fname, nullptr) {}
+      : FieldRef(var, fname, {}, nullptr) {}
+
+  FieldRef(const std::string& var, const std::string& fname,
+           std::vector<std::string> nested_path)
+      : FieldRef(var, fname, std::move(nested_path), nullptr) {}
 
   // Parse from string format "variable.field_name"
   static FieldRef from_string(const std::string& field_str);
@@ -110,6 +134,8 @@ struct FieldRef {
 
   const std::string& variable() const { return variable_; }
 
+  const std::vector<std::string>& nested_path() const { return nested_path_; }
+
   std::shared_ptr<Field> field() const { return field_; }
 
   bool is_resolved() const { return field_ != nullptr; }
@@ -117,11 +143,15 @@ struct FieldRef {
  private:
   std::string variable_;    // e.g., "u", "c", "f"
   std::string field_name_;  // e.g., "age", "name"
-  std::string value_;       // e.g.: "u.age", "c.name", "f.id"
+  // Any subfield path after "<var>.<field>", e.g. {"score"} for
+  // "u.props.score", or {"a","b","c"} for deeper access.
+  std::vector<std::string> nested_path_;
+  std::string value_;  // e.g.: "u.age", "c.name", "f.id"
   std::shared_ptr<Field> field_ =
       nullptr;  // Resolved Field object (null until schema resolution)
 
-  // Resolve this FieldRef with actual Field from schema
+  /** Binds this reference to a concrete schema Field. Called once during
+   *  query preparation; after this, `is_resolved()` returns true. */
   void resolve(std::shared_ptr<Field> resolved_field) {
     field_ = std::move(resolved_field);
   }
@@ -166,13 +196,31 @@ class WhereExpr {
  public:
   virtual ~WhereExpr() = default;
 
-  /** @brief Resolves symbolic field references against the schema registry. */
+  /**
+   * Binds symbolic field references to concrete Field objects.
+   *
+   * Called by `prepare_query` (Phase 3) after all aliases have been
+   * registered.  Each `FieldRef` inside this expression tree is resolved
+   * by looking up its variable in @p aliases to find the schema name,
+   * then fetching the Field from @p schema_registry.
+   *
+   * For edge aliases the schema name is the shadow schema
+   * (e.g. "__edge__WORKS_AT"), not the raw edge type.
+   *
+   * @param aliases          Variable -> schema-name map (node aliases and
+   *                         edge shadow aliases).
+   * @param schema_registry  Registry holding all node and shadow schemas.
+   * @return true when all references are resolved, or an error status.
+   */
   virtual arrow::Result<bool> resolve_field_ref(
       const std::unordered_map<std::string, std::string>& aliases,
       const SchemaRegistry* schema_registry) = 0;
   /** @brief Evaluates this expression against a node. */
   virtual arrow::Result<bool> matches(
       const std::shared_ptr<Node>& node) const = 0;
+  /** @brief Evaluates this expression against an edge. */
+  virtual arrow::Result<bool> matches_edge(
+      const std::shared_ptr<Edge>& edge) const = 0;
 
   /** @brief Returns a debug string of the expression. */
   virtual std::string toString() const = 0;
@@ -186,6 +234,14 @@ class WhereExpr {
   /** @brief Converts this expression to an Arrow compute expression. */
   virtual arrow::compute::Expression to_arrow_expression(
       bool strip_var) const = 0;
+
+  /**
+   * @brief Returns true when expression needs row-level evaluation.
+   *
+   * Used for expressions that cannot be represented as Arrow expressions
+   * (e.g. map-key lookups like u.props.score).
+   */
+  virtual bool requires_row_eval() const = 0;
 
   /** @brief Extracts sub-conditions that reference a specific variable. */
   virtual std::vector<std::shared_ptr<ComparisonExpr>>
@@ -211,14 +267,17 @@ enum class TraverseType { Inner, Left, Right, Full };
 class Traverse final : public Clause {
  private:
   SchemaRef source_;
+  std::optional<std::string> edge_alias_;
   std::string edge_type_;
   SchemaRef target_;
   TraverseType traverse_type_;
 
  public:
   Traverse(SchemaRef source, std::string edge_type, SchemaRef target,
-           TraverseType traverse_type)
+           TraverseType traverse_type,
+           std::optional<std::string> edge_alias = std::nullopt)
       : source_(std::move(source)),
+        edge_alias_(std::move(edge_alias)),
         edge_type_(std::move(edge_type)),
         target_(std::move(target)),
         traverse_type_(traverse_type) {}
@@ -226,6 +285,9 @@ class Traverse final : public Clause {
   [[nodiscard]] Type type() const override { return Type::TRAVERSE; }
 
   [[nodiscard]] const SchemaRef& source() const { return source_; }
+  [[nodiscard]] const std::optional<std::string>& edge_alias() const {
+    return edge_alias_;
+  }
   [[nodiscard]] const std::string& edge_type() const { return edge_type_; }
   [[nodiscard]] const SchemaRef& target() const { return target_; }
   [[nodiscard]] TraverseType traverse_type() const { return traverse_type_; }
@@ -292,9 +354,13 @@ class ComparisonExpr : public Clause, public WhereExpr {
   friend std::ostream& operator<<(std::ostream& os, const ComparisonExpr& expr);
 
   arrow::Result<bool> matches(const std::shared_ptr<Node>& node) const override;
+  arrow::Result<bool> matches_edge(
+      const std::shared_ptr<Edge>& edge) const override;
 
   [[nodiscard]] arrow::compute::Expression to_arrow_expression(
       bool strip_var) const override;
+
+  bool requires_row_eval() const override;
 
   std::vector<std::shared_ptr<ComparisonExpr>> get_conditions_for_variable(
       const std::string& variable) const override;
@@ -347,9 +413,13 @@ class LogicalExpr : public Clause, public WhereExpr {
   [[nodiscard]] LogicalOp op() const { return op_; }
 
   arrow::Result<bool> matches(const std::shared_ptr<Node>& node) const override;
+  arrow::Result<bool> matches_edge(
+      const std::shared_ptr<Edge>& edge) const override;
 
   [[nodiscard]] arrow::compute::Expression to_arrow_expression(
       bool strip_var) const override;
+
+  bool requires_row_eval() const override;
 
   std::vector<std::shared_ptr<ComparisonExpr>> get_conditions_for_variable(
       const std::string& variable) const override;
@@ -470,10 +540,12 @@ class Query {
     /** @brief Adds a TRAVERSE clause (edge traversal between two schemas). */
     Builder& traverse(const std::string& source, std::string edge_type,
                       const std::string& target,
-                      TraverseType traverse_type = TraverseType::Inner) {
+                      TraverseType traverse_type = TraverseType::Inner,
+                      std::optional<std::string> edge_alias = std::nullopt) {
       clauses_.push_back(std::make_shared<Traverse>(
           std::move(SchemaRef::parse(source)), std::move(edge_type),
-          std::move(SchemaRef::parse(target)), traverse_type));
+          std::move(SchemaRef::parse(target)), traverse_type,
+          std::move(edge_alias)));
       return *this;
     }
 

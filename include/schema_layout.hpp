@@ -11,6 +11,7 @@
 
 #include "array_ref.hpp"
 #include "llvm/ADT/StringMap.h"
+#include "map_ref.hpp"
 #include "mem_utils.hpp"
 #include "schema.hpp"
 #include "type_descriptor.hpp"
@@ -115,8 +116,8 @@ class SchemaLayout {
     return data_offset_ + total_size_;
   }
 
-  const char* get_field_value_ptr(const char* node_data,
-                                  const size_t field_index) const {
+  const char* get_value_ptr(const char* node_data,
+                            const size_t field_index) const {
     const FieldLayout& field_layout = fields_[field_index];
     // Check if this field has been set using the bit set
     if (!is_field_set(node_data, field_layout.index)) {
@@ -130,26 +131,26 @@ class SchemaLayout {
   }
 
   // gets a pointer to field value
-  const char* get_field_value_ptr(const char* node_data,
-                                  const std::shared_ptr<Field>& field) const {
-    return get_field_value_ptr(node_data, field->index_);
+  const char* get_value_ptr(const char* node_data,
+                            const std::shared_ptr<Field>& field) const {
+    return get_value_ptr(node_data, field->index_);
   }
 
-  Value get_field_value(const char* node_data, const size_t field_index) const {
+  Value get_value(const char* node_data, const size_t field_index) const {
     const FieldLayout& field_layout = fields_[field_index];
-    return Value::read_value_from_memory(
-        get_field_value_ptr(node_data, field_index), field_layout.type);
+    return Value::read_value_from_memory(get_value_ptr(node_data, field_index),
+                                         field_layout.type);
   }
 
-  Value get_field_value(const char* node_data,
-                        const FieldLayout& field_layout) const {
+  Value get_value(const char* node_data,
+                  const FieldLayout& field_layout) const {
     return Value::read_value_from_memory(
-        get_field_value_ptr(node_data, field_layout.index), field_layout.type);
+        get_value_ptr(node_data, field_layout.index), field_layout.type);
   }
 
-  Value get_field_value(const char* node_data,
-                        const std::shared_ptr<Field>& field) const {
-    return get_field_value(node_data, field->index_);
+  Value get_value(const char* node_data,
+                  const std::shared_ptr<Field>& field) const {
+    return get_value(node_data, field->index_);
   }
 
   /**
@@ -160,8 +161,8 @@ class SchemaLayout {
    * @param field_layout Field layout for type information
    * @return Value read from field_ptr
    */
-  Value get_field_value_from_ptr(const char* field_ptr,
-                                 const FieldLayout& field_layout) const {
+  Value get_value_from_ptr(const char* field_ptr,
+                           const FieldLayout& field_layout) const {
     if (field_ptr == nullptr) {
       return Value{};  // Explicit NULL
     }
@@ -289,6 +290,10 @@ class SchemaLayout {
         if (value.type() != ValueType::ARRAY) return false;
         *reinterpret_cast<ArrayRef*>(ptr) = value.as_array_ref();
         return true;
+      case ValueType::MAP:
+        if (value.type() != ValueType::MAP) return false;
+        *reinterpret_cast<MapRef*>(ptr) = value.as_map_ref();
+        return true;
       default:
         return false;
     }
@@ -306,6 +311,10 @@ class SchemaLayout {
       case ValueType::ARRAY:
         // Initialize ArrayRef to null/empty
         new (ptr) ArrayRef();
+        break;
+      case ValueType::MAP:
+        // Initialize MapRef to null/empty
+        new (ptr) MapRef();
         break;
       default:
         // Zero initialization is fine for numeric types and bools

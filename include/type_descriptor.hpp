@@ -48,6 +48,8 @@ struct TypeDescriptor {
     return {ValueType::ARRAY, elem, fixed, 0};
   }
 
+  static TypeDescriptor properties() { return {ValueType::MAP}; }
+
   /**
    * Create a TypeDescriptor from a legacy ValueType.
    * Handles FIXED_STRING* by converting to STRING with max_string_size.
@@ -71,7 +73,7 @@ struct TypeDescriptor {
 
   [[nodiscard]] bool is_primitive() const {
     return base_type != ValueType::NA && base_type != ValueType::ARRAY &&
-           !is_string();
+           base_type != ValueType::MAP && !is_string();
   }
 
   [[nodiscard]] bool is_string() const {
@@ -82,6 +84,8 @@ struct TypeDescriptor {
   }
 
   [[nodiscard]] bool is_array() const { return base_type == ValueType::ARRAY; }
+
+  [[nodiscard]] bool is_map() const { return base_type == ValueType::MAP; }
 
   [[nodiscard]] bool is_null() const { return base_type == ValueType::NA; }
 

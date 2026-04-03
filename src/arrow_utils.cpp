@@ -10,13 +10,18 @@
 #include <llvm/ADT/StringMap.h>
 
 #include <algorithm>
+#include <cstdint>
+#include <cstring>
 
+#include "arrow_map_union_types.hpp"
 #include "logger.hpp"
 #include "node.hpp"
 #include "query.hpp"
 #include "schema.hpp"
 
 namespace tundradb {
+
+namespace {}  // namespace
 
 arrow::Result<llvm::DenseSet<int64_t>> get_ids_from_table(
     const std::shared_ptr<arrow::Table>& table) {
@@ -210,6 +215,89 @@ arrow::Result<std::shared_ptr<arrow::Scalar>> value_ptr_to_arrow_scalar(
   }
 }
 
+arrow::Result<std::optional<Value>> map_item_to_value(
+    const std::shared_ptr<arrow::Array>& items, const int64_t idx) {
+  auto dense = std::dynamic_pointer_cast<arrow::DenseUnionArray>(items);
+  if (!dense) {
+    return arrow::Status::Invalid(
+        "MAP item array is not DenseUnionArray for union conversion");
+  }
+  if (dense->IsNull(idx)) {
+    return std::optional<Value>{};
+  }
+  const int8_t type_code = dense->type_code(idx);
+  const int child_id = dense->child_id(idx);
+  const int64_t value_offset = dense->value_offset(idx);
+  auto child = dense->field(child_id);
+
+  switch (type_code) {
+    case kMapUnionInt32: {
+      auto arr = std::dynamic_pointer_cast<arrow::Int32Array>(child);
+      if (!arr || arr->IsNull(value_offset)) return std::optional<Value>{};
+      return Value(arr->Value(value_offset));
+    }
+    case kMapUnionInt64: {
+      auto arr = std::dynamic_pointer_cast<arrow::Int64Array>(child);
+      if (!arr || arr->IsNull(value_offset)) return std::optional<Value>{};
+      return Value(arr->Value(value_offset));
+    }
+    case kMapUnionFloat: {
+      auto arr = std::dynamic_pointer_cast<arrow::FloatArray>(child);
+      if (!arr || arr->IsNull(value_offset)) return std::optional<Value>{};
+      return Value(arr->Value(value_offset));
+    }
+    case kMapUnionDouble: {
+      auto arr = std::dynamic_pointer_cast<arrow::DoubleArray>(child);
+      if (!arr || arr->IsNull(value_offset)) return std::optional<Value>{};
+      return Value(arr->Value(value_offset));
+    }
+    case kMapUnionBool: {
+      auto arr = std::dynamic_pointer_cast<arrow::BooleanArray>(child);
+      if (!arr || arr->IsNull(value_offset)) return std::optional<Value>{};
+      return Value(arr->Value(value_offset));
+    }
+    case kMapUnionString: {
+      auto arr = std::dynamic_pointer_cast<arrow::StringArray>(child);
+      if (!arr || arr->IsNull(value_offset)) return std::optional<Value>{};
+      return Value(arr->GetString(value_offset));
+    }
+    default:
+      return arrow::Status::Invalid("Unsupported MAP union type code: ",
+                                    static_cast<int>(type_code));
+  }
+}
+
+arrow::Result<Value> array_element_to_value(
+    const std::shared_ptr<arrow::Array>& values, const int64_t idx) {
+  if (values->IsNull(idx)) {
+    return Value{};
+  }
+
+  switch (values->type_id()) {
+    case arrow::Type::INT32:
+      return Value(
+          std::static_pointer_cast<arrow::Int32Array>(values)->Value(idx));
+    case arrow::Type::INT64:
+      return Value(
+          std::static_pointer_cast<arrow::Int64Array>(values)->Value(idx));
+    case arrow::Type::FLOAT:
+      return Value(
+          std::static_pointer_cast<arrow::FloatArray>(values)->Value(idx));
+    case arrow::Type::DOUBLE:
+      return Value(
+          std::static_pointer_cast<arrow::DoubleArray>(values)->Value(idx));
+    case arrow::Type::BOOL:
+      return Value(
+          std::static_pointer_cast<arrow::BooleanArray>(values)->Value(idx));
+    case arrow::Type::STRING:
+      return Value(
+          std::static_pointer_cast<arrow::StringArray>(values)->GetString(idx));
+    default:
+      return arrow::Status::NotImplemented("Unsupported ARRAY element type: ",
+                                           values->type()->ToString());
+  }
+}
+
 arrow::Status append_array_to_list_builder(const ArrayRef& arr_ref,
                                            arrow::ListBuilder* list_builder) {
   if (arr_ref.is_null()) {
@@ -248,6 +336,114 @@ arrow::Status append_array_to_list_builder(const ArrayRef& arr_ref,
             tundradb::to_string(arr_ref.elem_type()));
     }
   }
+  return arrow::Status::OK();
+}
+
+arrow::Status append_map_to_map_builder(const MapRef& map_ref,
+                                        arrow::MapBuilder* map_builder) {
+  if (map_ref.is_null()) {
+    return map_builder->AppendNull();
+  }
+
+  auto* key_builder =
+      dynamic_cast<arrow::StringBuilder*>(map_builder->key_builder());
+  auto* union_builder =
+      dynamic_cast<arrow::DenseUnionBuilder*>(map_builder->item_builder());
+  if (!key_builder || !union_builder) {
+    return arrow::Status::Invalid(
+        "MapBuilder does not have expected key/dense-union item builders");
+  }
+
+  ARROW_RETURN_NOT_OK(map_builder->Append());
+  for (uint32_t i = 0; i < map_ref.count(); ++i) {
+    const auto* entry = map_ref.entry_ptr(i);
+    const auto& key = entry->key;
+    ARROW_RETURN_NOT_OK(
+        key_builder->Append(key.data(), static_cast<int32_t>(key.length())));
+
+    const auto value_type = static_cast<ValueType>(entry->value_type);
+    switch (value_type) {
+      case ValueType::INT32: {
+        ARROW_RETURN_NOT_OK(union_builder->Append(kMapUnionInt32));
+        auto* b = dynamic_cast<arrow::Int32Builder*>(
+            union_builder->child_builder(0).get());
+        if (!b)
+          return arrow::Status::Invalid("MAP union child[0] is not int32");
+        ARROW_RETURN_NOT_OK(
+            b->Append(*reinterpret_cast<const int32_t*>(entry->value)));
+        break;
+      }
+      case ValueType::INT64: {
+        ARROW_RETURN_NOT_OK(union_builder->Append(kMapUnionInt64));
+        auto* b = dynamic_cast<arrow::Int64Builder*>(
+            union_builder->child_builder(1).get());
+        if (!b)
+          return arrow::Status::Invalid("MAP union child[1] is not int64");
+        ARROW_RETURN_NOT_OK(
+            b->Append(*reinterpret_cast<const int64_t*>(entry->value)));
+        break;
+      }
+      case ValueType::FLOAT: {
+        ARROW_RETURN_NOT_OK(union_builder->Append(kMapUnionFloat));
+        auto* b = dynamic_cast<arrow::FloatBuilder*>(
+            union_builder->child_builder(2).get());
+        if (!b)
+          return arrow::Status::Invalid("MAP union child[2] is not float");
+        ARROW_RETURN_NOT_OK(
+            b->Append(*reinterpret_cast<const float*>(entry->value)));
+        break;
+      }
+      case ValueType::DOUBLE: {
+        ARROW_RETURN_NOT_OK(union_builder->Append(kMapUnionDouble));
+        auto* b = dynamic_cast<arrow::DoubleBuilder*>(
+            union_builder->child_builder(3).get());
+        if (!b)
+          return arrow::Status::Invalid("MAP union child[3] is not double");
+        ARROW_RETURN_NOT_OK(
+            b->Append(*reinterpret_cast<const double*>(entry->value)));
+        break;
+      }
+      case ValueType::BOOL: {
+        ARROW_RETURN_NOT_OK(union_builder->Append(kMapUnionBool));
+        auto* b = dynamic_cast<arrow::BooleanBuilder*>(
+            union_builder->child_builder(4).get());
+        if (!b) return arrow::Status::Invalid("MAP union child[4] is not bool");
+        ARROW_RETURN_NOT_OK(
+            b->Append(*reinterpret_cast<const bool*>(entry->value)));
+        break;
+      }
+      case ValueType::STRING:
+      case ValueType::FIXED_STRING16:
+      case ValueType::FIXED_STRING32:
+      case ValueType::FIXED_STRING64: {
+        ARROW_RETURN_NOT_OK(union_builder->Append(kMapUnionString));
+        auto* b = dynamic_cast<arrow::StringBuilder*>(
+            union_builder->child_builder(5).get());
+        if (!b)
+          return arrow::Status::Invalid("MAP union child[5] is not string");
+        const auto& sr = *reinterpret_cast<const StringRef*>(entry->value);
+        ARROW_RETURN_NOT_OK(
+            b->Append(sr.data(), static_cast<int32_t>(sr.length())));
+        break;
+      }
+      case ValueType::ARRAY:
+      case ValueType::MAP:
+      case ValueType::NA:
+      default: {
+        // Fallback complex map values to their string representation.
+        ARROW_RETURN_NOT_OK(union_builder->Append(kMapUnionString));
+        auto* b = dynamic_cast<arrow::StringBuilder*>(
+            union_builder->child_builder(5).get());
+        if (!b)
+          return arrow::Status::Invalid("MAP union child[5] is not string");
+        ARROW_RETURN_NOT_OK(
+            b->Append(Value::read_value_from_memory(entry->value, value_type)
+                          .to_string()));
+        break;
+      }
+    }
+  }
+
   return arrow::Status::OK();
 }
 
@@ -306,6 +502,16 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
             }
             ARROW_RETURN_NOT_OK(
                 append_array_to_list_builder(arr_ref, list_builder));
+          } else if (field->type() == ValueType::MAP) {
+            const auto& map_ref = *reinterpret_cast<const MapRef*>(value);
+            auto* map_builder =
+                dynamic_cast<arrow::MapBuilder*>(builders[i].get());
+            if (!map_builder) {
+              return arrow::Status::Invalid(
+                  "Expected MapBuilder for MAP field: ", field_name);
+            }
+            ARROW_RETURN_NOT_OK(
+                append_map_to_map_builder(map_ref, map_builder));
           } else {
             auto scalar_result =
                 value_ptr_to_arrow_scalar(value, field->type());
@@ -404,6 +610,13 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_empty_table(
       }
       case arrow::Type::LIST:
       case arrow::Type::FIXED_SIZE_LIST: {
+        std::unique_ptr<arrow::ArrayBuilder> builder;
+        ARROW_RETURN_NOT_OK(arrow::MakeBuilder(arrow::default_memory_pool(),
+                                               field->type(), &builder));
+        ARROW_RETURN_NOT_OK(builder->Finish(&empty_array));
+        break;
+      }
+      case arrow::Type::MAP: {
         std::unique_ptr<arrow::ArrayBuilder> builder;
         ARROW_RETURN_NOT_OK(arrow::MakeBuilder(arrow::default_memory_pool(),
                                                field->type(), &builder));

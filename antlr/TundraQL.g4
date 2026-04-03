@@ -1,19 +1,21 @@
 grammar TundraQL;
 
 // Entry point for parsing a full command
-statement: createSchemaStatement | createNodeStatement | createEdgeStatement | matchStatement | deleteStatement | updateStatement | commitStatement | showStatement EOF;
+statement: createSchemaStatement | createEdgeSchemaStatement | createNodeStatement | createEdgeStatement | matchStatement | deleteStatement | updateStatement | commitStatement | showStatement EOF;
 
 // --- Schema Definition ---
 createSchemaStatement: K_CREATE K_SCHEMA IDENTIFIER LPAREN schemaFieldList RPAREN SEMI;
+createEdgeSchemaStatement: K_CREATE K_EDGE K_SCHEMA IDENTIFIER LPAREN schemaFieldList RPAREN SEMI;
 schemaFieldList: schemaField (COMMA schemaField)*;
 schemaField: IDENTIFIER COLON dataType;
-dataType: T_STRING | T_INT64 | T_FLOAT64; // Add more as needed
+dataType: T_STRING | T_INT64 | T_FLOAT64 | T_MAP; // Add more as needed
 
 // --- Node Creation ---
 createNodeStatement: K_CREATE K_NODE IDENTIFIER LPAREN propertyList RPAREN (K_RETURN K_ID)? SEMI;
 propertyList: propertyAssignment (COMMA propertyAssignment)*;
-propertyAssignment: IDENTIFIER EQ value;
-value: STRING_LITERAL | INTEGER_LITERAL | FLOAT_LITERAL; // Add more value types
+propertyAssignment: IDENTIFIER (EQ | COLON) value;
+mapLiteral: LBRACE propertyList? RBRACE;
+value: STRING_LITERAL | INTEGER_LITERAL | FLOAT_LITERAL | mapLiteral; // Add more value types
 
 // --- Edge Creation ---
 createEdgeStatement: K_CREATE (K_UNIQUE)? K_EDGE IDENTIFIER K_FROM nodeSelector K_TO nodeSelector (K_WITH LPAREN propertyList RPAREN)? SEMI;
@@ -59,7 +61,7 @@ updateTarget:
     | nodePattern;                 // UPDATE (u:User) SET ... WHERE ...;
 
 setClause: setAssignment (COMMA setAssignment)*;
-setAssignment: IDENTIFIER (DOT IDENTIFIER)? EQ value;
+setAssignment: IDENTIFIER (DOT IDENTIFIER)* EQ value;
 
 // --- Commit Statement ---
 commitStatement: K_COMMIT SEMI;
@@ -76,8 +78,12 @@ pathPattern: nodePattern (edgePattern nodePattern)*;
 nodePattern: LPAREN IDENTIFIER (COLON IDENTIFIER)? RPAREN; // (alias:NodeType) or (alias)
 
 edgePattern:
-    MINUS LBRACKET (COLON IDENTIFIER)? (joinSpecifier)? RBRACKET MINUS GT // -[:REL_TYPE JOIN]->
-    | LT MINUS LBRACKET (COLON IDENTIFIER)? (joinSpecifier)? RBRACKET MINUS; // <-[:REL_TYPE JOIN]-
+    MINUS LBRACKET edgeRef? (joinSpecifier)? RBRACKET MINUS GT // -[:REL_TYPE JOIN]-> or -[e:REL_TYPE JOIN]->
+    | LT MINUS LBRACKET edgeRef? (joinSpecifier)? RBRACKET MINUS; // <-[:REL_TYPE JOIN]- or <-[e:REL_TYPE JOIN]-
+
+edgeRef:
+    COLON IDENTIFIER
+    | IDENTIFIER COLON IDENTIFIER;
 
 joinSpecifier: K_INNER | K_LEFT | K_RIGHT | K_FULL;
 
@@ -93,11 +99,11 @@ primaryExpression:
     | LPAREN expression RPAREN;            // Parenthesized expression
 
 term: factor ( (EQ | NEQ | LT | LTE | GT | GTE) factor )?; // Simplified
-factor: IDENTIFIER (DOT IDENTIFIER)? | value;
+factor: IDENTIFIER (DOT IDENTIFIER)* | value;
 
 // --- SELECT Clause ---
 selectClause: selectField (COMMA selectField)*;
-selectField: IDENTIFIER (DOT IDENTIFIER)? (K_AS IDENTIFIER)?; // e.g., u.name AS userName
+selectField: IDENTIFIER (DOT IDENTIFIER)* (K_AS IDENTIFIER)?; // e.g., u.name AS userName
 
 // --- Keywords ---
 K_CREATE: 'CREATE';
@@ -132,6 +138,7 @@ K_TYPES: 'TYPES';
 T_STRING: 'STRING';
 T_INT64: 'INT64';
 T_FLOAT64: 'FLOAT64';
+T_MAP: 'MAP';
 
 
 // --- Literals & Punctuation ---

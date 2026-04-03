@@ -1,507 +1,858 @@
-// #include "../include/node_arena.hpp"
-//
-// #include <gtest/gtest.h>
-//
-// #include <memory>
-// #include <string>
-//
-// #include "../include/schema_layout.hpp"
-// #include "../include/string_arena.hpp"
-// #include "../include/types.hpp"
-//
-// using namespace tundradb;
-//
-// class NodeArenaTest : public ::testing::Test {
-//  protected:
-// void SetUp() override {
-//   registry_ = std::make_unique<LayoutRegistry>();
-//
-//   // Create a comprehensive test schema with all ValueTypes
-//   auto layout = std::make_unique<SchemaLayout>("TestNode");
-//   layout->add_field("id", ValueType::INT64);
-//   layout->add_field("count", ValueType::INT32);
-//   layout->add_field("score", ValueType::DOUBLE);
-//   layout->add_field("active", ValueType::BOOL);
-//   layout->add_field("description", ValueType::STRING);  // Variable length
-//
-//   total_node_size_ = layout->get_total_size_with_bitset();
-//   registry_->register_layout(std::move(layout));
-//
-//   // Create NodeArena with FreeListArena for individual deallocation
-//   node_arena_ = node_arena_factory::create_free_list_arena(registry_);
-// }
-//
-//   void TearDown() override {
-//     node_arena_.reset();
-//     registry_.reset();
-//   }
-//
-//   std::shared_ptr<LayoutRegistry> registry_;
-//   std::shared_ptr<NodeArena> node_arena_;
-//   size_t total_node_size_;
-// };
-//
-// TEST_F(NodeArenaTest, SchemaLayoutSize) {
-//   // Verify the layout calculates correct sizes
-//   std::shared_ptr<SchemaLayout> layout = registry_->get_layout("TestNode");
-//   ASSERT_NE(layout, nullptr);
-//
-//   // Check individual field sizes
-//   EXPECT_EQ(layout->get_field_layout("id")->size, 8);      // Int64
-//   EXPECT_EQ(layout->get_field_layout("count")->size, 4);   // Int32
-//   EXPECT_EQ(layout->get_field_layout("score")->size, 8);   // Double
-//   EXPECT_EQ(layout->get_field_layout("active")->size, 1);  // Bool
-//   EXPECT_EQ(layout->get_field_layout("description")->size,
-//             sizeof(StringRef));  // String → StringRef
-//   EXPECT_EQ(layout->get_field_layout("short_name")->size,
-//             sizeof(StringRef));  // FixedString16 → StringRef
-//   EXPECT_EQ(layout->get_field_layout("medium_name")->size,
-//             sizeof(StringRef));  // FixedString32 → StringRef
-//   EXPECT_EQ(layout->get_field_layout("long_name")->size,
-//             sizeof(StringRef));  // FixedString64 → StringRef
-//
-//   // Total size should be aligned
-//   size_t expected_min_size =
-//       8 + 4 + 8 + 1 + 4 * sizeof(StringRef);  // + padding
-//   EXPECT_GE(layout->get_total_size(), expected_min_size);
-//
-//   std::cout << "expected_min_size: " << expected_min_size << std::endl;
-//   std::cout << "Schema 'TestNode' total size: " << layout->get_total_size()
-//             << " bytes\n";
-// }
-//
-// TEST_F(NodeArenaTest, BasicNodeAllocation) {
-//   // Test basic node allocation
-//   NodeHandle node1 = node_arena_->allocate_node("TestNode");
-//   EXPECT_FALSE(node1.is_null());
-//   EXPECT_EQ(node1.size, total_node_size_);
-//   EXPECT_NE(node1.ptr, nullptr);
-//
-//   // Test multiple allocations
-//   NodeHandle node2 = node_arena_->allocate_node("TestNode");
-//   EXPECT_FALSE(node2.is_null());
-//   EXPECT_NE(node1.ptr, node2.ptr);  // Different memory locations
-//
-//   // Test invalid schema
-//   NodeHandle invalid = node_arena_->allocate_node("NonExistent");
-//   EXPECT_TRUE(invalid.is_null());
-//
-//   // Clean up
-//   node_arena_->deallocate_node(node1);
-//   node_arena_->deallocate_node(node2);
-// }
-//
-// TEST_F(NodeArenaTest, NumericFieldOperations) {
-//   NodeHandle node = node_arena_->allocate_node("TestNode");
-//   ASSERT_FALSE(node.is_null());
-//
-//   std::shared_ptr<SchemaLayout> layout = registry_->get_layout("TestNode");
-//
-//   // Test Int64 field
-//   EXPECT_TRUE(node_arena_->set_field_value(node, layout, "id",
-//                                            Value{static_cast<int64_t>(12345)}));
-//   Value id_val = node_arena_->get_field_value(node, layout, "id");
-//   EXPECT_EQ(id_val.type(), ValueType::INT64);
-//   EXPECT_EQ(id_val.as_int64(), 12345L);
-//
-//   // Test Int32 field
-//   EXPECT_TRUE(node_arena_->set_field_value(node, layout, "count",
-//   Value{42})); Value count_val = node_arena_->get_field_value(node, layout,
-//   "count"); EXPECT_EQ(count_val.type(), ValueType::INT32);
-//   EXPECT_EQ(count_val.as_int32(), 42);
-//
-//   // Test Double field
-//   EXPECT_TRUE(node_arena_->set_field_value(node, layout, "score",
-//   Value{95.5})); Value score_val = node_arena_->get_field_value(node, layout,
-//   "score"); EXPECT_EQ(score_val.type(), ValueType::DOUBLE);
-//   EXPECT_DOUBLE_EQ(score_val.as_double(), 95.5);
-//
-//   // Test Bool field
-//   EXPECT_TRUE(
-//       node_arena_->set_field_value(node, layout, "active", Value{true}));
-//   Value active_val = node_arena_->get_field_value(node, layout, "active");
-//   EXPECT_EQ(active_val.type(), ValueType::BOOL);
-//   EXPECT_EQ(active_val.as_bool(), true);
-//
-//   node_arena_->deallocate_node(node);
-// }
-//
-// TEST_F(NodeArenaTest, StringFieldOperations) {
-//   NodeHandle node = node_arena_->allocate_node("TestNode");
-//   ASSERT_FALSE(node.is_null());
-//
-//   std::shared_ptr<SchemaLayout> layout = registry_->get_layout("TestNode");
-//
-//   // Test variable-length String field
-//   std::string description =
-//       "This is a variable length description that can be any size";
-//   EXPECT_TRUE(node_arena_->set_field_value(node, layout, "description",
-//                                            Value{description}));
-//   Value desc_val = node_arena_->get_field_value(node, layout, "description");
-//   EXPECT_EQ(desc_val.type(), ValueType::STRING);
-//   EXPECT_EQ(desc_val.to_string(), description);
-//
-//   // Test FixedString16 field (≤16 chars)
-//   std::string short_name = "Alice";  // 5 chars - fits in FixedString16
-//   EXPECT_TRUE(node_arena_->set_field_value(node, layout, "short_name",
-//                                            Value{short_name}));
-//   Value short_val = node_arena_->get_field_value(node, layout, "short_name");
-//   EXPECT_EQ(short_val.type(), ValueType::FIXED_STRING16);
-//   EXPECT_EQ(short_val.to_string(), short_name);
-//
-//   // Test FixedString32 field (≤32 chars)
-//   std::string medium_name =
-//       "Alice Johnson Developer";  // 23 chars - fits in FixedString32
-//   EXPECT_TRUE(node_arena_->set_field_value(node, layout, "medium_name",
-//                                            Value{medium_name}));
-//   Value medium_val = node_arena_->get_field_value(node, layout,
-//   "medium_name"); EXPECT_EQ(medium_val.type(), ValueType::FIXED_STRING32);
-//   EXPECT_EQ(medium_val.to_string(), medium_name);
-//
-//   // Test FixedString64 field (≤64 chars)
-//   std::string long_name =
-//       "Alice Johnson Senior Software Engineer at TechCorp Inc.";  // 55 chars
-//       -
-//                                                                   // fits in
-//                                                                   //
-//                                                                   FixedString64
-//   EXPECT_TRUE(node_arena_->set_field_value(node, layout, "long_name",
-//                                            Value{long_name}));
-//   Value long_val = node_arena_->get_field_value(node, layout, "long_name");
-//   EXPECT_EQ(long_val.type(), ValueType::FIXED_STRING64);
-//   EXPECT_EQ(long_val.to_string(), long_name);
-//
-//   node_arena_->deallocate_node(node);
-// }
-//
-// TEST_F(NodeArenaTest, StringArenaIntegration) {
-//   NodeHandle node = node_arena_->allocate_node("TestNode");
-//   ASSERT_FALSE(node.is_null());
-//
-//   std::shared_ptr<SchemaLayout> layout = registry_->get_layout("TestNode");
-//
-//   // Set strings of different sizes to test automatic pool selection
-//   std::string str1 = "short";  // 5 chars → FixedString16 pool
-//   std::string str2 =
-//       "medium length text here";  // 25 chars → FixedString32 pool
-//   std::string str3 =
-//       "this is a very long string that exceeds the 64 character limit and "
-//       "should go to unlimited pool";  // 100+ chars → String pool
-//
-//   EXPECT_TRUE(
-//       node_arena_->set_field_value(node, layout, "short_name", Value{str1}));
-//   EXPECT_TRUE(
-//       node_arena_->set_field_value(node, layout, "medium_name",
-//       Value{str2}));
-//   EXPECT_TRUE(
-//       node_arena_->set_field_value(node, layout, "description",
-//       Value{str3}));
-//
-//   // Verify they're stored correctly and can be retrieved
-//   EXPECT_EQ(
-//       node_arena_->get_field_value(node, layout, "short_name").to_string(),
-//       str1);
-//   EXPECT_EQ(
-//       node_arena_->get_field_value(node, layout, "medium_name").to_string(),
-//       str2);
-//   EXPECT_EQ(
-//       node_arena_->get_field_value(node, layout, "description").to_string(),
-//       str3);
-//
-//   // Verify StringArena statistics
-//   StringArena* string_arena = node_arena_->get_string_arena();
-//   ASSERT_NE(string_arena, nullptr);
-//
-//   // Check that different pools are being used
-//   StringPool* pool16 =
-//       string_arena->get_pool_by_type(ValueType::FIXED_STRING16);
-//   StringPool* pool32 =
-//       string_arena->get_pool_by_type(ValueType::FIXED_STRING32);
-//   StringPool* poolStr = string_arena->get_pool_by_type(ValueType::STRING);
-//
-//   EXPECT_GT(pool16->get_total_allocated(), 0);   // str1 went here
-//   EXPECT_GT(pool32->get_total_allocated(), 0);   // str2 went here
-//   EXPECT_GT(poolStr->get_total_allocated(), 0);  // str3 went here
-//
-//   node_arena_->deallocate_node(node);
-// }
-//
-// TEST_F(NodeArenaTest, DISABLED_ErrorHandling) {
-//   NodeHandle node = node_arena_->allocate_node("TestNode");
-//   ASSERT_FALSE(node.is_null());
-//
-//   std::shared_ptr<SchemaLayout> layout = registry_->get_layout("TestNode");
-//
-//   // Test invalid field names
-//   EXPECT_FALSE(
-//       node_arena_->set_field_value(node, layout, "nonexistent", Value{42}));
-//   Value invalid_val = node_arena_->get_field_value(node, layout,
-//   "nonexistent"); EXPECT_TRUE(invalid_val.is_null());
-//
-//   // Test invalid schema names
-//   // EXPECT_FALSE(
-//   //     node_arena_->set_field_value(node, layout, "id", Value{42}));
-//   // Value invalid_schema_val =
-//   //     node_arena_->get_field_value(node, layout, "id");
-//   // EXPECT_TRUE(invalid_schema_val.is_null());
-//
-//   // Test operations on null handles
-//   NodeHandle null_handle;
-//   EXPECT_FALSE(
-//       node_arena_->set_field_value(null_handle, layout, "id", Value{42}));
-//   Value null_handle_val =
-//       node_arena_->get_field_value(null_handle, layout, "id");
-//   EXPECT_TRUE(null_handle_val.is_null());
-//
-//   node_arena_->deallocate_node(node);
-// }
-//
-// TEST_F(NodeArenaTest, CompleteNodeLifecycle) {
-//   // Test complete lifecycle with all field types
-//   NodeHandle node = node_arena_->allocate_node("TestNode");
-//   ASSERT_FALSE(node.is_null());
-//
-//   std::shared_ptr<SchemaLayout> layout = registry_->get_layout("TestNode");
-//
-//   // Set all fields
-//   EXPECT_TRUE(node_arena_->set_field_value(node, layout, "id",
-//                                            Value{static_cast<int64_t>(1001)}));
-//   EXPECT_TRUE(node_arena_->set_field_value(node, layout, "count",
-//   Value{500})); EXPECT_TRUE(node_arena_->set_field_value(node, layout,
-//   "score", Value{88.7})); EXPECT_TRUE(
-//       node_arena_->set_field_value(node, layout, "active", Value{false}));
-//   EXPECT_TRUE(node_arena_->set_field_value(
-//       node, layout, "description",
-//       Value{"Complete test node with all field types"}));
-//   EXPECT_TRUE(
-//       node_arena_->set_field_value(node, layout, "short_name",
-//       Value{"Test"}));
-//   EXPECT_TRUE(node_arena_->set_field_value(node, layout, "medium_name",
-//                                            Value{"Test Node Medium"}));
-//   EXPECT_TRUE(node_arena_->set_field_value(
-//       node, layout, "long_name",
-//       Value{"Test Node with Long Name for Testing Purposes"}));
-//
-//   // Verify all fields
-//   EXPECT_EQ(node_arena_->get_field_value(node, layout, "id").as_int64(),
-//   1001L); EXPECT_EQ(node_arena_->get_field_value(node, layout,
-//   "count").as_int32(),
-//             500);
-//   EXPECT_DOUBLE_EQ(
-//       node_arena_->get_field_value(node, layout, "score").as_double(), 88.7);
-//   EXPECT_EQ(node_arena_->get_field_value(node, layout, "active").as_bool(),
-//             false);
-//   EXPECT_EQ(
-//       node_arena_->get_field_value(node, layout, "description").to_string(),
-//       "Complete test node with all field types");
-//   EXPECT_EQ(
-//       node_arena_->get_field_value(node, layout, "short_name").to_string(),
-//       "Test");
-//   EXPECT_EQ(
-//       node_arena_->get_field_value(node, layout, "medium_name").to_string(),
-//       "Test Node Medium");
-//   EXPECT_EQ(node_arena_->get_field_value(node, layout,
-//   "long_name").to_string(),
-//             "Test Node with Long Name for Testing Purposes");
-//
-//   // Test updates
-//   EXPECT_TRUE(node_arena_->set_field_value(node, layout, "count",
-//   Value{600})); EXPECT_EQ(node_arena_->get_field_value(node, layout,
-//   "count").as_int32(),
-//             600);
-//
-//   node_arena_->deallocate_node(node);
-// }
-//
-// TEST_F(NodeArenaTest, MultipleNodesAndDeallocation) {
-//   std::vector<NodeHandle> nodes;
-//
-//   std::shared_ptr<SchemaLayout> layout = registry_->get_layout("TestNode");
-//
-//   // Allocate multiple nodes
-//   for (int i = 0; i < 10; ++i) {
-//     NodeHandle node = node_arena_->allocate_node("TestNode");
-//     ASSERT_FALSE(node.is_null());
-//
-//     // Set unique values
-//     EXPECT_TRUE(node_arena_->set_field_value(node, layout, "id",
-//                                              Value{static_cast<int64_t>(i)}));
-//     EXPECT_TRUE(
-//         node_arena_->set_field_value(node, layout, "count", Value{i * 10}));
-//     EXPECT_TRUE(node_arena_->set_field_value(
-//         node, layout, "description", Value{"Node " + std::to_string(i)}));
-//
-//     nodes.push_back(node);
-//   }
-//
-//   // Verify all nodes have correct values
-//   for (int i = 0; i < 10; ++i) {
-//     EXPECT_EQ(node_arena_->get_field_value(nodes[i], layout,
-//     "id").as_int64(),
-//               static_cast<int64_t>(i));
-//     EXPECT_EQ(
-//         node_arena_->get_field_value(nodes[i], layout, "count").as_int32(),
-//         i * 10);
-//     EXPECT_EQ(node_arena_->get_field_value(nodes[i], layout, "description")
-//                   .to_string(),
-//               "Node " + std::to_string(i));
-//   }
-//
-//   // Deallocate every other node
-//   for (int i = 0; i < 10; i += 2) {
-//     node_arena_->deallocate_node(nodes[i]);
-//   }
-//
-//   // Verify remaining nodes still work
-//   for (int i = 1; i < 10; i += 2) {
-//     EXPECT_EQ(node_arena_->get_field_value(nodes[i], layout,
-//     "id").as_int64(),
-//               static_cast<int64_t>(i));
-//     EXPECT_EQ(node_arena_->get_field_value(nodes[i], layout, "description")
-//                   .to_string(),
-//               "Node " + std::to_string(i));
-//   }
-//
-//   // Clean up remaining nodes
-//   for (int i = 1; i < 10; i += 2) {
-//     node_arena_->deallocate_node(nodes[i]);
-//   }
-// }
-//
-// TEST_F(NodeArenaTest, ArenaStatistics) {
-//   size_t initial_allocated = node_arena_->get_total_allocated();
-//   std::shared_ptr<SchemaLayout> layout = registry_->get_layout("TestNode");
-//   // Allocate some nodes
-//   std::vector<NodeHandle> nodes;
-//   for (int i = 0; i < 5; ++i) {
-//     NodeHandle node = node_arena_->allocate_node("TestNode");
-//     ASSERT_FALSE(node.is_null());
-//
-//     // Add some strings
-//     EXPECT_TRUE(node_arena_->set_field_value(
-//         node, layout, "description",
-//         Value{"Test string " + std::to_string(i)}));
-//     nodes.push_back(node);
-//   }
-//
-//   // Memory should still be within pre-allocated chunk (2MB is much larger
-//   than
-//   // 5 nodes)
-//   size_t after_allocation = node_arena_->get_total_allocated();
-//   EXPECT_EQ(after_allocation,
-//             initial_allocated);  // Should still be same 2MB chunk
-//
-//   // Clean up
-//   for (auto& node : nodes) {
-//     node_arena_->deallocate_node(node);
-//   }
-//
-//   // Memory usage should be tracked correctly
-//   EXPECT_GT(node_arena_->get_total_allocated(), 0);
-// }
-//
-// TEST_F(NodeArenaTest, ResetAndClear) {
-//   std::shared_ptr<SchemaLayout> layout = registry_->get_layout("TestNode");
-//   // Allocate and populate some nodes
-//   std::vector<NodeHandle> nodes;
-//   for (int i = 0; i < 3; ++i) {
-//     NodeHandle node = node_arena_->allocate_node("TestNode");
-//     ASSERT_FALSE(node.is_null());
-//     EXPECT_TRUE(node_arena_->set_field_value(
-//         node, layout, "description",
-//         Value{"Test string for reset " + std::to_string(i)}));
-//     nodes.push_back(node);
-//   }
-//
-//   size_t allocated_before = node_arena_->get_total_allocated();
-//   EXPECT_GT(allocated_before, 0);
-//
-//   // Test reset (should keep chunks but reset usage)
-//   node_arena_->reset();
-//
-//   // Old handles should be invalid now, but chunk memory is still allocated
-//   size_t after_reset_chunks = node_arena_->get_total_allocated();
-//   EXPECT_GT(after_reset_chunks, 0);  // Chunks still exist
-//
-//   // Individual allocations should be reset to 0 (check via used_bytes)
-//   if (auto* free_list =
-//           dynamic_cast<FreeListArena*>(node_arena_->get_mem_arena())) {
-//     size_t after_reset_used = free_list->get_used_bytes();
-//     EXPECT_EQ(after_reset_used, 0);  // No used allocations after reset
-//   }
-//
-//   // Should be able to allocate new nodes
-//   NodeHandle new_node = node_arena_->allocate_node("TestNode");
-//   EXPECT_FALSE(new_node.is_null());
-//
-//   // Deallocate the node before calling clear
-//   node_arena_->deallocate_node(new_node);
-//
-//   // Test clear (should free all memory)
-//   node_arena_->clear();
-//
-//   // Should be able to allocate again after clear
-//   NodeHandle after_clear_node = node_arena_->allocate_node("TestNode");
-//   EXPECT_FALSE(after_clear_node.is_null());
-//
-//   // Clean up the final node
-//   node_arena_->deallocate_node(after_clear_node);
-// }
-//
-// TEST_F(NodeArenaTest, StringUpdateDeallocation) {
-//   // Test that updating string fields properly deallocates old strings
-//   NodeHandle node = node_arena_->allocate_node("TestNode");
-//   std::shared_ptr<SchemaLayout> layout = registry_->get_layout("TestNode");
-//   ASSERT_FALSE(node.is_null());
-//
-//   // Get initial string arena state - StringPools pre-allocate 1MB chunks
-//   StringArena* string_arena = node_arena_->get_string_arena();
-//   size_t initial_chunk_memory = 0;
-//   size_t initial_used_memory = 0;
-//   if (auto* pool16 =
-//           string_arena->get_pool_by_type(ValueType::FIXED_STRING16)) {
-//     initial_chunk_memory =
-//         pool16->get_total_allocated();  // Should be 1MB (pre-allocated)
-//     initial_used_memory =
-//         pool16->get_used_bytes();  // Should be 0 (no strings yet)
-//   }
-//
-//   // Set initial string value
-//   std::string original_string = "Hello World";
-//   EXPECT_TRUE(node_arena_->set_field_value(node, layout, "short_name",
-//                                            Value{original_string}));
-//
-//   // Chunk memory should be unchanged (fits in pre-allocated 1MB)
-//   // But used memory should increase
-//   size_t after_first_chunk = 0;
-//   size_t after_first_used = 0;
-//   if (auto* pool16 =
-//           string_arena->get_pool_by_type(ValueType::FIXED_STRING16)) {
-//     after_first_chunk = pool16->get_total_allocated();
-//     after_first_used = pool16->get_used_bytes();
-//   }
-//   EXPECT_EQ(after_first_chunk, initial_chunk_memory);  // Same 1MB chunk
-//   EXPECT_GT(after_first_used, initial_used_memory);  // More bytes actually
-//   used
-//
-//   // Update with new string value
-//   std::string new_string = "Goodbye";
-//   EXPECT_TRUE(node_arena_->set_field_value(node, layout, "short_name",
-//                                            Value{new_string}));
-//
-//   // Verify the new value is set correctly
-//   Value retrieved = node_arena_->get_field_value(node, layout, "short_name");
-//   EXPECT_EQ(retrieved.to_string(), new_string);
-//
-//   // Due to reference counting, both strings might still be allocated
-//   // But we should verify there's no unbounded growth with multiple updates
-//   std::string third_string = "Final";
-//   EXPECT_TRUE(node_arena_->set_field_value(node, layout, "short_name",
-//                                            Value{third_string}));
-//
-//   Value final_value = node_arena_->get_field_value(node, layout,
-//   "short_name"); EXPECT_EQ(final_value.to_string(), third_string);
-//
-//   // Clean up
-//   node_arena_->deallocate_node(node);
-// }
+#include "../include/node_arena.hpp"
+
+#include <arrow/api.h>
+#include <gtest/gtest.h>
+
+#include <limits>
+#include <memory>
+#include <vector>
+
+#include "../include/field_update.hpp"
+#include "../include/memory_arena.hpp"
+#include "../include/node.hpp"
+#include "../include/schema.hpp"
+#include "../include/schema_layout.hpp"
+#include "../include/types.hpp"
+
+using namespace tundradb;
+
+class NodeArenaTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    registry_ = std::make_shared<SchemaRegistry>();
+
+    auto fields = std::vector<std::shared_ptr<arrow::Field>>{
+        arrow::field("name", arrow::utf8(), false),
+        arrow::field("age", arrow::int32(), true),
+        arrow::field("score", arrow::float64(), true),
+        arrow::field("active", arrow::boolean(), true),
+        arrow::field("count", arrow::int64(), true),
+        arrow::field("rating", arrow::float32(), true),
+        arrow::field("tags", arrow::list(arrow::field("item", arrow::utf8())),
+                     true),
+        arrow::field("nums", arrow::list(arrow::field("item", arrow::int32())),
+                     true),
+        arrow::field("props", arrow::map(arrow::utf8(), arrow::binary()), true),
+        arrow::field("i64_arr",
+                     arrow::list(arrow::field("item", arrow::int64())), true),
+        arrow::field("f64_arr",
+                     arrow::list(arrow::field("item", arrow::float64())), true),
+        arrow::field("bool_arr",
+                     arrow::list(arrow::field("item", arrow::boolean())),
+                     true)};
+    ASSERT_TRUE(registry_->create("Full", arrow::schema(fields)).ok());
+
+    mgr_ = std::make_unique<NodeManager>(registry_);
+    mgr_versioned_ = std::make_unique<NodeManager>(registry_, true, true, true);
+  }
+
+  std::shared_ptr<SchemaRegistry> registry_;
+  std::unique_ptr<NodeManager> mgr_;
+  std::unique_ptr<NodeManager> mgr_versioned_;
+};
+
+// =============================================================================
+// 1. nested_path FieldUpdate — all value types via Node::update_fields
+// =============================================================================
+
+TEST_F(NodeArenaTest, NestedPathAllTypes) {
+  auto node =
+      mgr_->create_node("Full", {{"name", Value{"Alice"}}}).ValueOrDie();
+  auto schema = node->get_schema();
+  auto props = schema->get_field("props");
+
+  ASSERT_TRUE(node->update_fields(
+                      {FieldUpdate{props, Value{int32_t(1)}, UpdateType::SET,
+                                   std::vector<std::string>{"i32"}}})
+                  .ok());
+  ASSERT_TRUE(node->update_fields(
+                      {FieldUpdate{props, Value{int64_t(2)}, UpdateType::SET,
+                                   std::vector<std::string>{"i64"}}})
+                  .ok());
+  ASSERT_TRUE(
+      node->update_fields({FieldUpdate{props, Value{3.14}, UpdateType::SET,
+                                       std::vector<std::string>{"f64"}}})
+          .ok());
+  ASSERT_TRUE(node->update_fields(
+                      {FieldUpdate{props, Value{float(1.5f)}, UpdateType::SET,
+                                   std::vector<std::string>{"f32"}}})
+                  .ok());
+  ASSERT_TRUE(
+      node->update_fields({FieldUpdate{props, Value{true}, UpdateType::SET,
+                                       std::vector<std::string>{"b"}}})
+          .ok());
+  ASSERT_TRUE(
+      node->update_fields({FieldUpdate{props, Value{"hello"}, UpdateType::SET,
+                                       std::vector<std::string>{"s"}}})
+          .ok());
+
+  auto m = node->get_value(props).ValueOrDie().as_map_ref();
+  EXPECT_EQ(m.get_value("i32").as_int32(), 1);
+  EXPECT_EQ(m.get_value("i64").as_int64(), 2);
+  EXPECT_DOUBLE_EQ(m.get_value("f64").as_double(), 3.14);
+  EXPECT_EQ(m.get_value("b").as_bool(), true);
+  EXPECT_EQ(m.get_value("s").as_string(), "hello");
+}
+
+// =============================================================================
+// 2. nested_path FieldUpdate — COW growth across multiple updates
+// =============================================================================
+
+TEST_F(NodeArenaTest, NestedPathCowGrowth) {
+  auto node = mgr_->create_node("Full", {{"name", Value{"Bob"}}}).ValueOrDie();
+  auto schema = node->get_schema();
+  auto props = schema->get_field("props");
+
+  for (int i = 0; i < 20; ++i) {
+    ASSERT_TRUE(node->update_fields(
+                        {FieldUpdate{props,
+                                     Value{int32_t(i)},
+                                     UpdateType::SET,
+                                     {std::string("k") + std::to_string(i)}}})
+                    .ok());
+  }
+
+  auto m = node->get_value(props).ValueOrDie().as_map_ref();
+  EXPECT_EQ(m.count(), 20u);
+  EXPECT_EQ(m.get_value("k0").as_int32(), 0);
+  EXPECT_EQ(m.get_value("k19").as_int32(), 19);
+}
+
+// =============================================================================
+// 4. append_to_array_field — non-versioned single element
+// =============================================================================
+
+TEST_F(NodeArenaTest, AppendToArrayFieldNonVersioned) {
+  auto node =
+      mgr_->create_node("Full", {{"name", Value{"Alice"}}}).ValueOrDie();
+  auto schema = node->get_schema();
+  auto nums_field = schema->get_field("nums");
+
+  auto res = node->update_fields(
+      {FieldUpdate{nums_field, Value{int32_t(10)}, UpdateType::APPEND}});
+  ASSERT_TRUE(res.ok());
+
+  auto val = node->get_value(nums_field).ValueOrDie();
+  ASSERT_TRUE(val.holds_array_ref());
+
+  // Second append (COW path — existing array)
+  res = node->update_fields(
+      {FieldUpdate{nums_field, Value{int32_t(20)}, UpdateType::APPEND}});
+  ASSERT_TRUE(res.ok());
+}
+
+// =============================================================================
+// 5. append_to_array_field — non-versioned raw array (batch append)
+// =============================================================================
+
+TEST_F(NodeArenaTest, AppendRawArrayNonVersioned) {
+  auto node = mgr_->create_node("Full", {{"name", Value{"Bob"}}}).ValueOrDie();
+  auto schema = node->get_schema();
+  auto nums_field = schema->get_field("nums");
+
+  std::vector<Value> batch = {Value{int32_t(1)}, Value{int32_t(2)},
+                              Value{int32_t(3)}};
+  auto res = node->update_fields(
+      {FieldUpdate{nums_field, Value{batch}, UpdateType::APPEND}});
+  ASSERT_TRUE(res.ok());
+
+  // Append more to existing array
+  std::vector<Value> more = {Value{int32_t(4)}};
+  res = node->update_fields(
+      {FieldUpdate{nums_field, Value{more}, UpdateType::APPEND}});
+  ASSERT_TRUE(res.ok());
+}
+
+// =============================================================================
+// 6. Versioned append — prepare_append_value
+// =============================================================================
+
+TEST_F(NodeArenaTest, VersionedAppendToArrayField) {
+  auto node = mgr_versioned_->create_node("Full", {{"name", Value{"Carol"}}})
+                  .ValueOrDie();
+  auto schema = node->get_schema();
+  auto nums_field = schema->get_field("nums");
+
+  // Append to null array in versioned mode
+  auto res = node->update_fields(
+      {FieldUpdate{nums_field, Value{int32_t(1)}, UpdateType::APPEND}});
+  ASSERT_TRUE(res.ok());
+
+  // Append to existing array in versioned mode (reads from version chain)
+  res = node->update_fields(
+      {FieldUpdate{nums_field, Value{int32_t(2)}, UpdateType::APPEND}});
+  ASSERT_TRUE(res.ok());
+
+  // Versioned raw array append
+  std::vector<Value> batch = {Value{int32_t(3)}, Value{int32_t(4)}};
+  res = node->update_fields(
+      {FieldUpdate{nums_field, Value{batch}, UpdateType::APPEND}});
+  ASSERT_TRUE(res.ok());
+}
+
+// =============================================================================
+// 7. set_field_value_internal — overwrite MAP field (marks old for deletion)
+// =============================================================================
+
+TEST_F(NodeArenaTest, OverwriteNestedPathValue) {
+  auto node = mgr_->create_node("Full", {{"name", Value{"Dave"}}}).ValueOrDie();
+  auto schema = node->get_schema();
+  auto props = schema->get_field("props");
+
+  ASSERT_TRUE(node->update_fields(
+                      {FieldUpdate{props, Value{int32_t(1)}, UpdateType::SET,
+                                   std::vector<std::string>{"x"}}})
+                  .ok());
+  EXPECT_EQ(node->get_value(props)
+                .ValueOrDie()
+                .as_map_ref()
+                .get_value("x")
+                .as_int32(),
+            1);
+
+  // Overwrite the same key — COW copy and update
+  ASSERT_TRUE(node->update_fields(
+                      {FieldUpdate{props, Value{int32_t(99)}, UpdateType::SET,
+                                   std::vector<std::string>{"x"}}})
+                  .ok());
+  EXPECT_EQ(node->get_value(props)
+                .ValueOrDie()
+                .as_map_ref()
+                .get_value("x")
+                .as_int32(),
+            99);
+}
+
+// =============================================================================
+// 8. VersionInfo bitemporal methods (cache)
+// =============================================================================
+
+TEST_F(NodeArenaTest, VersionInfoBitemporal) {
+  auto node = mgr_versioned_
+                  ->create_node("Full", {{"name", Value{"Eve"}},
+                                         {"age", Value{int32_t(20)}}})
+                  .ValueOrDie();
+  auto schema = node->get_schema();
+  auto age_field = schema->get_field("age");
+
+  // Create a version
+  ASSERT_TRUE(node->update_fields({FieldUpdate{age_field, Value{int32_t(21)},
+                                               UpdateType::SET}})
+                  .ok());
+
+  const auto* handle = node->get_handle();
+  auto* vi = handle->get_version_info();
+  ASSERT_NE(vi, nullptr);
+
+  EXPECT_FALSE(vi->is_field_cached(0));
+  vi->mark_field_cached(0);
+  EXPECT_TRUE(vi->is_field_cached(0));
+  vi->clear_cache();
+  EXPECT_FALSE(vi->is_field_cached(0));
+}
+
+// =============================================================================
+// 9. NodeHandle — default ctor, move assignment, equality
+// =============================================================================
+
+TEST_F(NodeArenaTest, NodeHandleDefaultCtor) {
+  NodeHandle h;
+  EXPECT_TRUE(h.is_null());
+  EXPECT_FALSE(h.is_versioned());
+}
+
+TEST_F(NodeArenaTest, NodeHandleMoveAssignment) {
+  auto node =
+      mgr_->create_node("Full", {{"name", Value{"Frank"}}}).ValueOrDie();
+  NodeHandle h1 = *node->get_handle();
+  NodeHandle h2;
+  h2 = std::move(h1);
+  EXPECT_TRUE(h1.is_null());
+  EXPECT_FALSE(h2.is_null());
+}
+
+TEST_F(NodeArenaTest, NodeHandleEquality) {
+  auto n1 = mgr_->create_node("Full", {{"name", Value{"A"}}}).ValueOrDie();
+  auto n2 = mgr_->create_node("Full", {{"name", Value{"B"}}}).ValueOrDie();
+
+  NodeHandle h1 = *n1->get_handle();
+  NodeHandle h2 = *n1->get_handle();
+  NodeHandle h3 = *n2->get_handle();
+
+  EXPECT_EQ(h1, h2);
+  EXPECT_NE(h1, h3);
+}
+
+// =============================================================================
+// 10. Arena accessors
+// =============================================================================
+
+TEST_F(NodeArenaTest, ArenaAccessors) {
+  auto node =
+      mgr_->create_node("Full", {{"name", Value{"Grace"}}}).ValueOrDie();
+  auto* arena = node->get_arena();
+
+  EXPECT_NE(arena->get_string_arena(), nullptr);
+  EXPECT_NE(arena->get_array_arena(), nullptr);
+  EXPECT_NE(arena->get_map_arena(), nullptr);
+  EXPECT_GT(arena->get_total_allocated(), 0u);
+  EXPECT_GE(arena->get_chunk_count(), 1u);
+  EXPECT_NE(arena->get_mem_arena(), nullptr);
+}
+
+// =============================================================================
+// 11. append_single_element — different element types
+// =============================================================================
+
+TEST_F(NodeArenaTest, AppendDifferentElementTypes) {
+  auto node = mgr_->create_node("Full", {{"name", Value{"Hank"}}}).ValueOrDie();
+  auto schema = node->get_schema();
+
+  // INT32 append via nums field
+  auto nums_field = schema->get_field("nums");
+  ASSERT_TRUE(node->update_fields({FieldUpdate{nums_field, Value{int32_t(42)},
+                                               UpdateType::APPEND}})
+                  .ok());
+
+  // STRING append via tags field
+  auto tags_field = schema->get_field("tags");
+  ASSERT_TRUE(node->update_fields({FieldUpdate{tags_field, Value{"hello"},
+                                               UpdateType::APPEND}})
+                  .ok());
+  ASSERT_TRUE(node->update_fields({FieldUpdate{tags_field, Value{"world"},
+                                               UpdateType::APPEND}})
+                  .ok());
+}
+
+// =============================================================================
+// 12. is_versioning_enabled
+// =============================================================================
+
+TEST_F(NodeArenaTest, VersioningEnabled) {
+  auto n1 = mgr_->create_node("Full", {{"name", Value{"I"}}}).ValueOrDie();
+  auto n2 =
+      mgr_versioned_->create_node("Full", {{"name", Value{"J"}}}).ValueOrDie();
+  EXPECT_FALSE(n1->get_arena()->is_versioning_enabled());
+  EXPECT_TRUE(n2->get_arena()->is_versioning_enabled());
+}
+
+// =============================================================================
+// 13. NodeArena::reset and clear
+// =============================================================================
+
+TEST_F(NodeArenaTest, ResetAndClear) {
+  // Use a separate manager so we don't corrupt shared state
+  auto separate_mgr = std::make_unique<NodeManager>(registry_);
+  auto node =
+      separate_mgr->create_node("Full", {{"name", Value{"K"}}}).ValueOrDie();
+  auto* arena = node->get_arena();
+  // Verify these do not crash
+  arena->reset();
+  arena->clear();
+}
+
+// =============================================================================
+// 14. NodeHandle temporal getters
+// =============================================================================
+
+TEST_F(NodeArenaTest, NodeHandleTemporalGetters) {
+  auto node = mgr_versioned_
+                  ->create_node("Full", {{"name", Value{"Lily"}},
+                                         {"age", Value{int32_t(25)}}})
+                  .ValueOrDie();
+  auto schema = node->get_schema();
+  auto age_field = schema->get_field("age");
+
+  ASSERT_TRUE(node->update_fields({FieldUpdate{age_field, Value{int32_t(26)},
+                                               UpdateType::SET}})
+                  .ok());
+
+  const auto* handle = node->get_handle();
+  uint64_t vf = handle->get_valid_from();
+  uint64_t vt = handle->get_valid_to();
+  EXPECT_GT(vf, 0u);
+  EXPECT_EQ(vt, std::numeric_limits<uint64_t>::max());
+  EXPECT_TRUE(handle->is_valid_at(vf));
+  EXPECT_NE(handle->get_prev_version(), nullptr);
+}
+
+// =============================================================================
+// 15. get_value_at_version — unknown field produces KeyError
+// =============================================================================
+
+TEST_F(NodeArenaTest, GetValueAtVersionNullField) {
+  auto node = mgr_versioned_
+                  ->create_node("Full", {{"name", Value{"M"}},
+                                         {"age", Value{int32_t(1)}}})
+                  .ValueOrDie();
+  auto schema = node->get_schema();
+  auto age_field = schema->get_field("age");
+  ASSERT_TRUE(node->update_fields({FieldUpdate{age_field, Value{int32_t(2)},
+                                               UpdateType::SET}})
+                  .ok());
+
+  const auto* handle = node->get_handle();
+  auto* vi = handle->get_version_info();
+  auto layout = std::make_shared<SchemaLayout>(schema);
+
+  // Null field triggers the nullptr check in get_field_layout -> KeyError
+  std::shared_ptr<Field> null_field;
+  auto result =
+      NodeArena::get_value_at_version(*handle, vi, layout, null_field);
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(result.status().IsKeyError());
+
+  // Also verify get_value_ptr_at_version returns nullptr for null field
+  const char* ptr =
+      NodeArena::get_value_ptr_at_version(*handle, vi, layout, null_field);
+  EXPECT_EQ(ptr, nullptr);
+}
+
+// =============================================================================
+// 16. VersionInfo::find_version_at_snapshot
+// =============================================================================
+
+TEST_F(NodeArenaTest, FindVersionAtSnapshot) {
+  auto node = mgr_versioned_
+                  ->create_node("Full", {{"name", Value{"N"}},
+                                         {"age", Value{int32_t(1)}}})
+                  .ValueOrDie();
+  auto schema = node->get_schema();
+  auto age_field = schema->get_field("age");
+
+  ASSERT_TRUE(node->update_fields({FieldUpdate{age_field, Value{int32_t(2)},
+                                               UpdateType::SET}})
+                  .ok());
+
+  const auto* handle = node->get_handle();
+  const auto* vi = handle->get_version_info();
+
+  // is_visible_at with valid time and tx time
+  uint64_t now = vi->valid_from;
+  uint64_t tx = vi->tx_from;
+  EXPECT_TRUE(vi->is_visible_at(now, tx));
+
+  // find_version_at_snapshot — should find the current version
+  const auto* found = vi->find_version_at_snapshot(now, tx);
+  EXPECT_NE(found, nullptr);
+
+  // Snapshot at time 0 — all versions have timestamps > 0
+  const auto* not_found = vi->find_version_at_snapshot(0, 0);
+  EXPECT_EQ(not_found, nullptr);
+}
+
+// =============================================================================
+// 17. Overwrite string and array fields (marks old for deletion)
+// =============================================================================
+
+TEST_F(NodeArenaTest, OverwriteStringFieldNonVersioned) {
+  auto node =
+      mgr_->create_node("Full", {{"name", Value{"Original"}}}).ValueOrDie();
+  auto schema = node->get_schema();
+  auto name_field = schema->get_field("name");
+
+  ASSERT_TRUE(node->update_fields({FieldUpdate{name_field, Value{"Updated"},
+                                               UpdateType::SET}})
+                  .ok());
+  auto val = node->get_value(name_field).ValueOrDie();
+  EXPECT_EQ(val.as_string(), "Updated");
+}
+
+TEST_F(NodeArenaTest, OverwriteArrayFieldNonVersioned) {
+  auto node = mgr_->create_node("Full", {{"name", Value{"O"}}}).ValueOrDie();
+  auto schema = node->get_schema();
+  auto nums_field = schema->get_field("nums");
+
+  // Set initial array via raw array
+  std::vector<Value> arr1 = {Value{int32_t(1)}};
+  ASSERT_TRUE(node->update_fields(
+                      {FieldUpdate{nums_field, Value{arr1}, UpdateType::SET}})
+                  .ok());
+
+  // Overwrite — old array marked for deletion
+  std::vector<Value> arr2 = {Value{int32_t(2)}, Value{int32_t(3)}};
+  ASSERT_TRUE(node->update_fields(
+                      {FieldUpdate{nums_field, Value{arr2}, UpdateType::SET}})
+                  .ok());
+}
+
+// =============================================================================
+// Extra: version_counter advances, count_versions, find_version_at_time
+// =============================================================================
+
+TEST_F(NodeArenaTest, VersionCounterAndChain) {
+  auto node = mgr_versioned_
+                  ->create_node("Full", {{"name", Value{"Z"}},
+                                         {"age", Value{int32_t(1)}}})
+                  .ValueOrDie();
+  auto schema = node->get_schema();
+  auto age_field = schema->get_field("age");
+
+  ASSERT_TRUE(node->update_fields({FieldUpdate{age_field, Value{int32_t(2)},
+                                               UpdateType::SET}})
+                  .ok());
+  ASSERT_TRUE(node->update_fields({FieldUpdate{age_field, Value{int32_t(3)},
+                                               UpdateType::SET}})
+                  .ok());
+
+  const auto* handle = node->get_handle();
+  EXPECT_EQ(handle->count_versions(), 3u);  // v0 + v1 + v2
+  EXPECT_GT(handle->get_version_id(), 0u);
+
+  // find_version_at_time for the latest version's valid_from
+  uint64_t vf = handle->get_valid_from();
+  const auto* v = handle->find_version_at_time(vf);
+  ASSERT_NE(v, nullptr);
+  EXPECT_EQ(v->valid_from, vf);
+
+  // Non-versioned handle returns null for find_version_at_time
+  auto nv_node =
+      mgr_->create_node("Full", {{"name", Value{"NV"}}}).ValueOrDie();
+  EXPECT_EQ(nv_node->get_handle()->find_version_at_time(0), nullptr);
+  EXPECT_EQ(nv_node->get_handle()->get_prev_version(), nullptr);
+  EXPECT_EQ(nv_node->get_handle()->count_versions(), 1u);
+}
+
+// =============================================================================
+// End-to-end: nested_path update via Node::update_fields (versioned)
+// =============================================================================
+
+TEST_F(NodeArenaTest, VersionedNestedPathUpdate) {
+  auto node = mgr_versioned_
+                  ->create_node("Full", {{"name", Value{"MapVer"}},
+                                         {"age", Value{int32_t(1)}}})
+                  .ValueOrDie();
+  auto schema = node->get_schema();
+  auto props = schema->get_field("props");
+  auto age = schema->get_field("age");
+
+  // v1: set props.score = 3.14
+  ASSERT_TRUE(
+      node->update_fields({FieldUpdate{props, Value{3.14}, UpdateType::SET,
+                                       std::vector<std::string>{"score"}}})
+          .ok());
+
+  auto m1 = node->get_value(props).ValueOrDie().as_map_ref();
+  EXPECT_DOUBLE_EQ(m1.get_value("score").as_double(), 3.14);
+
+  // v2: update props.score = 6.28 and age = 2 in a single batch
+  ASSERT_TRUE(
+      node->update_fields(
+              {FieldUpdate{props, Value{6.28}, UpdateType::SET,
+                           std::vector<std::string>{"score"}},
+               FieldUpdate{age, Value{int32_t(2)}, UpdateType::SET, {}}})
+          .ok());
+
+  auto m2 = node->get_value(props).ValueOrDie().as_map_ref();
+  EXPECT_DOUBLE_EQ(m2.get_value("score").as_double(), 6.28);
+  EXPECT_EQ(node->get_value(age).ValueOrDie().as_int32(), 2);
+
+  // v3: add a new key to the map
+  ASSERT_TRUE(
+      node->update_fields({FieldUpdate{props, Value{true}, UpdateType::SET,
+                                       std::vector<std::string>{"active"}}})
+          .ok());
+
+  auto m3 = node->get_value(props).ValueOrDie().as_map_ref();
+  EXPECT_EQ(m3.count(), 2u);
+  EXPECT_DOUBLE_EQ(m3.get_value("score").as_double(), 6.28);
+  EXPECT_EQ(m3.get_value("active").as_bool(), true);
+}
+
+// =============================================================================
+// End-to-end: nested_path update on null MAP field creates map automatically
+// =============================================================================
+
+TEST_F(NodeArenaTest, NestedPathOnNullFieldCreatesMap) {
+  auto node =
+      mgr_->create_node("Full", {{"name", Value{"NullMap"}}}).ValueOrDie();
+  auto schema = node->get_schema();
+  auto props = schema->get_field("props");
+
+  // MAP field is null initially — nested_path update should create it
+  ASSERT_TRUE(node->update_fields(
+                      {FieldUpdate{props, Value{int32_t(42)}, UpdateType::SET,
+                                   std::vector<std::string>{"answer"}}})
+                  .ok());
+
+  auto val = node->get_value(props).ValueOrDie();
+  ASSERT_TRUE(val.holds_map_ref());
+  EXPECT_EQ(val.as_map_ref().get_value("answer").as_int32(), 42);
+}
+
+TEST_F(NodeArenaTest, NestedPathDepthGreaterThanOneReturnsNotImplemented) {
+  auto node =
+      mgr_->create_node("Full", {{"name", Value{"Nested"}}}).ValueOrDie();
+  auto schema = node->get_schema();
+  auto props = schema->get_field("props");
+
+  auto update_result = node->update_fields(
+      {FieldUpdate{props, Value{int32_t(1)}, UpdateType::SET,
+                   std::vector<std::string>{"lvl1", "lvl2"}}});
+  ASSERT_FALSE(update_result.ok());
+  EXPECT_TRUE(update_result.status().IsNotImplemented());
+}
+
+// =============================================================================
+// 18. append_single_element — INT64, DOUBLE, BOOL element types
+// =============================================================================
+
+TEST_F(NodeArenaTest, AppendInt64Elements) {
+  auto node = mgr_->create_node("Full", {{"name", Value{"I64"}}}).ValueOrDie();
+  auto schema = node->get_schema();
+  auto i64_field = schema->get_field("i64_arr");
+
+  ASSERT_TRUE(node->update_fields({FieldUpdate{i64_field, Value{int64_t(100)},
+                                               UpdateType::APPEND}})
+                  .ok());
+  ASSERT_TRUE(node->update_fields({FieldUpdate{i64_field, Value{int64_t(200)},
+                                               UpdateType::APPEND}})
+                  .ok());
+
+  auto val = node->get_value(i64_field).ValueOrDie();
+  ASSERT_TRUE(val.holds_array_ref());
+}
+
+TEST_F(NodeArenaTest, AppendDoubleElements) {
+  auto node = mgr_->create_node("Full", {{"name", Value{"F64"}}}).ValueOrDie();
+  auto schema = node->get_schema();
+  auto f64_field = schema->get_field("f64_arr");
+
+  ASSERT_TRUE(node->update_fields(
+                      {FieldUpdate{f64_field, Value{1.11}, UpdateType::APPEND}})
+                  .ok());
+  ASSERT_TRUE(node->update_fields(
+                      {FieldUpdate{f64_field, Value{2.22}, UpdateType::APPEND}})
+                  .ok());
+
+  auto val = node->get_value(f64_field).ValueOrDie();
+  ASSERT_TRUE(val.holds_array_ref());
+}
+
+TEST_F(NodeArenaTest, AppendBoolElements) {
+  auto node = mgr_->create_node("Full", {{"name", Value{"Bool"}}}).ValueOrDie();
+  auto schema = node->get_schema();
+  auto bool_field = schema->get_field("bool_arr");
+
+  ASSERT_TRUE(node->update_fields({FieldUpdate{bool_field, Value{true},
+                                               UpdateType::APPEND}})
+                  .ok());
+  ASSERT_TRUE(node->update_fields({FieldUpdate{bool_field, Value{false},
+                                               UpdateType::APPEND}})
+                  .ok());
+
+  auto val = node->get_value(bool_field).ValueOrDie();
+  ASSERT_TRUE(val.holds_array_ref());
+}
+
+TEST_F(NodeArenaTest, AppendStringElements) {
+  auto node = mgr_->create_node("Full", {{"name", Value{"Str"}}}).ValueOrDie();
+  auto schema = node->get_schema();
+  auto tags_field = schema->get_field("tags");
+
+  ASSERT_TRUE(node->update_fields({FieldUpdate{tags_field, Value{"alpha"},
+                                               UpdateType::APPEND}})
+                  .ok());
+  ASSERT_TRUE(node->update_fields({FieldUpdate{tags_field, Value{"beta"},
+                                               UpdateType::APPEND}})
+                  .ok());
+
+  auto val = node->get_value(tags_field).ValueOrDie();
+  ASSERT_TRUE(val.holds_array_ref());
+}
+
+// =============================================================================
+// 19. Versioned append for INT64, DOUBLE, BOOL arrays
+// =============================================================================
+
+TEST_F(NodeArenaTest, VersionedAppendInt64) {
+  auto node = mgr_versioned_->create_node("Full", {{"name", Value{"VI64"}}})
+                  .ValueOrDie();
+  auto f = node->get_schema()->get_field("i64_arr");
+
+  ASSERT_TRUE(node->update_fields(
+                      {FieldUpdate{f, Value{int64_t(1)}, UpdateType::APPEND}})
+                  .ok());
+  ASSERT_TRUE(node->update_fields(
+                      {FieldUpdate{f, Value{int64_t(2)}, UpdateType::APPEND}})
+                  .ok());
+}
+
+TEST_F(NodeArenaTest, VersionedAppendDouble) {
+  auto node = mgr_versioned_->create_node("Full", {{"name", Value{"VF64"}}})
+                  .ValueOrDie();
+  auto f = node->get_schema()->get_field("f64_arr");
+
+  ASSERT_TRUE(
+      node->update_fields({FieldUpdate{f, Value{1.5}, UpdateType::APPEND}})
+          .ok());
+  ASSERT_TRUE(
+      node->update_fields({FieldUpdate{f, Value{2.5}, UpdateType::APPEND}})
+          .ok());
+}
+
+TEST_F(NodeArenaTest, VersionedAppendBool) {
+  auto node = mgr_versioned_->create_node("Full", {{"name", Value{"VBool"}}})
+                  .ValueOrDie();
+  auto f = node->get_schema()->get_field("bool_arr");
+
+  ASSERT_TRUE(
+      node->update_fields({FieldUpdate{f, Value{true}, UpdateType::APPEND}})
+          .ok());
+  ASSERT_TRUE(
+      node->update_fields({FieldUpdate{f, Value{false}, UpdateType::APPEND}})
+          .ok());
+}
+
+// =============================================================================
+// 20. NodeArena::allocate_map
+// =============================================================================
+
+TEST_F(NodeArenaTest, AllocateMapDirect) {
+  auto node = mgr_->create_node("Full", {{"name", Value{"AM"}}}).ValueOrDie();
+  auto* arena = node->get_arena();
+
+  auto res = arena->allocate_map();
+  ASSERT_TRUE(res.ok());
+  MapRef ref = std::move(*res);
+  EXPECT_FALSE(ref.is_null());
+}
+
+// =============================================================================
+// 21. node_arena_factory::create_simple_arena
+// =============================================================================
+
+TEST_F(NodeArenaTest, CreateSimpleArenaFactory) {
+  auto layout_reg = std::make_shared<LayoutRegistry>();
+  auto arena =
+      node_arena_factory::create_simple_arena(layout_reg, 64 * 1024, false);
+  EXPECT_NE(arena, nullptr);
+  EXPECT_FALSE(arena->is_versioning_enabled());
+}
+
+// =============================================================================
+// 22. Overwrite MAP field entirely (set_field_value_internal mark old map)
+// =============================================================================
+
+TEST_F(NodeArenaTest, OverwriteEntireMapField) {
+  auto node = mgr_->create_node("Full", {{"name", Value{"OMF"}}}).ValueOrDie();
+  auto schema = node->get_schema();
+  auto props = schema->get_field("props");
+
+  ASSERT_TRUE(node->update_fields(
+                      {FieldUpdate{props, Value{int32_t(1)}, UpdateType::SET,
+                                   std::vector<std::string>{"a"}}})
+                  .ok());
+
+  auto* arena = node->get_arena();
+  auto new_map = arena->allocate_map().ValueOrDie();
+  ASSERT_TRUE(
+      node->update_fields({FieldUpdate{props, Value{std::move(new_map)}}})
+          .ok());
+
+  auto val = node->get_value(props).ValueOrDie();
+  ASSERT_TRUE(val.holds_map_ref());
+  EXPECT_EQ(val.as_map_ref().count(), 0u);
+}
+
+// =============================================================================
+// 23. VersionInfo::find_version_at_time returning nullptr (no match)
+// =============================================================================
+
+TEST_F(NodeArenaTest, FindVersionAtTimeNoMatch) {
+  auto node = mgr_versioned_
+                  ->create_node("Full", {{"name", Value{"NoMatch"}},
+                                         {"age", Value{int32_t(1)}}})
+                  .ValueOrDie();
+  auto handle = node->get_handle();
+  const auto* vi = handle->get_version_info();
+
+  const auto* found = vi->find_version_at_time(0);
+  EXPECT_EQ(found, nullptr);
+}
+
+// =============================================================================
+// 24. NodeHandle::set_version_info
+// =============================================================================
+
+TEST_F(NodeArenaTest, SetVersionInfo) {
+  auto node = mgr_versioned_
+                  ->create_node("Full", {{"name", Value{"SVI"}},
+                                         {"age", Value{int32_t(1)}}})
+                  .ValueOrDie();
+  NodeHandle h = *node->get_handle();
+  auto* original_vi = h.get_version_info();
+  ASSERT_NE(original_vi, nullptr);
+
+  VersionInfo dummy_vi;
+  h.set_version_info(&dummy_vi);
+  EXPECT_EQ(h.get_version_info(), &dummy_vi);
+
+  h.set_version_info(original_vi);
+}
+
+// =============================================================================
+// 25. Versioned empty updates shortcut (line 567-569)
+// =============================================================================
+
+TEST_F(NodeArenaTest, VersionedEmptyUpdatesNoOp) {
+  auto node = mgr_versioned_
+                  ->create_node("Full", {{"name", Value{"Empty"}},
+                                         {"age", Value{int32_t(1)}}})
+                  .ValueOrDie();
+
+  size_t versions_before = node->get_handle()->count_versions();
+  auto res = node->update_fields({});
+  ASSERT_TRUE(res.ok());
+  EXPECT_EQ(node->get_handle()->count_versions(), versions_before);
+}
+
+// =============================================================================
+// 26. get_value on versioned node — explicit NULL in version chain
+// =============================================================================
+
+TEST_F(NodeArenaTest, GetValueVersionedExplicitNull) {
+  auto node = mgr_versioned_
+                  ->create_node("Full", {{"name", Value{"NullV"}},
+                                         {"age", Value{int32_t(1)}}})
+                  .ValueOrDie();
+  auto schema = node->get_schema();
+  auto age_field = schema->get_field("age");
+
+  ASSERT_TRUE(
+      node->update_fields({FieldUpdate{age_field, Value{}, UpdateType::SET}})
+          .ok());
+
+  auto val = node->get_value(age_field).ValueOrDie();
+  EXPECT_TRUE(val.is_null());
+}
+
+// =============================================================================
+// 27. Versioned raw-array append with empty batch
+// =============================================================================
+
+TEST_F(NodeArenaTest, VersionedAppendEmptyBatch) {
+  auto node =
+      mgr_versioned_->create_node("Full", {{"name", Value{"EB"}}}).ValueOrDie();
+  auto nums_field = node->get_schema()->get_field("nums");
+
+  std::vector<Value> empty;
+  auto res = node->update_fields(
+      {FieldUpdate{nums_field, Value{empty}, UpdateType::APPEND}});
+  ASSERT_TRUE(res.ok());
+}
+
+TEST_F(NodeArenaTest, VersionedAppendEmptyBatchToExistingArray) {
+  auto node = mgr_versioned_->create_node("Full", {{"name", Value{"EB2"}}})
+                  .ValueOrDie();
+  auto nums_field = node->get_schema()->get_field("nums");
+
+  ASSERT_TRUE(node->update_fields({FieldUpdate{nums_field, Value{int32_t(1)},
+                                               UpdateType::APPEND}})
+                  .ok());
+
+  std::vector<Value> empty;
+  ASSERT_TRUE(node->update_fields({FieldUpdate{nums_field, Value{empty},
+                                               UpdateType::APPEND}})
+                  .ok());
+}

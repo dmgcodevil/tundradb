@@ -3,17 +3,17 @@
 
 #include <array>
 #include <cassert>
-#include <cstring>
 #include <iostream>
+#include <map>
 #include <string>
 #include <variant>
 #include <vector>
 
 // Arrow includes for type conversion functions
 #include <arrow/api.h>
-#include <arrow/type.h>
 
 #include "array_ref.hpp"
+#include "map_ref.hpp"
 #include "string_arena.hpp"
 
 namespace tundradb {
@@ -37,6 +37,13 @@ class Value {
   // Arena-backed array (already allocated in ArrayArena)
   explicit Value(ArrayRef v) : type_(ValueType::ARRAY), data_(std::move(v)) {}
 
+  // Arena-backed map (already allocated in MapArena)
+  explicit Value(MapRef v) : type_(ValueType::MAP), data_(std::move(v)) {}
+
+  // Raw map data - will be converted to MapRef by NodeArena
+  explicit Value(std::map<std::string, Value> v)
+      : type_(ValueType::MAP), data_(std::move(v)) {}
+
   // Raw array data - will be converted to ArrayRef by NodeArena
   // (same pattern as std::string -> StringRef for strings)
   explicit Value(std::vector<Value> v)
@@ -45,6 +52,7 @@ class Value {
   explicit Value(bool v) : type_(ValueType::BOOL), data_(v) {}
   Value(int32_t i) : type_(ValueType::INT32), data_(i) {}  // Non-explicit
   Value(int64_t v) : type_(ValueType::INT64), data_(v) {}  // Non-explicit
+  explicit Value(float f) : type_(ValueType::FLOAT), data_(f) {}
   Value(const char* s) : type_(ValueType::STRING), data_(std::string(s)) {}
 
   ValueType type() const { return type_; }
@@ -63,6 +71,7 @@ class Value {
     return get<StringRef>();
   }
   [[nodiscard]] const ArrayRef& as_array_ref() const { return get<ArrayRef>(); }
+  [[nodiscard]] const MapRef& as_map_ref() const { return get<MapRef>(); }
   [[nodiscard]] bool as_bool() const { return get<bool>(); }
   [[nodiscard]] bool is_null() const { return type_ == ValueType::NA; }
 
@@ -81,6 +90,17 @@ class Value {
     return type_ == ValueType::ARRAY && std::holds_alternative<ArrayRef>(data_);
   }
 
+  // Check if the Value contains a MapRef (arena-backed)
+  [[nodiscard]] bool holds_map_ref() const {
+    return type_ == ValueType::MAP && std::holds_alternative<MapRef>(data_);
+  }
+
+  // Check if the Value contains a raw map (std::map<std::string, Value>)
+  [[nodiscard]] bool holds_raw_map() const {
+    return type_ == ValueType::MAP &&
+           std::holds_alternative<std::map<std::string, Value>>(data_);
+  }
+
   // Check if the Value contains a raw array (std::vector<Value>)
   [[nodiscard]] bool holds_raw_array() const {
     return type_ == ValueType::ARRAY &&
@@ -89,6 +109,59 @@ class Value {
 
   [[nodiscard]] const std::vector<Value>& as_raw_array() const {
     return get<std::vector<Value>>();
+  }
+
+  std::vector<Value>& as_raw_array_mut() {
+    return std::get<std::vector<Value>>(data_);
+  }
+
+  [[nodiscard]] const std::map<std::string, Value>& as_raw_map() const {
+    return get<std::map<std::string, Value>>();
+  }
+
+  std::map<std::string, Value>& as_raw_map_mut() {
+    return std::get<std::map<std::string, Value>>(data_);
+  }
+
+  arrow::Status append_element(Value element) {
+    if (element.holds_raw_array()) {
+      return append_all(std::move(element));
+    }
+    if (type_ == ValueType::NA) {
+      type_ = ValueType::ARRAY;
+      data_ = std::vector<Value>{std::move(element)};
+      return arrow::Status::OK();
+    }
+    if (!holds_raw_array()) {
+      return arrow::Status::TypeError(
+          "APPEND: target value is not a raw array");
+    }
+    as_raw_array_mut().push_back(std::move(element));
+    return arrow::Status::OK();
+  }
+
+  /** Concatenate: [1,2] + [3,4] -> [1,2,3,4]. */
+  arrow::Status append_all(Value array_value) {
+    if (!array_value.holds_raw_array()) {
+      return arrow::Status::TypeError(
+          "APPEND_ALL: source value is not a raw array");
+    }
+    auto& src = array_value.as_raw_array_mut();
+    if (type_ == ValueType::NA) {
+      type_ = ValueType::ARRAY;
+      data_ = std::move(src);
+      return arrow::Status::OK();
+    }
+    if (!holds_raw_array()) {
+      return arrow::Status::TypeError(
+          "APPEND_ALL: target value is not a raw array");
+    }
+    auto& dest = as_raw_array_mut();
+    dest.reserve(dest.size() + src.size());
+    for (auto& v : src) {
+      dest.push_back(std::move(v));
+    }
+    return arrow::Status::OK();
   }
 
   // Convert the Value to its raw string representation (without quotes for
@@ -125,6 +198,37 @@ class Value {
         }
         return "[]";
       }
+      case ValueType::MAP: {
+        if (holds_map_ref()) {
+          const auto& m = as_map_ref();
+          std::string result = "{";
+          for (uint32_t i = 0; i < m.count(); ++i) {
+            if (i > 0) result += ", ";
+            const auto* e = m.entry_ptr(i);
+            result += e->key.to_string();
+            result += ": ";
+            auto val = Value::read_value_from_memory(
+                e->value, static_cast<ValueType>(e->value_type));
+            result += val.to_string();
+          }
+          result += "}";
+          return result;
+        }
+        if (holds_raw_map()) {
+          std::string result = "{";
+          bool first = true;
+          for (const auto& [k, v] : as_raw_map()) {
+            if (!first) result += ", ";
+            first = false;
+            result += k;
+            result += ": ";
+            result += v.to_string();
+          }
+          result += "}";
+          return result;
+        }
+        return "{}";
+      }
       default:
         return "";
     }
@@ -141,6 +245,8 @@ class Value {
         return Value{*reinterpret_cast<const int32_t*>(ptr)};
       case ValueType::DOUBLE:
         return Value{*reinterpret_cast<const double*>(ptr)};
+      case ValueType::FLOAT:
+        return Value{*reinterpret_cast<const float*>(ptr)};
       case ValueType::BOOL:
         return Value{*reinterpret_cast<const bool*>(ptr)};
       case ValueType::STRING:
@@ -152,6 +258,8 @@ class Value {
         return Value{*reinterpret_cast<const StringRef*>(ptr), type};
       case ValueType::ARRAY:
         return Value{*reinterpret_cast<const ArrayRef*>(ptr)};
+      case ValueType::MAP:
+        return Value{*reinterpret_cast<const MapRef*>(ptr)};
       case ValueType::NA:
       default:
         return Value{};
@@ -171,7 +279,8 @@ class Value {
  private:
   ValueType type_;
   std::variant<std::monostate, int32_t, int64_t, float, double, std::string,
-               StringRef, ArrayRef, std::vector<Value>, bool>
+               StringRef, ArrayRef, MapRef, std::vector<Value>,
+               std::map<std::string, Value>, bool>
       data_;
 };
 
@@ -215,6 +324,10 @@ struct ValueRef {
     return *reinterpret_cast<const ArrayRef*>(data);
   }
 
+  [[nodiscard]] const MapRef& as_map_ref() const {
+    return *reinterpret_cast<const MapRef*>(data);
+  }
+
   arrow::Result<std::shared_ptr<arrow::Scalar>> as_scalar() const {
     switch (type) {
       case ValueType::INT32:
@@ -232,6 +345,9 @@ struct ValueRef {
       case ValueType::ARRAY:
         return arrow::Status::NotImplemented(
             "Array scalar conversion not yet implemented");
+      case ValueType::MAP:
+        return arrow::Status::NotImplemented(
+            "Map scalar conversion not yet implemented");
       default:
         return arrow::Status::NotImplemented(
             "Unsupported Value type for Arrow scalar conversion: ",
@@ -293,6 +409,12 @@ struct ValueRef {
         return arr1 == arr2;
       }
 
+      case ValueType::MAP: {
+        const MapRef& m1 = *reinterpret_cast<const MapRef*>(data);
+        const MapRef& m2 = *reinterpret_cast<const MapRef*>(other.data);
+        return m1 == m2;
+      }
+
       default:
         return false;  // Unknown type
     }
@@ -351,6 +473,22 @@ struct ValueRef {
           result += elem.to_string();
         }
         result += "]";
+        return result;
+      }
+      case ValueType::MAP: {
+        const MapRef& m = as_map_ref();
+        if (m.is_null()) return "NULL";
+        std::string result = "{";
+        for (uint32_t i = 0; i < m.count(); ++i) {
+          if (i > 0) result += ", ";
+          const auto* e = m.entry_ptr(i);
+          result += e->key.to_string();
+          result += ": ";
+          auto val = Value::read_value_from_memory(
+              e->value, static_cast<ValueType>(e->value_type));
+          result += val.to_string();
+        }
+        result += "}";
         return result;
       }
       default:

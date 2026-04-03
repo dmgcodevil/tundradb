@@ -5,7 +5,9 @@
 #include <string>
 #include <vector>
 
+#include "../include/arrow_map_union_types.hpp"
 #include "../include/core.hpp"
+#include "../include/field_update.hpp"
 #include "../include/logger.hpp"
 #include "../include/metadata.hpp"
 #include "../include/query.hpp"
@@ -600,6 +602,78 @@ TEST_F(WhereExpressionTest, TraversalWhereCombinations3) {
   const auto& stats = result.ValueOrDie()->execution_stats();
   EXPECT_EQ(stats.num_where_clauses_inlined, 2);
   EXPECT_EQ(stats.num_where_clauses_post_processed, 1);
+}
+
+TEST_F(WhereExpressionTest, QueryMaterializesMapColumn) {
+  auto name_field = arrow::field("name", arrow::utf8());
+  auto map_value_type = map_union_value_type();
+  auto props_field =
+      arrow::field("props", arrow::map(arrow::utf8(), map_value_type));
+  auto map_schema = arrow::schema({name_field, props_field});
+  db_->get_schema_registry()->create("MapUser", map_schema).ValueOrDie();
+
+  std::unordered_map<std::string, Value> data = {{"name", Value{"Mia"}}};
+  auto node = db_->create_node("MapUser", data).ValueOrDie();
+  auto props = node->get_schema()->get_field("props");
+  ASSERT_TRUE(node->update_fields(
+                      {FieldUpdate{props, Value{int32_t(42)}, UpdateType::SET,
+                                   std::vector<std::string>{"score"}}})
+                  .ok());
+
+  Query query = Query::from("m:MapUser").build();
+  auto result = db_->query(query);
+  ASSERT_OK(result);
+
+  auto table = result.ValueOrDie()->table();
+  ASSERT_NE(table, nullptr);
+  ASSERT_EQ(table->num_rows(), 1);
+
+  auto props_column = table->GetColumnByName("m.props");
+  ASSERT_NE(props_column, nullptr);
+  ASSERT_EQ(props_column->type()->id(), arrow::Type::MAP);
+  ASSERT_EQ(props_column->num_chunks(), 1);
+
+  auto map_array =
+      std::static_pointer_cast<arrow::MapArray>(props_column->chunk(0));
+  ASSERT_FALSE(map_array->IsNull(0));
+  EXPECT_EQ(map_array->value_length(0), 1);
+}
+
+TEST_F(WhereExpressionTest, QueryFiltersByMapProperty) {
+  auto name_field = arrow::field("name", arrow::utf8());
+  auto map_value_type = map_union_value_type();
+  auto props_field =
+      arrow::field("props", arrow::map(arrow::utf8(), map_value_type));
+  auto map_schema = arrow::schema({name_field, props_field});
+  db_->get_schema_registry()->create("MapUserFilter", map_schema).ValueOrDie();
+
+  std::vector<std::string> score_key = {"score"};
+  auto props = db_->get_schema_registry()
+                   ->get("MapUserFilter")
+                   .ValueOrDie()
+                   ->get_field("props");
+
+  auto anna =
+      db_->create_node("MapUserFilter", {{"name", Value{"Anna"}}}).ValueOrDie();
+  auto ben =
+      db_->create_node("MapUserFilter", {{"name", Value{"Ben"}}}).ValueOrDie();
+  ASSERT_OK(anna->update_fields(
+      {FieldUpdate{props, Value{int32_t(42)}, UpdateType::SET, score_key}}));
+  ASSERT_OK(ben->update_fields(
+      {FieldUpdate{props, Value{int32_t(7)}, UpdateType::SET, score_key}}));
+
+  Query query = Query::from("m:MapUserFilter")
+                    .where("m.props.score", CompareOp::Eq, Value(int32_t(42)))
+                    .build();
+  auto result = db_->query(query);
+  ASSERT_OK(result);
+
+  auto table = result.ValueOrDie()->table();
+  ASSERT_NE(table, nullptr);
+  ASSERT_EQ(table->num_rows(), 1);
+  auto names = get_column_values<std::string>(table, "m.name").ValueOrDie();
+  ASSERT_EQ(names.size(), 1);
+  EXPECT_EQ(names[0], "Anna");
 }
 
 }  // namespace tundradb

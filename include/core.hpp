@@ -12,6 +12,7 @@
 #include "arrow_utils.hpp"
 #include "config.hpp"
 #include "edge_store.hpp"
+#include "field_update.hpp"
 #include "logger.hpp"
 #include "metadata.hpp"
 #include "node.hpp"
@@ -139,8 +140,7 @@ class Database {
    */
   arrow::Result<bool> update_node_fields(
       const std::string &schema_name, const int64_t id,
-      const std::vector<std::pair<std::shared_ptr<Field>, Value>>
-          &field_updates,
+      const std::vector<FieldUpdate> &field_updates,
       const UpdateType update_type) {
     return shard_manager_->update_node_fields(schema_name, id, field_updates,
                                               update_type);
@@ -155,10 +155,26 @@ class Database {
     return shard_manager_->remove_node(schema_name, node_id);
   }
 
+  arrow::Result<bool> register_edge_schema(
+      const std::string &edge_type,
+      const std::vector<std::shared_ptr<Field>> &fields) {
+    return edge_store_->register_edge_schema(edge_type, fields);
+  }
+
   arrow::Result<bool> connect(const int64_t source_id, const std::string &type,
                               const int64_t target_id) {
     const auto edge =
         edge_store_->create_edge(source_id, type, target_id).ValueOrDie();
+    ARROW_RETURN_NOT_OK(edge_store_->add(edge));
+    return true;
+  }
+
+  arrow::Result<bool> connect(
+      const int64_t source_id, const std::string &type, const int64_t target_id,
+      std::unordered_map<std::string, Value> properties) {
+    ARROW_ASSIGN_OR_RAISE(const auto edge,
+                          edge_store_->create_edge(source_id, type, target_id,
+                                                   std::move(properties)));
     ARROW_RETURN_NOT_OK(edge_store_->add(edge));
     return true;
   }
@@ -269,11 +285,10 @@ class Database {
    * Apply field updates to every node whose ID appears in @p id_column.
    * One call to update_node_fields() per unique node ID (1 version each).
    */
-  void apply_updates(
-      const std::string &schema_name,
-      const std::shared_ptr<arrow::ChunkedArray> &id_column,
-      const std::vector<std::pair<std::shared_ptr<Field>, Value>> &fields,
-      UpdateType update_type, UpdateResult &result);
+  void apply_updates(const std::string &schema_name,
+                     const std::shared_ptr<arrow::ChunkedArray> &id_column,
+                     const std::vector<FieldUpdate> &fields,
+                     UpdateType update_type, UpdateResult &result);
 
   /**
    * Build an alias->schema mapping from a Query's FROM + TRAVERSE clauses.

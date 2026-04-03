@@ -30,112 +30,121 @@ jobs:
     name: ${{ matrix.name }}
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Install dependencies
-      run: |
-        export DEBIAN_FRONTEND=noninteractive
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            git \
+            pkg-config \
+            python3 \
+            python3-pip \
+            wget \
+            curl \
+            lsb-release \
+            gnupg \
+            ca-certificates \
+            cmake \
+            uuid-dev \
+            libboost-all-dev \
+            libtbb-dev \
+            libgtest-dev \
+            libbenchmark-dev \
+            libcds-dev
+          
+          # Install LLVM 20 from the official LLVM apt repository.
+          # The default Ubuntu 24.04 llvm package is v18, which is missing
+          # .contains() / .at() on StringMap and SmallDenseMap.
+          wget https://apt.llvm.org/llvm.sh -O /tmp/llvm.sh
+          chmod +x /tmp/llvm.sh
+          sudo /tmp/llvm.sh 20
+          sudo apt-get install -y llvm-20-dev
+          rm /tmp/llvm.sh
+          
+          # Install GCC 13 (available in Ubuntu 24.04 default repos, no PPA needed)
+          sudo apt-get install -y gcc-13 g++-13
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 13 --slave /usr/bin/g++ g++ /usr/bin/g++-13
+          
+          # Add Arrow repository and install Arrow
+          sudo apt install -y -V ca-certificates lsb-release wget
+          wget https://packages.apache.org/artifactory/arrow/$(lsb_release --id --short | tr 'A-Z' 'a-z')/apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb
+          sudo apt install -y -V ./apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb
+          sudo apt update
+          sudo apt install -y -V libarrow-dev
+          sudo apt install -y -V libarrow-dataset-dev
+          sudo apt install -y -V libparquet-dev
+          sudo apt install -y -V libarrow-compute-dev
+          
+          # Install latest CMake
+          wget https://github.com/Kitware/CMake/releases/download/v3.30.0/cmake-3.30.0-linux-x86_64.sh -q -O /tmp/cmake-install.sh
+          chmod u+x /tmp/cmake-install.sh
+          sudo mkdir -p /opt/cmake
+          sudo /tmp/cmake-install.sh --skip-license --prefix=/opt/cmake
+          sudo rm -f /usr/local/bin/ccmake /usr/local/bin/cmake /usr/local/bin/cmake-gui /usr/local/bin/cpack /usr/local/bin/ctest
+          sudo ln -s /opt/cmake/bin/* /usr/local/bin/
+          rm /tmp/cmake-install.sh
+          
+          # Install Java for ANTLR
+          sudo apt-get install -y openjdk-11-jdk
+          
+          # Install spdlog from source
+          cd /tmp
+          git clone https://github.com/gabime/spdlog.git
+          cd spdlog
+          mkdir build
+          cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DSPDLOG_BUILD_SHARED=ON
+          make -j$(nproc)
+          sudo make install
+          cd /
+          rm -rf /tmp/spdlog
+          
+          # Install ANTLR4 runtime from source
+          cd /tmp
+          git clone https://github.com/antlr/antlr4.git
+          cd antlr4/runtime/Cpp
+          mkdir build
+          cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DCMAKE_CXX_STANDARD=17
+          make -j$(nproc)
+          sudo make install
+          sudo ldconfig
+          sudo mkdir -p /usr/local/include/antlr4-runtime
+          sudo cp -r /tmp/antlr4/runtime/Cpp/runtime/src/* /usr/local/include/antlr4-runtime/ 2>/dev/null || true
+          cd /
+          rm -rf /tmp/antlr4
 
-        sudo apt-get update
-        sudo apt-get install -y \
-          build-essential \
-          git \
-          pkg-config \
-          python3 \
-          python3-pip \
-          wget \
-          curl \
-          lsb-release \
-          gnupg \
-          ca-certificates \
-          cmake \
-          uuid-dev \
-          libboost-all-dev \
-          libtbb-dev \
-          libgtest-dev \
-          libbenchmark-dev \
-          libcds-dev \
-          llvm clang lldb
+      - name: Configure CMake
+        run: >
+          cmake -B ${{github.workspace}}/build
+          -DCMAKE_BUILD_TYPE=${{matrix.build_type}}
+          -DCMAKE_CXX_STANDARD=23
+          -DCMAKE_CXX_STANDARD_REQUIRED=ON
+          -DCMAKE_CXX_EXTENSIONS=OFF
+          -DCMAKE_PREFIX_PATH=/usr/lib/llvm-20
+          -DENABLE_SANITIZERS=${{matrix.sanitizer}}
+          ${{ matrix.sanitizer_type != '' && format('-DSANITIZER_TYPE={0}', matrix.sanitizer_type) || '' }}
 
-        # Install GCC 13 (available in Ubuntu 24.04 default repos, no PPA needed)
-        sudo apt-get install -y gcc-13 g++-13
-        sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 13 --slave /usr/bin/g++ g++ /usr/bin/g++-13
+      - name: Build
+        run: cmake --build ${{github.workspace}}/build --config ${{matrix.build_type}} -j$(nproc)
 
-        # Add Arrow repository and install Arrow
-        sudo apt install -y -V ca-certificates lsb-release wget
-        wget https://packages.apache.org/artifactory/arrow/$(lsb_release --id --short | tr 'A-Z' 'a-z')/apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb
-        sudo apt install -y -V ./apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb
-        sudo apt update
-        sudo apt install -y -V libarrow-dev
-        sudo apt install -y -V libarrow-dataset-dev
-        sudo apt install -y -V libparquet-dev
-        sudo apt install -y -V libarrow-compute-dev
+      - name: Test
+        working-directory: ${{github.workspace}}/build
+        run: ctest -C ${{matrix.build_type}} --output-on-failure
 
-        # Install latest CMake
-        wget https://github.com/Kitware/CMake/releases/download/v3.30.0/cmake-3.30.0-linux-x86_64.sh -q -O /tmp/cmake-install.sh
-        chmod u+x /tmp/cmake-install.sh
-        sudo mkdir -p /opt/cmake
-        sudo /tmp/cmake-install.sh --skip-license --prefix=/opt/cmake
-        sudo rm -f /usr/local/bin/ccmake /usr/local/bin/cmake /usr/local/bin/cmake-gui /usr/local/bin/cpack /usr/local/bin/ctest
-        sudo ln -s /opt/cmake/bin/* /usr/local/bin/
-        rm /tmp/cmake-install.sh
-
-        # Install Java for ANTLR
-        sudo apt-get install -y openjdk-11-jdk
-
-        # Install spdlog from source
-        cd /tmp
-        git clone https://github.com/gabime/spdlog.git
-        cd spdlog
-        mkdir build
-        cd build
-        cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DSPDLOG_BUILD_SHARED=ON
-        make -j$(nproc)
-        sudo make install
-        cd /
-        rm -rf /tmp/spdlog
-
-        # Install ANTLR4 runtime from source
-        cd /tmp
-        git clone https://github.com/antlr/antlr4.git
-        cd antlr4/runtime/Cpp
-        mkdir build
-        cd build
-        cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DCMAKE_CXX_STANDARD=17
-        make -j$(nproc)
-        sudo make install
-        sudo ldconfig
-        sudo mkdir -p /usr/local/include/antlr4-runtime
-        sudo cp -r /tmp/antlr4/runtime/Cpp/runtime/src/* /usr/local/include/antlr4-runtime/ 2>/dev/null || true
-        cd /
-        rm -rf /tmp/antlr4
-
-    - name: Configure CMake
-      run: >
-        cmake -B ${{github.workspace}}/build
-        -DCMAKE_BUILD_TYPE=${{matrix.build_type}}
-        -DCMAKE_CXX_STANDARD=23
-        -DCMAKE_CXX_STANDARD_REQUIRED=ON
-        -DCMAKE_CXX_EXTENSIONS=OFF
-        -DENABLE_SANITIZERS=${{matrix.sanitizer}}
-        ${{ matrix.sanitizer_type != '' && format('-DSANITIZER_TYPE={0}', matrix.sanitizer_type) || '' }}
-
-    - name: Build
-      run: cmake --build ${{github.workspace}}/build --config ${{matrix.build_type}} -j$(nproc)
-
-    - name: Test
-      working-directory: ${{github.workspace}}/build
-      run: ctest -C ${{matrix.build_type}} --output-on-failure
-
-    - name: Print Test Log
-      if: always()
-      working-directory: ${{github.workspace}}/build
-      shell: bash
-      run: |
-        if [ -f Testing/Temporary/LastTest.log ]; then
-          echo "=== Test Log Contents ==="
-          cat Testing/Temporary/LastTest.log
-          echo "=== End of Test Log ==="
-        else
-          echo "No test log found"
-        fi
+      - name: Print Test Log
+        if: always()
+        working-directory: ${{github.workspace}}/build
+        shell: bash
+        run: |
+          if [ -f Testing/Temporary/LastTest.log ]; then
+            echo "=== Test Log Contents ==="
+            cat Testing/Temporary/LastTest.log
+            echo "=== End of Test Log ==="
+          else
+            echo "No test log found"
+          fi
 
