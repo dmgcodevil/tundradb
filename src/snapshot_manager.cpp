@@ -26,141 +26,16 @@ SnapshotManager::SnapshotManager(
 arrow::Result<bool> SnapshotManager::initialize() {
   log_info("Initializing snapshot manager...");
   try {
-    ARROW_ASSIGN_OR_RAISE(this->metadata_,
-                          metadata_manager_->load_current_metadata());
-    log_info("Metadata has been loaded.");
-    log_info("Metadata current snapshot index=" +
-             std::to_string(this->metadata_.current_snapshot_index));
-    log_info("Metadata current snapshots size=" +
-             std::to_string(this->metadata_.snapshots.size()));
-
-    // Set current snapshot if it exists
-    if (this->metadata_.get_current_snapshot() != nullptr) {
-      log_info("Current snapshot id = " +
-               std::to_string(this->metadata_.get_current_snapshot()->id));
-      log_info("Initializing schemas");
-      for (const auto &schema_metadata : this->metadata_.schemas) {
-        log_info("Loading schema " + schema_metadata.name);
-        auto arrow_schema_result = metadata_to_arrow_schema(schema_metadata);
-        if (!arrow_schema_result.ok()) {
-          log_error("Failed to load schema: " +
-                    arrow_schema_result.status().ToString());
-        }
-        const auto &arrow_shema = arrow_schema_result.ValueOrDie();
-        auto add_schema_result =
-            schema_registry_->add_arrow(schema_metadata.name, arrow_shema);
-        if (!add_schema_result.ok()) {
-          log_error("Failed to add schema to registry: " +
-                    add_schema_result.status().ToString());
-          return arrow_schema_result.status();
-        }
-      }
-      log_info("Load the manifest and initialize shards");
-      auto manifest_result = read_json_file<Manifest>(
-          this->metadata_.get_current_snapshot()->manifest_location);
-      if (!manifest_result.ok()) {
-        log_error("Failed to load manifest: " +
-                  manifest_result.status().ToString());
-        return manifest_result.status();
-      }
-      this->manifest_ =
-          std::make_shared<Manifest>(manifest_result.ValueOrDie());
-      log_info("Manifest has been loaded");
-      log_info(this->manifest_->toString());
-
-      edge_store_->set_id_seq(manifest_->edge_id_seq);
-      node_manager_->set_all_id_counters(manifest_->node_id_seq_per_schema);
-      shard_manager_->set_id_counter(manifest_->shard_id_seq);
-
-      // Restore index counters for each schema
-      std::unordered_map<std::string, int64_t> max_index_per_schema;
-      for (const auto &shard : this->manifest_->shards) {
-        auto &max_index = max_index_per_schema[shard.schema_name];
-        max_index =
-            std::max(max_index,
-                     shard.index + 1);  // Add 1 so next index is after highest
-      }
-
-      // Set the index counters based on max values
-      for (const auto &[schema_name, max_index] : max_index_per_schema) {
-        shard_manager_->set_index_counter(schema_name, max_index);
-        log_debug("Set shard index counter for schema '" + schema_name +
-                  "' to " + std::to_string(max_index));
-      }
-
-      std::unordered_map<std::string, std::vector<ShardMetadata>>
-          grouped_shards;
-      for (auto &shard : manifest_result.ValueOrDie().shards) {
-        grouped_shards[shard.schema_name].push_back(shard);
-      }
-
-      // Sort shards by index for each schema to ensure consistent ordering
-      // during restoration
-      for (auto &v : grouped_shards | std::views::values) {
-        std::ranges::sort(v,
-                          [](const ShardMetadata &a, const ShardMetadata &b) {
-                            return a.index < b.index;
-                          });
-      }
-
-      log_info("Grouped shards: " + std::to_string(grouped_shards.size()));
-      for (auto &[schema_name, shards] : grouped_shards) {
-        log_info("Loading shard '{}', size={}", schema_name, shards.size());
-        for (auto &shard_metadata : shards) {
-          auto shard_result = this->storage_->read_shard(shard_metadata);
-          if (!shard_result.ok()) {
-            log_error("Failed to load shard: " +
-                      shard_result.status().ToString());
-            return shard_result.status();
-          }
-
-          const auto &shard = shard_result.ValueOrDie();
-          log_debug("Adding shard from snapshot, shard_metadata:  " +
-                    shard_metadata.toString());
-          log_debug("shard id = " + std::to_string(shard->id) +
-                    ", min_id: " + std::to_string(shard->min_id) +
-                    ", max_id: " + std::to_string(shard->max_id) +
-                    ", size: " + std::to_string(shard->size()));
-
-          shard->set_updated(false);
-
-          if (auto add_result = this->shard_manager_->add_shard(shard);
-              !add_result.ok()) {
-            log_error("Failed to add shard: " + add_result.status().ToString());
-            return add_result.status();
-          }
-        }
-      }
-      // Restore edge schemas from metadata
-      log_info("Loading edge schemas");
-      for (const auto &es_meta : this->metadata_.edge_schemas) {
-        if (!edge_store_->has_edge_schema(es_meta.name)) {
-          std::vector<std::shared_ptr<Field>> fields;
-          fields.reserve(es_meta.fields.size());
-          for (const auto &fm : es_meta.fields) {
-            fields.push_back(from_metadata(fm));
-          }
-          auto reg_res =
-              edge_store_->register_edge_schema(es_meta.name, fields);
-          if (!reg_res.ok()) {
-            log_warn("Failed to register edge schema for '" + es_meta.name +
-                     "': " + reg_res.status().ToString());
-          }
-        }
-      }
-
-      log_info("Load edges");
-      for (const auto &edge_metadata : this->manifest_->edges) {
-        storage_->read_edges(edge_metadata, edge_store_).ValueOrDie();
-      }
-      log_info("Edges have been loaded");
-      for (const auto &edge_type : edge_store_->get_edge_types()) {
-        log_debug("edges type '" + edge_type + "' size = " +
-                  std::to_string(edge_store_->get_count_by_type(edge_type)));
-      }
-    } else {
+    ARROW_RETURN_NOT_OK(restore_metadata());
+    if (metadata_.get_current_snapshot() == nullptr) {
       log_info("No current snapshot exists");
+      return true;
     }
+    ARROW_RETURN_NOT_OK(restore_schemas());
+    ARROW_RETURN_NOT_OK(restore_manifest());
+    ARROW_RETURN_NOT_OK(restore_shards());
+    ARROW_RETURN_NOT_OK(restore_edge_schemas());
+    ARROW_RETURN_NOT_OK(restore_edges());
     return true;
   } catch (const std::exception &e) {
     log_error("Failed to initialize snapshot manager: " +
@@ -168,6 +43,128 @@ arrow::Result<bool> SnapshotManager::initialize() {
     return arrow::Status::IOError("Failed to initialize snapshot manager: ",
                                   e.what());
   }
+}
+
+// ---------------------------------------------------------------------------
+// Initialization phases
+// ---------------------------------------------------------------------------
+
+arrow::Status SnapshotManager::restore_metadata() {
+  ARROW_ASSIGN_OR_RAISE(metadata_, metadata_manager_->load_current_metadata());
+  log_info("Metadata has been loaded.");
+  log_info("Metadata current snapshot index=" +
+           std::to_string(metadata_.current_snapshot_index));
+  log_info("Metadata current snapshots size=" +
+           std::to_string(metadata_.snapshots.size()));
+  if (metadata_.get_current_snapshot() != nullptr) {
+    log_info("Current snapshot id = " +
+             std::to_string(metadata_.get_current_snapshot()->id));
+  }
+  return arrow::Status::OK();
+}
+
+arrow::Status SnapshotManager::restore_schemas() {
+  log_info("Restoring schemas");
+  for (const auto &schema_metadata : metadata_.schemas) {
+    log_info("Loading schema " + schema_metadata.name);
+    ARROW_ASSIGN_OR_RAISE(auto arrow_schema,
+                          metadata_to_arrow_schema(schema_metadata));
+    ARROW_RETURN_NOT_OK(
+        schema_registry_->add_arrow(schema_metadata.name, arrow_schema));
+  }
+  return arrow::Status::OK();
+}
+
+arrow::Status SnapshotManager::restore_manifest() {
+  log_info("Restoring manifest and counters");
+  ARROW_ASSIGN_OR_RAISE(
+      auto manifest, read_json_file<Manifest>(
+                         metadata_.get_current_snapshot()->manifest_location));
+  manifest_ = std::make_shared<Manifest>(std::move(manifest));
+  log_info("Manifest has been loaded");
+  log_info(manifest_->toString());
+
+  edge_store_->set_id_seq(manifest_->edge_id_seq);
+  node_manager_->set_all_id_counters(manifest_->node_id_seq_per_schema);
+  shard_manager_->set_id_counter(manifest_->shard_id_seq);
+
+  std::unordered_map<std::string, int64_t> max_index_per_schema;
+  for (const auto &shard : manifest_->shards) {
+    auto &max_index = max_index_per_schema[shard.schema_name];
+    max_index = std::max(max_index, shard.index + 1);
+  }
+  for (const auto &[schema_name, max_index] : max_index_per_schema) {
+    shard_manager_->set_index_counter(schema_name, max_index);
+    log_debug("Set shard index counter for schema '" + schema_name + "' to " +
+              std::to_string(max_index));
+  }
+  return arrow::Status::OK();
+}
+
+arrow::Status SnapshotManager::restore_shards() {
+  log_info("Restoring shards");
+
+  std::unordered_map<std::string, std::vector<ShardMetadata>> grouped_shards;
+  for (const auto &shard : manifest_->shards) {
+    grouped_shards[shard.schema_name].push_back(shard);
+  }
+  for (auto &v : grouped_shards | std::views::values) {
+    std::ranges::sort(v, [](const ShardMetadata &a, const ShardMetadata &b) {
+      return a.index < b.index;
+    });
+  }
+
+  log_info("Grouped shards: " + std::to_string(grouped_shards.size()));
+  for (auto &[schema_name, shards] : grouped_shards) {
+    log_info("Restoring shard '{}', size={}", schema_name, shards.size());
+    for (auto &shard_metadata : shards) {
+      ARROW_ASSIGN_OR_RAISE(auto shard, storage_->read_shard(shard_metadata));
+      log_debug("Adding shard from snapshot, shard_metadata:  " +
+                shard_metadata.toString());
+      log_debug("shard id = " + std::to_string(shard->id) +
+                ", min_id: " + std::to_string(shard->min_id) +
+                ", max_id: " + std::to_string(shard->max_id) +
+                ", size: " + std::to_string(shard->size()));
+      shard->set_updated(false);
+      ARROW_RETURN_NOT_OK(shard_manager_->add_shard(shard));
+    }
+  }
+  return arrow::Status::OK();
+}
+
+arrow::Status SnapshotManager::restore_edge_schemas() {
+  log_info("Restoring edge schemas");
+  for (const auto &es_meta : metadata_.edge_schemas) {
+    if (edge_store_->has_edge_schema(es_meta.name)) {
+      continue;
+    }
+    std::vector<std::shared_ptr<Field>> fields;
+    fields.reserve(es_meta.fields.size());
+    for (const auto &fm : es_meta.fields) {
+      fields.push_back(from_metadata(fm));
+    }
+    auto reg_res = edge_store_->register_edge_schema(es_meta.name, fields);
+    if (!reg_res.ok()) {
+      log_warn("Failed to register edge schema for '" + es_meta.name +
+               "': " + reg_res.status().ToString());
+    }
+  }
+  return arrow::Status::OK();
+}
+
+arrow::Status SnapshotManager::restore_edges() {
+  log_info("Restoring edges");
+  for (const auto &edge_metadata : manifest_->edges) {
+    ARROW_ASSIGN_OR_RAISE(auto ok,
+                          storage_->read_edges(edge_metadata, edge_store_));
+    (void)ok;
+  }
+  log_info("Edges have been loaded");
+  for (const auto &edge_type : edge_store_->get_edge_types()) {
+    log_debug("edges type '" + edge_type + "' size = " +
+              std::to_string(edge_store_->get_count_by_type(edge_type)));
+  }
+  return arrow::Status::OK();
 }
 
 arrow::Result<Snapshot> SnapshotManager::commit() {
