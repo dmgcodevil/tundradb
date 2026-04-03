@@ -119,15 +119,19 @@ TEST_F(ArrayArenaTest, StatsAfterAllocations) {
 }
 
 TEST_F(ArrayArenaTest, ResetClearsState) {
-  auto ref = arena_->allocate(ValueType::INT32, 4).ValueOrDie();
-  EXPECT_GT(arena_->get_used_bytes(), 0u);
+  {
+    auto ref = arena_->allocate(ValueType::INT32, 4).ValueOrDie();
+    EXPECT_GT(arena_->get_used_bytes(), 0u);
+  }
   arena_->reset();
   EXPECT_EQ(arena_->get_used_bytes(), 0u);
 }
 
 TEST_F(ArrayArenaTest, ClearDeallocatesMemory) {
-  auto ref = arena_->allocate(ValueType::INT32, 4).ValueOrDie();
-  EXPECT_GT(arena_->get_total_allocated(), 0u);
+  {
+    auto ref = arena_->allocate(ValueType::INT32, 4).ValueOrDie();
+    EXPECT_GT(arena_->get_total_allocated(), 0u);
+  }
   arena_->clear();
   EXPECT_EQ(arena_->get_used_bytes(), 0u);
 }

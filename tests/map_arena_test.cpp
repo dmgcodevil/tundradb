@@ -488,15 +488,19 @@ TEST_F(MapArenaTest, StatsAfterAllocations) {
 }
 
 TEST_F(MapArenaTest, ResetClearsState) {
-  auto ref = map_arena_->allocate().ValueOrDie();
-  EXPECT_GT(map_arena_->get_used_bytes(), 0u);
+  {
+    auto ref = map_arena_->allocate().ValueOrDie();
+    EXPECT_GT(map_arena_->get_used_bytes(), 0u);
+  }
   map_arena_->reset();
   EXPECT_EQ(map_arena_->get_used_bytes(), 0u);
 }
 
 TEST_F(MapArenaTest, ClearDeallocatesMemory) {
-  auto ref = map_arena_->allocate().ValueOrDie();
-  EXPECT_GT(map_arena_->get_total_allocated(), 0u);
+  {
+    auto ref = map_arena_->allocate().ValueOrDie();
+    EXPECT_GT(map_arena_->get_total_allocated(), 0u);
+  }
   map_arena_->clear();
   EXPECT_EQ(map_arena_->get_used_bytes(), 0u);
 }

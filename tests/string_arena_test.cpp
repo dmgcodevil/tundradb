@@ -92,7 +92,9 @@ TEST_F(StringPoolTest, ResetClearsEverything) {
 }
 
 TEST_F(StringPoolTest, ClearDeallocatesMemory) {
-  auto ref = pool_->store_string(std::string("data"), 100).ValueOrDie();
+  {
+    auto ref = pool_->store_string(std::string("data"), 100).ValueOrDie();
+  }
   pool_->clear();
   EXPECT_EQ(pool_->get_used_bytes(), 0u);
 }
