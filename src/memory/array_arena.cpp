@@ -20,8 +20,8 @@ arrow::Result<ArrayRef> ArrayArena::allocate(ValueType elem_type,
   void* raw = arena_->allocate(alloc_size);
   if (!raw) {
     return arrow::Status::OutOfMemory(
-        "ArrayArena::allocate: arena allocation failed (requested ",
-        alloc_size, " bytes)");
+        "ArrayArena::allocate: arena allocation failed (requested ", alloc_size,
+        " bytes)");
   }
 
   init_header(raw, capacity);
@@ -108,8 +108,7 @@ arrow::Status ArrayArena::append(ArrayRef& ref, const void* element) {
 arrow::Result<ArrayRef> ArrayArena::copy(const ArrayRef& src,
                                          uint32_t extra_capacity) {
   if (src.is_null()) {
-    return arrow::Status::Invalid(
-        "ArrayArena::copy: source ArrayRef is null");
+    return arrow::Status::Invalid("ArrayArena::copy: source ArrayRef is null");
   }
 
   const auto* header = get_header_const(src);
@@ -219,8 +218,7 @@ void ArrayArena::assign_element(char* dst, const void* src,
     *reinterpret_cast<StringRef*>(dst) =
         *reinterpret_cast<const StringRef*>(src);
   } else if (is_array_type(elem_type)) {
-    *reinterpret_cast<ArrayRef*>(dst) =
-        *reinterpret_cast<const ArrayRef*>(src);
+    *reinterpret_cast<ArrayRef*>(dst) = *reinterpret_cast<const ArrayRef*>(src);
   } else {
     std::memcpy(dst, src, get_type_size(elem_type));
   }

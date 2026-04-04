@@ -313,8 +313,7 @@ arrow::Result<Value> NodeArena::get_value_at_version(
     return layout->get_value_from_ptr(field_ptr, *field_layout);
   }
 
-  return layout->get_value(static_cast<const char*>(handle.ptr),
-                           *field_layout);
+  return layout->get_value(static_cast<const char*>(handle.ptr), *field_layout);
 }
 
 // ===========================================================================
@@ -336,8 +335,8 @@ arrow::Result<std::vector<IndexedFieldUpdate>> NodeArena::resolve_field_indices(
       return arrow::Status::Invalid("Invalid field in apply_updates: ",
                                     upd.field->name());
     }
-    result.push_back({static_cast<uint16_t>(fl->index), upd.value, upd.op,
-                      upd.nested_path});
+    result.push_back(
+        {static_cast<uint16_t>(fl->index), upd.value, upd.op, upd.nested_path});
   }
   return result;
 }
@@ -393,8 +392,8 @@ arrow::Status NodeArena::materialize_versioned_schema_fields(
 
   char* batch_memory = nullptr;
   if (total_size > 0) {
-    batch_memory = static_cast<char*>(
-        version_arena_->allocate(total_size, max_alignment));
+    batch_memory =
+        static_cast<char*>(version_arena_->allocate(total_size, max_alignment));
     if (!batch_memory) {
       return arrow::Status::OutOfMemory(
           "Failed to batch allocate field storage");
@@ -550,15 +549,14 @@ arrow::Status NodeArena::set_field_value_internal(
 
 arrow::Result<Value> NodeArena::materialise_map_value(const Value& value) {
   if (value.type() == ValueType::STRING && value.holds_std_string()) {
-    ARROW_ASSIGN_OR_RAISE(
-        StringRef sr, string_arena_->store_string_auto(value.as_string()));
+    ARROW_ASSIGN_OR_RAISE(StringRef sr,
+                          string_arena_->store_string_auto(value.as_string()));
     return Value{sr, ValueType::STRING};
   }
   return value;
 }
 
-arrow::Status NodeArena::set_nested_map_key(MapRef& ref,
-                                            const std::string& key,
+arrow::Status NodeArena::set_nested_map_key(MapRef& ref, const std::string& key,
                                             const Value& value) {
   if (ref.is_null()) {
     ARROW_ASSIGN_OR_RAISE(ref, map_arena_->allocate());
@@ -627,8 +625,7 @@ arrow::Status NodeArena::set_nested_map_key(MapRef& ref,
 
   auto status = MapArena::set_entry(ref, key_ref, vtype, vptr);
   if (status.IsCapacityError()) {
-    ARROW_ASSIGN_OR_RAISE(MapRef grown,
-                          map_arena_->copy(ref, ref.capacity()));
+    ARROW_ASSIGN_OR_RAISE(MapRef grown, map_arena_->copy(ref, ref.capacity()));
     map_arena_->mark_for_deletion(ref);
     ref = std::move(grown);
     return MapArena::set_entry(ref, key_ref, vtype, vptr);
@@ -703,8 +700,8 @@ arrow::Result<Value> NodeArena::apply_nested_path_update_versioned(
     if (found && ptr) {
       current = *reinterpret_cast<const MapRef*>(ptr);
     } else if (!found) {
-      const char* base_ptr = layout->get_value_ptr(
-          static_cast<const char*>(handle.ptr), fl.index);
+      const char* base_ptr =
+          layout->get_value_ptr(static_cast<const char*>(handle.ptr), fl.index);
       if (base_ptr) {
         current = *reinterpret_cast<const MapRef*>(base_ptr);
       }
@@ -764,8 +761,7 @@ arrow::Status NodeArena::append_to_array_field(
 
     if (!layout->set_field_value(base, *field_layout,
                                  Value{std::move(new_ref)})) {
-      return arrow::Status::Invalid(
-          "Failed to write array field after APPEND");
+      return arrow::Status::Invalid("Failed to write array field after APPEND");
     }
     return arrow::Status::OK();
   }
@@ -776,8 +772,7 @@ arrow::Status NodeArena::append_to_array_field(
                           store_raw_array(field_layout->type_desc, elems));
     if (!layout->set_field_value(base, *field_layout,
                                  Value{std::move(new_ref)})) {
-      return arrow::Status::Invalid(
-          "Failed to write array field after APPEND");
+      return arrow::Status::Invalid("Failed to write array field after APPEND");
     }
     return arrow::Status::OK();
   }
@@ -823,8 +818,8 @@ arrow::Status NodeArena::append_single_element(ArrayRef& ref,
       return array_arena_->append(ref, &v);
     }
     case ValueType::STRING: {
-      ARROW_ASSIGN_OR_RAISE(
-          StringRef sr, string_arena_->store_string_auto(elem.as_string()));
+      ARROW_ASSIGN_OR_RAISE(StringRef sr,
+                            string_arena_->store_string_auto(elem.as_string()));
       return array_arena_->append(ref, &sr);
     }
     default:
@@ -919,9 +914,8 @@ arrow::Result<ArrayRef> NodeArena::store_raw_array(
     const Value& elem = elements[i];
 
     if (is_string_type(elem_type) && elem.holds_std_string()) {
-      ARROW_ASSIGN_OR_RAISE(
-          StringRef str_ref,
-          string_arena_->store_string_auto(elem.as_string()));
+      ARROW_ASSIGN_OR_RAISE(StringRef str_ref,
+                            string_arena_->store_string_auto(elem.as_string()));
       *reinterpret_cast<StringRef*>(dest) = std::move(str_ref);
     } else {
       write_value_to_memory(dest, elem_type, elem);
@@ -935,8 +929,7 @@ arrow::Result<ArrayRef> NodeArena::store_raw_array(
 arrow::Result<MapRef> NodeArena::store_raw_map(
     const std::map<std::string, Value>& entries) {
   ARROW_ASSIGN_OR_RAISE(
-      MapRef ref,
-      map_arena_->allocate(static_cast<uint32_t>(entries.size())));
+      MapRef ref, map_arena_->allocate(static_cast<uint32_t>(entries.size())));
   for (const auto& [key, val] : entries) {
     ARROW_RETURN_NOT_OK(set_nested_map_key(ref, key, val));
   }

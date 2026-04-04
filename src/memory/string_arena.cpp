@@ -120,9 +120,8 @@ StringArena::StringArena() {
 arrow::Result<StringRef> StringArena::store_string(const std::string& str,
                                                    uint32_t pool_id) {
   if (pool_id >= pools_.size()) {
-    return arrow::Status::Invalid(
-        "StringArena::store_string: invalid pool_id ", pool_id,
-        " (max: ", pools_.size() - 1, ")");
+    return arrow::Status::Invalid("StringArena::store_string: invalid pool_id ",
+                                  pool_id, " (max: ", pools_.size() - 1, ")");
   }
   return pools_[pool_id]->store_string(str, pool_id);
 }

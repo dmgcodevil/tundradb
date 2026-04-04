@@ -78,7 +78,6 @@ double FreeListArena::get_fragmentation_ratio() const {
   return static_cast<double>(freed_bytes_) / total_allocated_;
 }
 
-
 void FreeListArena::allocate_new_chunk(size_t size) {
   auto new_chunk = std::make_unique<char[]>(size);
   current_chunk_ = new_chunk.get();
@@ -178,8 +177,7 @@ void* FreeListArena::find_free_block(size_t size) {
         free_blocks_by_size_.erase(it);
       }
 
-      if (header->size >
-          size + BlockHeader::HEADER_SIZE + min_fragment_size_) {
+      if (header->size > size + BlockHeader::HEADER_SIZE + min_fragment_size_) {
         split_block(header, size);
       }
 
@@ -192,11 +190,10 @@ void* FreeListArena::find_free_block(size_t size) {
 }
 
 void FreeListArena::split_block(BlockHeader* header, size_t needed_size) {
-  size_t remaining_size =
-      header->size - needed_size - BlockHeader::HEADER_SIZE;
+  size_t remaining_size = header->size - needed_size - BlockHeader::HEADER_SIZE;
 
-  char* new_block_start = reinterpret_cast<char*>(header) +
-                          BlockHeader::HEADER_SIZE + needed_size;
+  char* new_block_start =
+      reinterpret_cast<char*>(header) + BlockHeader::HEADER_SIZE + needed_size;
   BlockHeader* new_header = reinterpret_cast<BlockHeader*>(new_block_start);
 
   new_header->size = remaining_size;
@@ -204,8 +201,7 @@ void FreeListArena::split_block(BlockHeader* header, size_t needed_size) {
 
   header->size = needed_size;
 
-  add_to_free_list(new_block_start + BlockHeader::HEADER_SIZE,
-                   remaining_size);
+  add_to_free_list(new_block_start + BlockHeader::HEADER_SIZE, remaining_size);
 }
 
 void FreeListArena::add_to_free_list(void* ptr, size_t size) {
@@ -240,8 +236,7 @@ BlockHeader* FreeListArena::find_next_block(BlockHeader* header) {
     }
   }
 
-  char* chunk_allocated_end =
-      chunk_start + chunk_allocated_sizes_[chunk_index];
+  char* chunk_allocated_end = chunk_start + chunk_allocated_sizes_[chunk_index];
 
   if (next_ptr + BlockHeader::HEADER_SIZE <= chunk_allocated_end) {
     return reinterpret_cast<BlockHeader*>(next_ptr);
