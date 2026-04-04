@@ -7,7 +7,7 @@
 
 #include "arrow/map_union_types.hpp"
 #include "../include/core.hpp"
-#include "../include/field_update.hpp"
+#include "core/field_update.hpp"
 #include "common/logger.hpp"
 #include "../include/metadata.hpp"
 #include "../include/query.hpp"

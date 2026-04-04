@@ -12,7 +12,7 @@
 #include <vector>
 
 #include "common/concurrency.hpp"
-#include "edge.hpp"
+#include "core/edge.hpp"
 #include "memory/node_arena.hpp"
 #include "schema/schema.hpp"
 #include "memory/schema_layout.hpp"

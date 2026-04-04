@@ -1,8 +1,8 @@
 #include "snapshot_manager.hpp"
 
-#include "edge.hpp"
+#include "core/edge.hpp"
 #include "common/logger.hpp"
-#include "node.hpp"
+#include "core/node.hpp"
 #include "shard.hpp"
 #include "storage.hpp"
 #include "common/utils.hpp"

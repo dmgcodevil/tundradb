@@ -13,9 +13,9 @@
 #include <vector>
 
 #include "common/constants.hpp"
-#include "edge.hpp"
+#include "core/edge.hpp"
 #include "common/logger.hpp"
-#include "node.hpp"
+#include "core/node.hpp"
 #include "query.hpp"
 #include "common/types.hpp"
 

@@ -18,7 +18,7 @@
 #include <utility>
 #include <vector>
 
-#include "node.hpp"
+#include "core/node.hpp"
 #include "schema/schema.hpp"
 #include "temporal_context.hpp"
 #include "common/types.hpp"

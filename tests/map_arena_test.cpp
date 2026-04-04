@@ -7,13 +7,13 @@
 
 #include "memory/array_arena.hpp"
 #include "common/clock.hpp"
-#include "../include/edge.hpp"
-#include "../include/node.hpp"
+#include "core/edge.hpp"
+#include "core/node.hpp"
 #include "memory/node_arena.hpp"
 #include "schema/schema.hpp"
 #include "memory/schema_layout.hpp"
 #include "common/types.hpp"
-#include "edge_store.hpp"
+#include "core/edge_store.hpp"
 
 using namespace tundradb;
 

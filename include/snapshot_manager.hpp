@@ -4,7 +4,7 @@
 
 #include <memory>
 
-#include "edge_store.hpp"
+#include "core/edge_store.hpp"
 #include "metadata.hpp"
 #include "schema/schema.hpp"
 

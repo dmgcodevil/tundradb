@@ -1,11 +1,11 @@
-#include "../include/node_view.hpp"
+#include "core/node_view.hpp"
 
 #include <gtest/gtest.h>
 
 #include <memory>
 #include <thread>
 
-#include "../include/node.hpp"
+#include "core/node.hpp"
 #include "memory/node_arena.hpp"
 #include "schema/schema.hpp"
 #include "memory/schema_layout.hpp"

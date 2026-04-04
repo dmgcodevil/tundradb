@@ -14,8 +14,8 @@
 #include <vector>
 
 #include "common/config.hpp"
-#include "field_update.hpp"
-#include "node.hpp"
+#include "core/field_update.hpp"
+#include "core/node.hpp"
 #include "schema/schema.hpp"
 
 namespace tundradb {

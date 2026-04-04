@@ -21,11 +21,11 @@
 
 #include "arrow/utils.hpp"
 #include "common/constants.hpp"
-#include "edge_store.hpp"
+#include "core/edge_store.hpp"
 #include "json.hpp"
 #include "common/logger.hpp"
 #include "metadata.hpp"
-#include "node.hpp"
+#include "core/node.hpp"
 #include "shard.hpp"
 #include "arrow/table_info.hpp"
 

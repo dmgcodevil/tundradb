@@ -15,7 +15,7 @@
 
 #include "arrow/map_union_types.hpp"
 #include "common/logger.hpp"
-#include "node.hpp"
+#include "core/node.hpp"
 #include "query.hpp"
 #include "schema/schema.hpp"
 

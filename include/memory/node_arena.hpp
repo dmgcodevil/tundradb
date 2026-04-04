@@ -13,7 +13,7 @@
 
 #include "memory/array_arena.hpp"
 #include "common/clock.hpp"
-#include "field_update.hpp"
+#include "core/field_update.hpp"
 #include "memory/free_list_arena.hpp"
 #include "memory/map_arena.hpp"
 #include "memory/mem_arena.hpp"
@@ -21,7 +21,7 @@
 #include "memory/schema_layout.hpp"
 #include "memory/string_arena.hpp"
 #include "common/types.hpp"
-#include "update_type.hpp"
+#include "core/update_type.hpp"
 
 namespace tundradb {
 
