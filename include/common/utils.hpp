@@ -15,7 +15,7 @@
 #include <string>
 #include <unordered_set>
 
-#include "arrow_utils.hpp"
+#include "arrow/utils.hpp"
 #include "common/constants.hpp"
 #include "common/logger.hpp"
 #include "node.hpp"

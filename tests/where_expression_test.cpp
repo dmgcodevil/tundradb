@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-#include "../include/arrow_map_union_types.hpp"
+#include "arrow/map_union_types.hpp"
 #include "../include/core.hpp"
 #include "../include/field_update.hpp"
 #include "common/logger.hpp"

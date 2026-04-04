@@ -1,4 +1,4 @@
-#include "arrow_utils.hpp"
+#include "arrow/utils.hpp"
 
 #include <arrow/compute/api.h>
 #include <arrow/dataset/dataset.h>
@@ -13,7 +13,7 @@
 #include <cstdint>
 #include <cstring>
 
-#include "arrow_map_union_types.hpp"
+#include "arrow/map_union_types.hpp"
 #include "common/logger.hpp"
 #include "node.hpp"
 #include "query.hpp"

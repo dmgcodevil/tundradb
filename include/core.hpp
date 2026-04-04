@@ -9,7 +9,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "arrow_utils.hpp"
+#include "arrow/utils.hpp"
 #include "common/config.hpp"
 #include "edge_store.hpp"
 #include "field_update.hpp"

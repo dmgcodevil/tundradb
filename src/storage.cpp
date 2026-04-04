@@ -19,7 +19,7 @@
 #include <utility>
 #include <vector>
 
-#include "arrow_utils.hpp"
+#include "arrow/utils.hpp"
 #include "common/constants.hpp"
 #include "edge_store.hpp"
 #include "json.hpp"
@@ -27,7 +27,7 @@
 #include "metadata.hpp"
 #include "node.hpp"
 #include "shard.hpp"
-#include "table_info.hpp"
+#include "arrow/table_info.hpp"
 
 namespace tundradb {
 

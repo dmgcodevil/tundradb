@@ -3,8 +3,8 @@
 #include <ranges>
 #include <unordered_set>
 
-#include "arrow_map_union_types.hpp"
-#include "arrow_utils.hpp"
+#include "arrow/map_union_types.hpp"
+#include "arrow/utils.hpp"
 #include "common/constants.hpp"
 #include "edge_store.hpp"
 #include "common/logger.hpp"

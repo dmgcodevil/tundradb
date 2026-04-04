@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-#include "../include/arrow_map_union_types.hpp"
+#include "arrow/map_union_types.hpp"
 #include "../include/core.hpp"
 #include "../include/query.hpp"
 #include "common/utils.hpp"

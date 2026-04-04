@@ -2,8 +2,8 @@
 
 #include <iostream>
 
-#include "arrow_map_union_types.hpp"
-#include "arrow_utils.hpp"
+#include "arrow/map_union_types.hpp"
+#include "arrow/utils.hpp"
 #include "metadata.hpp"
 
 namespace tundradb {

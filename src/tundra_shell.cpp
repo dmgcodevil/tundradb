@@ -26,7 +26,7 @@
 #include "TundraQLBaseVisitor.h"
 #include "TundraQLLexer.h"
 #include "TundraQLParser.h"
-#include "arrow_map_union_types.hpp"
+#include "arrow/map_union_types.hpp"
 #include "common/constants.hpp"
 #include "core.hpp"
 #include "linenoise.h"

@@ -232,7 +232,14 @@ include_directories(
 )
 
 # Core library
-add_library(core
+add_library(core)
+
+# Per-domain source directories
+add_subdirectory(src/common)
+add_subdirectory(src/arrow)
+
+# Sources not yet moved to domain folders
+target_sources(core PRIVATE
         src/core.cpp
         src/query.cpp
         src/query_execution.cpp
@@ -244,12 +251,8 @@ add_library(core
 
         src/snapshot_manager.cpp
         src/edge_store.cpp
-        src/table_info.cpp
         src/schema.cpp
-        src/arrow_utils.cpp
 )
-
-add_subdirectory(src/common)
 
 target_include_directories(core
     PUBLIC

@@ -20,7 +20,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "arrow_utils.hpp"
+#include "arrow/utils.hpp"
 #include "join.hpp"
 #include "common/logger.hpp"
 #include "row.hpp"

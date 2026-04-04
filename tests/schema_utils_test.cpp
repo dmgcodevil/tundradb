@@ -3,7 +3,7 @@
 #include <arrow/api.h>
 #include <gtest/gtest.h>
 
-#include "arrow_utils.hpp"
+#include "arrow/utils.hpp"
 
 namespace tundradb {
 
