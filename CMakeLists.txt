@@ -237,6 +237,7 @@ add_library(core)
 # Per-domain source directories
 add_subdirectory(src/common)
 add_subdirectory(src/arrow)
+add_subdirectory(src/schema)
 
 # Sources not yet moved to domain folders
 target_sources(core PRIVATE
@@ -251,7 +252,6 @@ target_sources(core PRIVATE
 
         src/snapshot_manager.cpp
         src/edge_store.cpp
-        src/schema.cpp
 )
 
 target_include_directories(core

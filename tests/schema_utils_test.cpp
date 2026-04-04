@@ -1,4 +1,4 @@
-#include "schema_utils.hpp"
+#include "schema/utils.hpp"
 
 #include <arrow/api.h>
 #include <gtest/gtest.h>

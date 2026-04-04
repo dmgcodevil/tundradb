@@ -13,7 +13,7 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "common/logger.hpp"
-#include "type_descriptor.hpp"
+#include "schema/type_descriptor.hpp"
 #include "common/types.hpp"
 
 namespace tundradb {

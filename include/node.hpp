@@ -10,7 +10,7 @@
 #include "common/logger.hpp"
 #include "memory/node_arena.hpp"
 #include "node_view.hpp"
-#include "schema.hpp"
+#include "schema/schema.hpp"
 #include "temporal_context.hpp"
 #include "common/types.hpp"
 #include "update_type.hpp"

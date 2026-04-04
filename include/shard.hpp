@@ -16,7 +16,7 @@
 #include "common/config.hpp"
 #include "field_update.hpp"
 #include "node.hpp"
-#include "schema.hpp"
+#include "schema/schema.hpp"
 
 namespace tundradb {
 

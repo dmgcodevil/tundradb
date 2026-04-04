@@ -13,8 +13,8 @@
 #include "llvm/ADT/StringMap.h"
 #include "memory/map_ref.hpp"
 #include "memory/mem_utils.hpp"
-#include "schema.hpp"
-#include "type_descriptor.hpp"
+#include "schema/schema.hpp"
+#include "schema/type_descriptor.hpp"
 #include "common/types.hpp"
 
 namespace tundradb {

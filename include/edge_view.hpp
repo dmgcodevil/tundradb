@@ -6,7 +6,7 @@
 #include <unordered_map>
 
 #include "memory/node_arena.hpp"
-#include "schema.hpp"
+#include "schema/schema.hpp"
 #include "common/types.hpp"
 
 namespace tundradb {

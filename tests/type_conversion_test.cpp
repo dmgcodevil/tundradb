@@ -1,7 +1,7 @@
 #include <arrow/api.h>
 #include <gtest/gtest.h>
 
-#include "../include/schema.hpp"
+#include "schema/schema.hpp"
 #include "common/types.hpp"
 
 using namespace tundradb;

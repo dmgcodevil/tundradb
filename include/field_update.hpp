@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-#include "schema.hpp"
+#include "schema/schema.hpp"
 #include "common/types.hpp"
 #include "update_type.hpp"
 

@@ -1,4 +1,4 @@
-#include "schema.hpp"
+#include "schema/schema.hpp"
 
 #include <iostream>
 

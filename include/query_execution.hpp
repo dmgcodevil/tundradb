@@ -19,7 +19,7 @@
 #include <vector>
 
 #include "query.hpp"
-#include "schema.hpp"
+#include "schema/schema.hpp"
 
 namespace tundradb {
 

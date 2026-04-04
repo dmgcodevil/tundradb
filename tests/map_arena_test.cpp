@@ -10,7 +10,7 @@
 #include "../include/edge.hpp"
 #include "../include/node.hpp"
 #include "memory/node_arena.hpp"
-#include "../include/schema.hpp"
+#include "schema/schema.hpp"
 #include "memory/schema_layout.hpp"
 #include "common/types.hpp"
 #include "edge_store.hpp"

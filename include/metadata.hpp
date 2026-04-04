@@ -14,8 +14,8 @@
 #include "json.hpp"
 #include "llvm/ADT/SmallVector.h"
 #include "common/logger.hpp"
-#include "schema.hpp"
-#include "type_descriptor.hpp"
+#include "schema/schema.hpp"
+#include "schema/type_descriptor.hpp"
 #include "common/types.hpp"
 
 using namespace std::string_literals;

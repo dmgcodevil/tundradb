@@ -17,7 +17,7 @@
 #include "common/logger.hpp"
 #include "node.hpp"
 #include "query.hpp"
-#include "schema.hpp"
+#include "schema/schema.hpp"
 
 namespace tundradb {
 

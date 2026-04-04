@@ -10,7 +10,7 @@
 #include "common/constants.hpp"
 #include "edge_view.hpp"
 #include "memory/node_arena.hpp"
-#include "schema.hpp"
+#include "schema/schema.hpp"
 #include "memory/schema_layout.hpp"
 #include "temporal_context.hpp"
 #include "common/types.hpp"

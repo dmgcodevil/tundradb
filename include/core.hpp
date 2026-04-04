@@ -18,7 +18,7 @@
 #include "node.hpp"
 #include "query.hpp"
 #include "query_execution.hpp"
-#include "schema.hpp"
+#include "schema/schema.hpp"
 #include "shard.hpp"
 #include "snapshot_manager.hpp"
 #include "storage.hpp"

@@ -19,7 +19,7 @@
 #include <vector>
 
 #include "node.hpp"
-#include "schema.hpp"
+#include "schema/schema.hpp"
 #include "temporal_context.hpp"
 #include "common/types.hpp"
 
