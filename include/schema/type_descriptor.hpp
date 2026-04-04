@@ -33,21 +33,30 @@ struct TypeDescriptor {
   // Factory methods
   // ========================================================================
 
+  /// Missing / placeholder scalar (NA).
   static TypeDescriptor na() { return {ValueType::NA}; }
+  /// 32-bit signed integer.
   static TypeDescriptor int32() { return {ValueType::INT32}; }
+  /// 64-bit signed integer.
   static TypeDescriptor int64() { return {ValueType::INT64}; }
+  /// IEEE single-precision float.
   static TypeDescriptor float32() { return {ValueType::FLOAT}; }
+  /// IEEE double-precision float.
   static TypeDescriptor float64() { return {ValueType::DOUBLE}; }
+  /// Boolean.
   static TypeDescriptor boolean() { return {ValueType::BOOL}; }
 
+  /// UTF-8 string; max_size caps byte length, 0 means unbounded.
   static TypeDescriptor string(uint32_t max_size = 0) {
     return {ValueType::STRING, ValueType::NA, 0, max_size};
   }
 
+  /// Array of elem; fixed > 0 fixes the length, 0 means variable-length.
   static TypeDescriptor array(ValueType elem, uint32_t fixed = 0) {
     return {ValueType::ARRAY, elem, fixed, 0};
   }
 
+  /// Key-value property map (MAP).
   static TypeDescriptor properties() { return {ValueType::MAP}; }
 
   /**
@@ -71,11 +80,14 @@ struct TypeDescriptor {
   // Quick checks (for hot paths - no virtual dispatch)
   // ========================================================================
 
+  /// True for non-NA scalars other than STRING, ARRAY, and MAP (see is_string /
+  /// is_array / is_map).
   [[nodiscard]] bool is_primitive() const {
     return base_type != ValueType::NA && base_type != ValueType::ARRAY &&
            base_type != ValueType::MAP && !is_string();
   }
 
+  /// True if STRING or a legacy fixed-string ValueType encoding.
   [[nodiscard]] bool is_string() const {
     return base_type == ValueType::STRING ||
            base_type == ValueType::FIXED_STRING16 ||
@@ -83,16 +95,21 @@ struct TypeDescriptor {
            base_type == ValueType::FIXED_STRING64;
   }
 
+  /// True if this is an ARRAY type (see element_type and fixed_size).
   [[nodiscard]] bool is_array() const { return base_type == ValueType::ARRAY; }
 
+  /// True if this is a MAP / properties type.
   [[nodiscard]] bool is_map() const { return base_type == ValueType::MAP; }
 
+  /// True if base_type is NA (unset type).
   [[nodiscard]] bool is_null() const { return base_type == ValueType::NA; }
 
+  /// True for ARRAY with a non-zero fixed_size (fixed-length array).
   [[nodiscard]] bool is_fixed_size_array() const {
     return is_array() && fixed_size > 0;
   }
 
+  /// True for ARRAY with fixed_size == 0 (no fixed length cap in the type).
   [[nodiscard]] bool is_dynamic_array() const {
     return is_array() && fixed_size == 0;
   }
@@ -113,6 +130,8 @@ struct TypeDescriptor {
   // String representation
   // ========================================================================
 
+  /// Pretty type syntax, e.g. ARRAY<INT32>, STRING(n), or the base ValueType
+  /// name.
   [[nodiscard]] std::string to_string() const {
     if (is_array()) {
       std::string result = "ARRAY<" + tundradb::to_string(element_type);
@@ -132,12 +151,15 @@ struct TypeDescriptor {
   // Comparison
   // ========================================================================
 
+  /// True if base_type, element_type, fixed_size, and max_string_size all
+  /// match.
   bool operator==(const TypeDescriptor& other) const {
     return base_type == other.base_type && element_type == other.element_type &&
            fixed_size == other.fixed_size &&
            max_string_size == other.max_string_size;
   }
 
+  /// True if any descriptor component differs from other.
   bool operator!=(const TypeDescriptor& other) const {
     return !(*this == other);
   }

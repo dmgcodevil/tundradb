@@ -18,34 +18,37 @@
 
 namespace tundradb {
 
+/// A type-erased, variant-backed value that can hold any field type.
+///
+/// Supports scalar types (int32, int64, float, double, bool, string),
+/// arena-backed containers (StringRef, ArrayRef, MapRef), and raw
+/// containers (std::vector<Value>, std::map<std::string, Value>) that
+/// are converted to arena refs on insertion into the arena.
 class Value {
  public:
+  /// Construct a NULL value (ValueType::NA).
   Value() : type_(ValueType::NA), data_(std::monostate{}) {}
   explicit Value(double v) : type_(ValueType::DOUBLE), data_(v) {}
   explicit Value(std::string v)
       : type_(ValueType::STRING), data_(std::move(v)) {}
-  explicit Value(StringRef v)
-      : type_(ValueType::STRING),
-        data_(v) {}  // Store as StringRef for all string types
+  /// Construct from an arena-backed string reference.
+  explicit Value(StringRef v) : type_(ValueType::STRING), data_(v) {}
 
-  // Constructor for creating StringRef value with specific string type
+  /// Construct from a StringRef with an explicit string subtype
+  /// (e.g. FIXED_STRING16).
   Value(StringRef v, const ValueType string_type)
       : type_(string_type), data_(v) {
     assert(is_string_type(string_type));
   }
 
-  // Arena-backed array (already allocated in ArrayArena)
+  /// Construct from an arena-backed array reference.
   explicit Value(ArrayRef v) : type_(ValueType::ARRAY), data_(std::move(v)) {}
-
-  // Arena-backed map (already allocated in MapArena)
+  /// Construct from an arena-backed map reference.
   explicit Value(MapRef v) : type_(ValueType::MAP), data_(std::move(v)) {}
-
-  // Raw map data - will be converted to MapRef by NodeArena
+  /// Construct from raw map data (converted to MapRef on arena insertion).
   explicit Value(std::map<std::string, Value> v)
       : type_(ValueType::MAP), data_(std::move(v)) {}
-
-  // Raw array data - will be converted to ArrayRef by NodeArena
-  // (same pattern as std::string -> StringRef for strings)
+  /// Construct from raw array data (converted to ArrayRef on arena insertion).
   explicit Value(std::vector<Value> v)
       : type_(ValueType::ARRAY), data_(std::move(v)) {}
 
@@ -75,33 +78,33 @@ class Value {
   [[nodiscard]] bool as_bool() const { return get<bool>(); }
   [[nodiscard]] bool is_null() const { return type_ == ValueType::NA; }
 
-  // Check if the Value contains a StringRef (vs std::string)
+  /// True when the string variant holds a StringRef (arena-backed).
   [[nodiscard]] bool holds_string_ref() const {
     return is_string_type(type_) && std::holds_alternative<StringRef>(data_);
   }
 
-  // Check if the Value contains a std::string
+  /// True when the string variant holds a std::string (heap-allocated).
   [[nodiscard]] bool holds_std_string() const {
     return is_string_type(type_) && std::holds_alternative<std::string>(data_);
   }
 
-  // Check if the Value contains an ArrayRef (arena-backed)
+  /// True when the array variant holds an ArrayRef (arena-backed).
   [[nodiscard]] bool holds_array_ref() const {
     return type_ == ValueType::ARRAY && std::holds_alternative<ArrayRef>(data_);
   }
 
-  // Check if the Value contains a MapRef (arena-backed)
+  /// True when the map variant holds a MapRef (arena-backed).
   [[nodiscard]] bool holds_map_ref() const {
     return type_ == ValueType::MAP && std::holds_alternative<MapRef>(data_);
   }
 
-  // Check if the Value contains a raw map (std::map<std::string, Value>)
+  /// True when the map variant holds a raw std::map (not yet in arena).
   [[nodiscard]] bool holds_raw_map() const {
     return type_ == ValueType::MAP &&
            std::holds_alternative<std::map<std::string, Value>>(data_);
   }
 
-  // Check if the Value contains a raw array (std::vector<Value>)
+  /// True when the array variant holds a raw std::vector (not yet in arena).
   [[nodiscard]] bool holds_raw_array() const {
     return type_ == ValueType::ARRAY &&
            std::holds_alternative<std::vector<Value>>(data_);
@@ -123,6 +126,7 @@ class Value {
     return std::get<std::map<std::string, Value>>(data_);
   }
 
+  /// Append a single element (or splice another raw array) to this array.
   arrow::Status append_element(Value element) {
     if (element.holds_raw_array()) {
       return append_all(std::move(element));
@@ -164,8 +168,7 @@ class Value {
     return arrow::Status::OK();
   }
 
-  // Convert the Value to its raw string representation (without quotes for
-  // strings)
+  /// Convert the value to a human-readable string (no quotes around strings).
   [[nodiscard]] std::string to_string() const {
     switch (type_) {
       case ValueType::NA:
@@ -234,6 +237,7 @@ class Value {
     }
   }
 
+  /// Reinterpret a raw memory pointer as a Value of the given type.
   static Value read_value_from_memory(const char* ptr, const ValueType type) {
     if (ptr == nullptr) {
       return Value{};
@@ -284,6 +288,10 @@ class Value {
       data_;
 };
 
+/// A lightweight, non-owning reference to a typed value in arena memory.
+///
+/// ValueRef avoids copying by pointing directly into the arena.  The
+/// caller must ensure the referenced memory outlives the ValueRef.
 struct ValueRef {
   const char* data;
   ValueType type;
@@ -328,6 +336,7 @@ struct ValueRef {
     return *reinterpret_cast<const MapRef*>(data);
   }
 
+  /// Convert the referenced value to an Arrow Scalar for compute kernels.
   arrow::Result<std::shared_ptr<arrow::Scalar>> as_scalar() const {
     switch (type) {
       case ValueType::INT32:
@@ -426,7 +435,7 @@ struct ValueRef {
     return *this == other;
   }
 
-  // todo rename
+  /// Human-readable string representation (strings are quoted).
   std::string ToString() const {
     if (data == nullptr) {
       return "NULL";

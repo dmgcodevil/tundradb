@@ -11,21 +11,27 @@
 
 #include "arrow/utils.hpp"
 #include "common/config.hpp"
+#include "common/logger.hpp"
+#include "common/utils.hpp"
 #include "core/edge_store.hpp"
 #include "core/field_update.hpp"
-#include "common/logger.hpp"
-#include "storage/metadata.hpp"
 #include "core/node.hpp"
-#include "query/query.hpp"
 #include "query/execution.hpp"
+#include "query/query.hpp"
 #include "schema/schema.hpp"
+#include "storage/metadata.hpp"
 #include "storage/shard.hpp"
 #include "storage/snapshot_manager.hpp"
 #include "storage/storage.hpp"
-#include "common/utils.hpp"
 
 namespace tundradb {
 
+/// The main entry point for interacting with TundraDB.
+///
+/// Owns the schema registry, shard manager, node manager, edge store,
+/// and (optionally) persistence subsystems.  All public methods are
+/// thread-compatible; external synchronisation is required for concurrent
+/// access.
 class Database {
  private:
   std::shared_ptr<SchemaRegistry> schema_registry_;
@@ -39,6 +45,9 @@ class Database {
   std::shared_ptr<EdgeStore> edge_store_;
 
  public:
+  /// Construct a database from the given configuration.
+  /// When persistence is enabled, the storage, metadata, and snapshot
+  /// subsystems are initialised from `config.get_db_path()`.
   explicit Database(const DatabaseConfig &config = DatabaseConfig())
       : schema_registry_(std::make_shared<SchemaRegistry>()),
         shard_manager_(
@@ -73,18 +82,25 @@ class Database {
     }
   }
 
+  /// Return a copy of the configuration used to create this database.
   DatabaseConfig get_config() const { return config_; }
 
+  /// Return the schema registry (shared ownership).
   std::shared_ptr<SchemaRegistry> get_schema_registry() {
     return schema_registry_;
   }
 
+  /// Return the metadata manager (nullptr when persistence is disabled).
   std::shared_ptr<MetadataManager> get_metadata_manager() {
     return metadata_manager_;
   }
 
+  /// Return the node manager (shared ownership).
   std::shared_ptr<NodeManager> get_node_manager() { return node_manager_; }
 
+  /// Initialise persistence subsystems (storage, metadata, snapshots).
+  /// Must be called once after construction when persistence is enabled.
+  /// Returns `true` on success or skips silently when persistence is off.
   arrow::Result<bool> initialize() {
     if (persistence_enabled_) {
       auto storage_init = this->storage_->initialize();
@@ -105,6 +121,9 @@ class Database {
     return true;
   }
 
+  /// Create a new node in the given schema with the supplied field values.
+  /// The node is assigned a unique auto-incremented ID and inserted into
+  /// the appropriate shard.
   arrow::Result<std::shared_ptr<Node>> create_node(
       const std::string &schema_name,
       const std::unordered_map<std::string, Value> &data) {
@@ -117,6 +136,8 @@ class Database {
     return node;
   }
 
+  /// Update a single field on a node identified by schema name and ID.
+  /// @param field  Resolved field descriptor.
   arrow::Result<bool> update_node(const std::string &schema_name,
                                   const int64_t id,
                                   const std::shared_ptr<Field> &field,
@@ -126,6 +147,7 @@ class Database {
                                        update_type);
   }
 
+  /// Update a single field on a node, looked up by field name.
   arrow::Result<bool> update_node(const std::string &schema_name,
                                   const int64_t id,
                                   const std::string &field_name,
@@ -146,6 +168,7 @@ class Database {
                                               update_type);
   }
 
+  /// Remove a node from both the node manager and its shard.
   arrow::Result<bool> remove_node(const std::string &schema_name,
                                   int64_t node_id) {
     if (auto res = node_manager_->remove_node(schema_name, node_id); !res) {
@@ -155,12 +178,15 @@ class Database {
     return shard_manager_->remove_node(schema_name, node_id);
   }
 
+  /// Register a typed edge schema so that edges of @p edge_type can carry
+  /// the given property fields.
   arrow::Result<bool> register_edge_schema(
       const std::string &edge_type,
       const std::vector<std::shared_ptr<Field>> &fields) {
     return edge_store_->register_edge_schema(edge_type, fields);
   }
 
+  /// Create an edge from @p source_id to @p target_id with the given type.
   arrow::Result<bool> connect(const int64_t source_id, const std::string &type,
                               const int64_t target_id) {
     const auto edge =
@@ -169,6 +195,7 @@ class Database {
     return true;
   }
 
+  /// Create an edge with property values attached.
   arrow::Result<bool> connect(
       const int64_t source_id, const std::string &type, const int64_t target_id,
       std::unordered_map<std::string, Value> properties) {
@@ -179,24 +206,33 @@ class Database {
     return true;
   }
 
+  /// Remove an edge by its unique ID.
   arrow::Result<bool> remove_edge(const int64_t edge_id) {
     return edge_store_->remove(edge_id);
   }
 
+  /// Compact shards for a single schema, merging small shards together.
   arrow::Result<bool> compact(const std::string &schema_name) {
     return shard_manager_->compact(schema_name);
   }
 
+  /// Return the edge store (shared ownership).
   [[nodiscard]] std::shared_ptr<EdgeStore> get_edge_store() const {
     return edge_store_;
   }
 
+  /// Return the shard manager (shared ownership).
   [[nodiscard]] std::shared_ptr<ShardManager> get_shard_manager() const {
     return shard_manager_;
   }
 
+  /// Compact shards for every registered schema.
   arrow::Result<bool> compact_all() { return shard_manager_->compact_all(); }
 
+  /// Materialise all nodes of a schema into an Arrow Table.
+  /// @param temporal_context  Optional temporal filter; when non-null, only
+  ///   field versions visible at the requested point-in-time are included.
+  /// @param chunk_size  Maximum number of rows per Arrow record batch.
   arrow::Result<std::shared_ptr<arrow::Table>> get_table(
       const std::string &schema_name,
       TemporalContext *temporal_context = nullptr,
@@ -225,6 +261,7 @@ class Database {
     return create_table(schema, all_nodes, chunk_size, temporal_context);
   }
 
+  /// Return the number of shards backing the given schema.
   arrow::Result<size_t> get_shard_count(const std::string &schema_name) const {
     if (!schema_registry_->exists(schema_name)) {
       return arrow::Status::Invalid("Schema '", schema_name, "' not found");
@@ -232,6 +269,7 @@ class Database {
     return shard_manager_->get_shard_count(schema_name);
   }
 
+  /// Return the node count in each shard for the given schema.
   arrow::Result<std::vector<size_t>> get_shard_sizes(
       const std::string &schema_name) const {
     if (!schema_registry_->exists(schema_name)) {
@@ -240,6 +278,7 @@ class Database {
     return shard_manager_->get_shard_sizes(schema_name);
   }
 
+  /// Return the [min_id, max_id] range for each shard of the given schema.
   arrow::Result<std::vector<std::pair<int64_t, int64_t>>> get_shard_ranges(
       const std::string &schema_name) const {
     if (!schema_registry_->exists(schema_name)) {
@@ -248,10 +287,13 @@ class Database {
     return shard_manager_->get_shard_ranges(schema_name);
   }
 
+  /// Persist the current database state to disk as a new snapshot.
+  /// Requires persistence to be enabled.
   arrow::Result<Snapshot> create_snapshot() {
     return snapshot_manager_->commit();
   }
 
+  /// Execute a read-only query and return the result set as an Arrow Table.
   [[nodiscard]] arrow::Result<std::shared_ptr<QueryResult>> query(
       const Query &query) const;
 

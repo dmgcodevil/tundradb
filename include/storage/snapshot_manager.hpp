@@ -5,8 +5,8 @@
 #include <memory>
 
 #include "core/edge_store.hpp"
-#include "storage/metadata.hpp"
 #include "schema/schema.hpp"
+#include "storage/metadata.hpp"
 
 namespace tundradb {
 
@@ -15,6 +15,11 @@ class ShardManager;
 class Storage;
 class NodeManager;
 
+/// Orchestrates persistence: saving and restoring database state to disk.
+///
+/// On `initialize()`, the manager restores metadata, schemas, shards, and
+/// edges from the most recent snapshot.  On `commit()`, dirty shards and
+/// edges are written to Parquet and a new metadata+manifest pair is saved.
 class SnapshotManager {
  public:
   explicit SnapshotManager(std::shared_ptr<MetadataManager> metadata_manager,
@@ -24,9 +29,16 @@ class SnapshotManager {
                            std::shared_ptr<NodeManager> node_manager,
                            std::shared_ptr<SchemaRegistry> schema_registry);
 
+  /// Restore the database from the latest snapshot on disk.
   arrow::Result<bool> initialize();
+
+  /// Write all dirty shards and edges to disk and create a new snapshot.
   arrow::Result<Snapshot> commit();
+
+  /// Return a pointer to the most recent snapshot (nullptr if none).
   Snapshot *current_snapshot();
+
+  /// Return the current manifest (nullptr if no snapshot loaded).
   std::shared_ptr<Manifest> get_manifest();
 
  private:

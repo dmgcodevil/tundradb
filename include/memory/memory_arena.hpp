@@ -112,9 +112,13 @@ class MemoryArena : public MemArena {
   }
 
   // Statistics
+  /// Sum of sizes passed to successful allocate() calls since the last reset.
   size_t get_total_allocated() const override { return total_allocated_; }
+  /// Number of underlying chunk buffers.
   size_t get_chunk_count() const override { return chunks_.size(); }
+  /// Bytes used in the active chunk from its start (next allocation offset).
   size_t get_current_chunk_usage() const { return current_offset_; }
+  /// Size in bytes of the current (active) chunk.
   size_t get_current_chunk_size() const { return chunk_size_; }
 
  protected:
@@ -151,19 +155,23 @@ class ArenaAllocator {
   template <typename U>
   ArenaAllocator(const ArenaAllocator<U>& other) : arena_(other.arena_) {}
 
+  /// Allocates \p n elements from the backing MemoryArena (no individual free).
   T* allocate(size_t n) {
     return static_cast<T*>(arena_->allocate(n * sizeof(T), alignof(T)));
   }
 
+  /// No-op; bulk release uses MemoryArena::reset/clear.
   void deallocate(T*, size_t) {
     // Arena handles deallocation in bulk
   }
 
+  /// True if both allocators use the same MemoryArena instance.
   template <typename U>
   bool operator==(const ArenaAllocator<U>& other) const {
     return arena_ == other.arena_;
   }
 
+  /// True if the backing arenas differ.
   template <typename U>
   bool operator!=(const ArenaAllocator<U>& other) const {
     return !(*this == other);

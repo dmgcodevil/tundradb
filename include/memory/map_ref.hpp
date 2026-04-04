@@ -8,8 +8,8 @@
 #include <type_traits>
 
 #include "common/constants.hpp"
-#include "memory/string_ref.hpp"
 #include "common/value_type.hpp"
+#include "memory/string_ref.hpp"
 
 namespace tundradb {
 
@@ -63,6 +63,8 @@ static_assert(sizeof(MapEntry) == 40, "MapEntry must be 40 bytes");
  */
 class MapRef {
  public:
+  /// In-memory header preceding map entry storage (refcount, flags, size,
+  /// owning arena).
   struct MapHeader {
     std::atomic<int32_t> ref_count;  // 4 bytes
     uint32_t flags;                  // 4 bytes - bit 0: marked_for_deletion
@@ -70,9 +72,12 @@ class MapRef {
     uint32_t capacity;               // 4 bytes - allocated entry slots
     MapArena* arena;                 // 8 bytes - owning arena (for release)
 
+    /// True if this map block has been marked for deferred reclamation.
     [[nodiscard]] bool is_marked_for_deletion() const {
       return (flags & arena_flags::kMarkedForDeletion) != 0;
     }
+    /// Sets the marked-for-deletion flag (arena may collect when refcount
+    /// allows).
     void mark_for_deletion() { flags |= arena_flags::kMarkedForDeletion; }
   };
 
@@ -132,40 +137,50 @@ class MapRef {
   // PUBLIC INTERFACE
   // ========================================================================
 
+  /// Raw pointer to the first MapEntry (nullptr when null ref).
   [[nodiscard]] char* data() const { return data_; }
 
+  /// Current number of key-value entries.
   [[nodiscard]] uint32_t count() const {
     const auto* h = get_header();
     return h ? h->count : 0;
   }
 
+  /// Allocated entry slot count (may be greater than count()).
   [[nodiscard]] uint32_t capacity() const {
     const auto* h = get_header();
     return h ? h->capacity : 0;
   }
 
+  /// True if this handle does not reference map storage.
   [[nodiscard]] bool is_null() const { return data_ == nullptr; }
+  /// True if there are no entries (null refs are considered empty).
   [[nodiscard]] bool empty() const { return count() == 0; }
 
+  /// Const pointer to the i-th entry; \p i must be less than count().
   [[nodiscard]] const MapEntry* entry_ptr(uint32_t i) const {
     assert(i < count());
     return reinterpret_cast<const MapEntry*>(data_ + static_cast<size_t>(i) *
                                                          sizeof(MapEntry));
   }
 
+  /// Mutable pointer to slot \p i; \p i must be less than capacity().
   [[nodiscard]] MapEntry* mutable_entry_ptr(uint32_t i) const {
     assert(i < capacity());
     return reinterpret_cast<MapEntry*>(data_ + static_cast<size_t>(i) *
                                                    sizeof(MapEntry));
   }
 
+  /// True if another entry can be added without growing the backing block.
   [[nodiscard]] bool has_capacity() const { return count() < capacity(); }
 
+  /// Header refcount, or 0 when null.
   [[nodiscard]] int32_t get_ref_count() const {
     const auto* h = get_header();
     return h ? h->ref_count.load(std::memory_order_relaxed) : 0;
   }
 
+  /// True if the header exists and is marked for deletion.
   [[nodiscard]] bool is_marked_for_deletion() const {
     const auto* h = get_header();
     return h && h->is_marked_for_deletion();
@@ -190,6 +205,8 @@ class MapRef {
   // OPERATORS
   // ========================================================================
 
+  /// Equality: same backing pointer, or both null, or same entry bytes when
+  /// counts match.
   bool operator==(const MapRef& other) const {
     if (data_ == other.data_) return true;
     if (is_null() && other.is_null()) return true;
@@ -198,6 +215,7 @@ class MapRef {
     return std::memcmp(data_, other.data_, count() * sizeof(MapEntry)) == 0;
   }
 
+  /// Negation of operator==.
   bool operator!=(const MapRef& other) const { return !(*this == other); }
 
  private:

@@ -21,11 +21,11 @@
 #include <vector>
 
 #include "arrow/utils.hpp"
-#include "query/join.hpp"
 #include "common/logger.hpp"
+#include "common/utils.hpp"
+#include "query/join.hpp"
 #include "query/row.hpp"
 #include "query/temporal_context.hpp"
-#include "common/utils.hpp"
 
 namespace fs = std::filesystem;
 

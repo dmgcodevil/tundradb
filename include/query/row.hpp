@@ -13,11 +13,11 @@
 #include <vector>
 
 #include "common/constants.hpp"
-#include "core/edge.hpp"
 #include "common/logger.hpp"
+#include "common/types.hpp"
+#include "core/edge.hpp"
 #include "core/node.hpp"
 #include "query/query.hpp"
-#include "common/types.hpp"
 
 namespace tundradb {
 

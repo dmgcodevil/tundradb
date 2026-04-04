@@ -7,10 +7,10 @@
 #include <memory>
 #include <unordered_map>
 
-#include "core/field_update.hpp"
 #include "common/logger.hpp"
-#include "schema/schema.hpp"
 #include "common/types.hpp"
+#include "core/field_update.hpp"
+#include "schema/schema.hpp"
 
 using namespace tundradb;
 

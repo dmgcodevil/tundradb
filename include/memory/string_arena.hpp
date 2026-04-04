@@ -13,10 +13,10 @@
 #include <string>
 #include <string_view>
 
+#include "common/value_type.hpp"  // ValueType enum and helpers
 #include "memory/free_list_arena.hpp"
 #include "memory/memory_arena.hpp"
 #include "memory/string_ref.hpp"  // StringRef class
-#include "common/value_type.hpp"  // ValueType enum and helpers
 
 namespace tundradb {
 

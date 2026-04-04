@@ -5,15 +5,15 @@
 #include <limits>
 #include <string>
 
-#include "memory/array_arena.hpp"
 #include "common/clock.hpp"
-#include "core/edge.hpp"
-#include "core/node.hpp"
-#include "memory/node_arena.hpp"
-#include "schema/schema.hpp"
-#include "memory/schema_layout.hpp"
 #include "common/types.hpp"
+#include "core/edge.hpp"
 #include "core/edge_store.hpp"
+#include "core/node.hpp"
+#include "memory/array_arena.hpp"
+#include "memory/node_arena.hpp"
+#include "memory/schema_layout.hpp"
+#include "schema/schema.hpp"
 
 using namespace tundradb;
 

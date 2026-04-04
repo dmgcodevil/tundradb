@@ -7,9 +7,9 @@
 #include <thread>
 
 #include "arrow/map_union_types.hpp"
-#include "main/database.hpp"
-#include "core/field_update.hpp"
 #include "common/logger.hpp"
+#include "core/field_update.hpp"
+#include "main/database.hpp"
 
 using namespace std::string_literals;
 using namespace tundradb;

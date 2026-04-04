@@ -9,10 +9,10 @@
 #include <mutex>
 #include <new>
 
+#include "common/value_type.hpp"
 #include "memory/array_ref.hpp"
 #include "memory/free_list_arena.hpp"
 #include "memory/string_ref.hpp"
-#include "common/value_type.hpp"
 
 namespace tundradb {
 

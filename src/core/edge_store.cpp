@@ -4,8 +4,8 @@
 #include <string>
 
 #include "common/constants.hpp"
-#include "json.hpp"
 #include "common/logger.hpp"
+#include "json.hpp"
 #include "storage/metadata.hpp"
 
 namespace tundradb {

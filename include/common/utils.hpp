@@ -18,9 +18,9 @@
 #include "arrow/utils.hpp"
 #include "common/constants.hpp"
 #include "common/logger.hpp"
+#include "common/types.hpp"
 #include "core/node.hpp"
 #include "query/query.hpp"
-#include "common/types.hpp"
 
 namespace tundradb {
 

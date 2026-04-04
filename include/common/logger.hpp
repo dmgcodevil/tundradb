@@ -12,13 +12,19 @@ namespace tundradb {
 
 enum class LogLevel { DEBUG, INFO, WARN, ERROR };
 
+/// Process-wide logging facade over spdlog: level, optional file sink, and
+/// source-location-aware messages.
 class Logger {
  public:
+  /// Returns the singleton used by the `log_*` helpers declared later in this
+  /// header.
   static Logger& get_instance() {
     static Logger instance;
     return instance;
   }
 
+  /// Maps \ref LogLevel to the spdlog global cutoff (messages below it are
+  /// dropped).
   void set_level(LogLevel level) {
     switch (level) {
       case LogLevel::DEBUG:
@@ -36,6 +42,8 @@ class Logger {
     }
   }
 
+  /// Current spdlog level coerced to \ref LogLevel (trace/off and similar map
+  /// to INFO).
   LogLevel get_level() {
     switch (spdlog::get_level()) {
       case spdlog::level::trace:
@@ -57,6 +65,8 @@ class Logger {
     }
   }
 
+  /// Replaces the default logger with an appending file sink at \p filename;
+  /// failures are reported with spdlog::error.
   void set_log_to_file(const std::string& filename) {
     try {
       auto file_sink =
@@ -69,65 +79,79 @@ class Logger {
     }
   }
 
+  /// DEBUG with explicit \p location (file basename and line appear in the log
+  /// line).
   template <typename... Args>
   void debug(const std::source_location& location,
              spdlog::format_string_t<Args...> fmt, Args&&... args) {
     log(spdlog::level::debug, location, fmt, std::forward<Args>(args)...);
   }
 
+  /// INFO with explicit \p location in the output pattern.
   template <typename... Args>
   void info(const std::source_location& location,
             spdlog::format_string_t<Args...> fmt, Args&&... args) {
     log(spdlog::level::info, location, fmt, std::forward<Args>(args)...);
   }
 
+  /// WARN with explicit \p location in the output pattern.
   template <typename... Args>
   void warn(const std::source_location& location,
             spdlog::format_string_t<Args...> fmt, Args&&... args) {
     log(spdlog::level::warn, location, fmt, std::forward<Args>(args)...);
   }
 
+  /// ERROR with explicit \p location in the output pattern.
   template <typename... Args>
   void error(const std::source_location& location,
              spdlog::format_string_t<Args...> fmt, Args&&... args) {
     log(spdlog::level::err, location, fmt, std::forward<Args>(args)...);
   }
 
+  /// DEBUG using \ref std::source_location::current for the callsite.
   template <typename... Args>
   void debug(spdlog::format_string_t<Args...> fmt, Args&&... args) {
     debug(std::source_location::current(), fmt, std::forward<Args>(args)...);
   }
 
+  /// INFO using \ref std::source_location::current for the callsite.
   template <typename... Args>
   void info(spdlog::format_string_t<Args...> fmt, Args&&... args) {
     info(std::source_location::current(), fmt, std::forward<Args>(args)...);
   }
 
+  /// WARN using \ref std::source_location::current for the callsite.
   template <typename... Args>
   void warn(spdlog::format_string_t<Args...> fmt, Args&&... args) {
     warn(std::source_location::current(), fmt, std::forward<Args>(args)...);
   }
 
+  /// ERROR using \ref std::source_location::current for the callsite.
   template <typename... Args>
   void error(spdlog::format_string_t<Args...> fmt, Args&&... args) {
     error(std::source_location::current(), fmt, std::forward<Args>(args)...);
   }
 
+  /// DEBUG for a plain string (no format placeholders); \p location defaults to
+  /// the callsite.
   void debug(const std::string& message, const std::source_location& location =
                                              std::source_location::current()) {
     debug(location, "{}", message);
   }
 
+  /// INFO for a plain string; \p location defaults to the callsite.
   void info(const std::string& message, const std::source_location& location =
                                             std::source_location::current()) {
     info(location, "{}", message);
   }
 
+  /// WARN for a plain string; \p location defaults to the callsite.
   void warn(const std::string& message, const std::source_location& location =
                                             std::source_location::current()) {
     warn(location, "{}", message);
   }
 
+  /// ERROR for a plain string; \p location defaults to the callsite.
   void error(const std::string& message, const std::source_location& location =
                                              std::source_location::current()) {
     error(location, "{}", message);
@@ -222,10 +246,15 @@ inline void log_error(
   Logger::get_instance().error(message, location);
 }
 
+/// Prefixes every emitted line (e.g. subsystem name) before forwarding to the
+/// global \ref Logger.
 class ContextLogger {
  public:
+  /// \p prefix is copied and prepended as `prefix + ": " + message` for each
+  /// log call.
   explicit ContextLogger(std::string prefix) : prefix_(std::move(prefix)) {}
 
+  /// DEBUG with format string; output includes the stored prefix.
   template <typename... Args>
   void debug(spdlog::format_string_t<Args...> fmt, Args&&... args) {
     std::string message =
@@ -233,6 +262,7 @@ class ContextLogger {
     log_debug(prefix_ + ": " + message);
   }
 
+  /// INFO with format string; output includes the stored prefix.
   template <typename... Args>
   void info(spdlog::format_string_t<Args...> fmt, Args&&... args) {
     std::string message =
@@ -240,6 +270,7 @@ class ContextLogger {
     log_info(prefix_ + ": " + message);
   }
 
+  /// WARN with format string; output includes the stored prefix.
   template <typename... Args>
   void warn(spdlog::format_string_t<Args...> fmt, Args&&... args) {
     std::string message =
@@ -247,6 +278,7 @@ class ContextLogger {
     log_warn(prefix_ + ": " + message);
   }
 
+  /// ERROR with format string; output includes the stored prefix.
   template <typename... Args>
   void error(spdlog::format_string_t<Args...> fmt, Args&&... args) {
     std::string message =
@@ -254,21 +286,29 @@ class ContextLogger {
     log_error(prefix_ + ": " + message);
   }
 
+  /// DEBUG for a plain string; \p location is forwarded to the underlying
+  /// global log call.
   void debug(const std::string& message, const std::source_location& location =
                                              std::source_location::current()) {
     log_debug(prefix_ + ": " + message, location);
   }
 
+  /// INFO for a plain string; \p location is forwarded to the underlying global
+  /// log call.
   void info(const std::string& message, const std::source_location& location =
                                             std::source_location::current()) {
     log_info(prefix_ + ": " + message, location);
   }
 
+  /// WARN for a plain string; \p location is forwarded to the underlying global
+  /// log call.
   void warn(const std::string& message, const std::source_location& location =
                                             std::source_location::current()) {
     log_warn(prefix_ + ": " + message, location);
   }
 
+  /// ERROR for a plain string; \p location is forwarded to the underlying
+  /// global log call.
   void error(const std::string& message, const std::source_location& location =
                                              std::source_location::current()) {
     log_error(prefix_ + ": " + message, location);

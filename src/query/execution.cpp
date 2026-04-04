@@ -6,9 +6,9 @@
 #include "arrow/map_union_types.hpp"
 #include "arrow/utils.hpp"
 #include "common/constants.hpp"
-#include "core/edge_store.hpp"
 #include "common/logger.hpp"
 #include "common/utils.hpp"
+#include "core/edge_store.hpp"
 
 namespace tundradb {
 

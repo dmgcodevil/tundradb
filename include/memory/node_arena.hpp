@@ -11,17 +11,17 @@
 #include <string>
 #include <unordered_map>
 
-#include "memory/array_arena.hpp"
 #include "common/clock.hpp"
+#include "common/types.hpp"
 #include "core/field_update.hpp"
+#include "core/update_type.hpp"
+#include "memory/array_arena.hpp"
 #include "memory/free_list_arena.hpp"
 #include "memory/map_arena.hpp"
 #include "memory/mem_arena.hpp"
 #include "memory/memory_arena.hpp"
 #include "memory/schema_layout.hpp"
 #include "memory/string_arena.hpp"
-#include "common/types.hpp"
-#include "core/update_type.hpp"
 
 namespace tundradb {
 
@@ -62,25 +62,26 @@ struct VersionInfo {
 
   VersionInfo() = default;
 
-  // Constructor: initializes both valid and tx times to the same value
   VersionInfo(uint64_t vid, uint64_t ts_from, VersionInfo* prev_ver = nullptr)
       : version_id(vid),
         valid_from(ts_from),
         tx_from(ts_from),  // Initially tx_from = valid_from
         prev(prev_ver) {}
 
-  // Check if valid at a specific VALIDTIME
+  /// Returns true if VALIDTIME \p ts lies in [valid_from, valid_to).
   bool is_valid_at(uint64_t ts) const {
     return valid_from <= ts && ts < valid_to;
   }
 
-  // Check if visible at a bitemporal snapshot (valid_time, tx_time)
+  /// Returns true if this version is visible at the given VALIDTIME and
+  /// TXNTIME.
   bool is_visible_at(uint64_t valid_time, uint64_t tx_time) const {
     return (valid_from <= valid_time && valid_time < valid_to) &&
            (tx_from <= tx_time && tx_time < tx_to);
   }
 
-  // Find version visible at bitemporal snapshot
+  /// Walks the version chain and returns the version visible at the snapshot,
+  /// or nullptr.
   const VersionInfo* find_version_at_snapshot(uint64_t valid_time,
                                               uint64_t tx_time) const {
     const VersionInfo* current = this;
@@ -93,7 +94,8 @@ struct VersionInfo {
     return nullptr;
   }
 
-  // Legacy: find version at VALIDTIME only (ignores TXNTIME)
+  /// Walks the chain using VALIDTIME only (ignores TXNTIME); nullptr if none
+  /// matches.
   const VersionInfo* find_version_at_time(uint64_t ts) const {
     const VersionInfo* current = this;
     while (current != nullptr) {
@@ -103,6 +105,7 @@ struct VersionInfo {
     return nullptr;
   }
 
+  /// Number of versions in this chain (including this node).
   size_t count_versions() const {
     size_t count = 1;
     const VersionInfo* current = prev;
@@ -113,15 +116,20 @@ struct VersionInfo {
     return count;
   }
 
+  /// True if effective value for \p field_idx is present in the lazy field
+  /// cache.
   bool is_field_cached(uint16_t field_idx) const {
     if (field_idx >= 64) return field_cache_.count(field_idx) > 0;
     return (cache_bitset_ & (1ULL << field_idx)) != 0;
   }
 
+  /// Records that the effective value for \p field_idx is cached (fast path
+  /// uses a bitset).
   void mark_field_cached(uint16_t field_idx) const {
     if (field_idx < 64) cache_bitset_ |= (1ULL << field_idx);
   }
 
+  /// Clears the lazy field cache (bitset and map).
   void clear_cache() const {
     field_cache_.clear();
     cache_bitset_ = 0;
@@ -195,42 +203,57 @@ struct NodeHandle {
     version_info_ = nullptr;
   }
 
+  /// True if this handle does not reference node storage.
   bool is_null() const { return ptr == nullptr; }
+  /// True if temporal versioning metadata is attached.
   bool is_versioned() const { return version_info_ != nullptr; }
+  /// Attaches or replaces the version chain head (owned by the arena, not freed
+  /// here).
   void set_version_info(VersionInfo* version_info) {
     version_info_ = version_info;
   }
 
+  /// For versioned nodes, checks VALIDTIME on the current head; always true if
+  /// not versioned.
   bool is_valid_at(uint64_t ts) const {
     if (!is_versioned()) return true;
     return version_info_->is_valid_at(ts);
   }
 
+  /// Current head's version id, or 0 when not versioned.
   uint64_t get_version_id() const {
     return is_versioned() ? version_info_->version_id : 0;
   }
 
+  /// VALIDTIME start of the current head, or 0 when not versioned.
   uint64_t get_valid_from() const {
     return is_versioned() ? version_info_->valid_from : 0;
   }
 
+  /// VALIDTIME end of the current head, or max when not versioned.
   uint64_t get_valid_to() const {
     return is_versioned() ? version_info_->valid_to
                           : std::numeric_limits<uint64_t>::max();
   }
 
+  /// Pointer to the version chain head, or nullptr when not versioned.
   VersionInfo* get_version_info() const { return version_info_; }
 
+  /// Counts versions along the chain from the current head (1 if not
+  /// versioned).
   size_t count_versions() const {
     if (!is_versioned()) return 1;
     return version_info_->count_versions();
   }
 
+  /// Starting from the current head, finds the version valid at VALIDTIME \p
+  /// ts.
   const VersionInfo* find_version_at_time(uint64_t ts) const {
     if (!is_versioned()) return nullptr;
     return version_info_->find_version_at_time(ts);
   }
 
+  /// Previous version link from the current head, or nullptr.
   const VersionInfo* get_prev_version() const {
     if (!is_versioned()) return nullptr;
     return version_info_->prev;
@@ -265,12 +288,15 @@ struct NodeHandle {
   NodeHandle(const NodeHandle& other) = default;
   NodeHandle& operator=(const NodeHandle& other) = default;
 
+  /// Compares pointer, size, schema name, and schema version (not version chain
+  /// identity).
   bool operator==(const NodeHandle& other) const {
     return ptr == other.ptr && size == other.size &&
            schema_name == other.schema_name &&
            schema_version == other.schema_version;
   }
 
+  /// Negation of operator==.
   bool operator!=(const NodeHandle& other) const { return !(*this == other); }
 };
 
@@ -420,6 +446,7 @@ class NodeArena {
     return layout->get_value_ptr(static_cast<const char*>(handle.ptr), field);
   }
 
+  /// Reads a field as Value, resolving version-chain overrides when versioned.
   static Value get_value(const NodeHandle& handle,
                          const std::shared_ptr<SchemaLayout>& layout,
                          const std::shared_ptr<Field>& field) {
@@ -552,6 +579,7 @@ class NodeArena {
   // apply_updates — single public write entry point
   // =========================================================================
 
+  /// Applies field updates; creates a new version when versioning is enabled.
   arrow::Result<bool> apply_updates(NodeHandle& handle,
                                     const std::shared_ptr<SchemaLayout>& layout,
                                     const std::vector<FieldUpdate>& updates) {
@@ -614,12 +642,18 @@ class NodeArena {
   MapArena* get_map_arena() const { return map_arena_.get(); }
 
   // Statistics and getters
+  /// Sum of bytes returned from the underlying node MemArena (see MemArena
+  /// semantics).
   size_t get_total_allocated() const {
     return mem_arena_->get_total_allocated();
   }
+  /// Number of chunks backing the node MemArena.
   size_t get_chunk_count() const { return mem_arena_->get_chunk_count(); }
+  /// Underlying arena used for fixed-size node payloads.
   MemArena* get_mem_arena() const { return mem_arena_.get(); }
+  /// Whether temporal versioning (version arena) is active for this NodeArena.
   bool is_versioning_enabled() const { return versioning_enabled_; }
+  /// Monotonic counter used to assign unique VersionInfo::version_id values.
   uint64_t get_version_counter() const {
     return version_counter_.load(std::memory_order_relaxed);
   }

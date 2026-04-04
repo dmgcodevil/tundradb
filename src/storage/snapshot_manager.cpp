@@ -1,11 +1,11 @@
 #include "storage/snapshot_manager.hpp"
 
-#include "core/edge.hpp"
 #include "common/logger.hpp"
+#include "common/utils.hpp"
+#include "core/edge.hpp"
 #include "core/node.hpp"
 #include "storage/shard.hpp"
 #include "storage/storage.hpp"
-#include "common/utils.hpp"
 
 namespace tundradb {
 

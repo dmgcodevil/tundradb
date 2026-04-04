@@ -8,15 +8,21 @@
 
 #include "common/constants.hpp"
 #include "common/logger.hpp"
-#include "memory/node_arena.hpp"
-#include "core/node_view.hpp"
-#include "schema/schema.hpp"
-#include "query/temporal_context.hpp"
 #include "common/types.hpp"
+#include "core/node_view.hpp"
 #include "core/update_type.hpp"
+#include "memory/node_arena.hpp"
+#include "query/temporal_context.hpp"
+#include "schema/schema.hpp"
 
 namespace tundradb {
 
+/// A graph node backed by an arena-allocated memory block.
+///
+/// Every node belongs to a schema and stores its fields in a NodeArena
+/// via a NodeHandle.  Fields are read through get_value / get_value_ptr
+/// and written through update / update_fields.  Temporal views are
+/// created with view().
 class Node {
  private:
   std::unique_ptr<NodeHandle> handle_;
@@ -40,6 +46,7 @@ class Node {
         id(id),
         schema_name(std::move(schema_name)) {}
 
+  /// Return a raw pointer to the field's in-memory representation.
   arrow::Result<const char *> get_value_ptr(
       const std::shared_ptr<Field> &field) const {
     if (arena_ != nullptr) {
@@ -48,14 +55,14 @@ class Node {
     return arrow::Status::NotImplemented("");
   }
 
+  /// Return a lightweight non-owning reference to the field value.
   [[nodiscard]] ValueRef get_value_ref(
       const std::shared_ptr<Field> &field) const {
     const char *ptr = arena_->get_value_ptr(*handle_, layout_, field);
     return {ptr, field->type()};
   }
 
-  // --- Unified field access ---
-
+  /// Read a field value by Field descriptor (returns a copy).
   arrow::Result<Value> get_value(const std::shared_ptr<Field> &field) const {
     if (!arena_ || !handle_) {
       return arrow::Status::Invalid(
@@ -68,8 +75,7 @@ class Node {
   [[nodiscard]] NodeHandle *get_handle() const { return handle_.get(); }
   [[nodiscard]] NodeArena *get_arena() const { return arena_.get(); }
 
-  // --- Unified update ---
-
+  /// Apply a batch of field updates atomically (one new version).
   arrow::Result<bool> update_fields(const std::vector<FieldUpdate> &updates) {
     if (!arena_ || !handle_) {
       return arrow::Status::Invalid(
@@ -78,11 +84,13 @@ class Node {
     return arena_->apply_updates(*handle_, layout_, updates);
   }
 
+  /// Update a single field (convenience wrapper around update_fields).
   arrow::Result<bool> update(const std::shared_ptr<Field> &field, Value value,
                              UpdateType update_type = UpdateType::SET) {
     return update_fields({{field, std::move(value), update_type}});
   }
 
+  /// Shorthand for update(field, value, UpdateType::SET).
   arrow::Result<bool> set_value(const std::shared_ptr<Field> &field,
                                 const Value &value) {
     return update(field, value, UpdateType::SET);
@@ -112,8 +120,16 @@ class Node {
   }
 };
 
+/// Owns the shared NodeArena and manages per-schema node collections.
+///
+/// Responsible for creating, retrieving, and removing nodes, assigning
+/// auto-incremented per-schema IDs, and validating field types and
+/// required constraints when validation is enabled.
 class NodeManager {
  public:
+  /// @param validation_enabled  Check field types and required constraints.
+  /// @param use_node_arena      Must be true (non-arena path is removed).
+  /// @param enable_versioning   Enable temporal version chains in the arena.
   explicit NodeManager(std::shared_ptr<SchemaRegistry> schema_registry,
                        const bool validation_enabled = true,
                        const bool use_node_arena = true,
@@ -130,6 +146,7 @@ class NodeManager {
 
   ~NodeManager() = default;
 
+  /// Look up a node by schema name and ID.
   arrow::Result<std::shared_ptr<Node>> get_node(const std::string &schema_name,
                                                 const int64_t id) {
     auto schema_it = nodes_.find(schema_name);
@@ -145,6 +162,7 @@ class NodeManager {
     return node_it->second;
   }
 
+  /// Remove a node from the in-memory index. Returns false if not found.
   bool remove_node(const std::string &schema_name, const int64_t id) {
     auto schema_it = nodes_.find(schema_name);
     if (schema_it == nodes_.end()) {
@@ -153,6 +171,9 @@ class NodeManager {
     return schema_it->second.erase(id) > 0;
   }
 
+  /// Create a new node, allocate arena storage, and populate initial fields.
+  /// @param add  When true, the caller supplies the "id" value (used during
+  ///             snapshot restore); otherwise an auto-incremented ID is used.
   arrow::Result<std::shared_ptr<Node>> create_node(
       const std::string &schema_name,
       const std::unordered_map<std::string, Value> &data,
@@ -237,10 +258,12 @@ class NodeManager {
     return node;
   }
 
+  /// Override the next-ID counter for a schema (used during restore).
   void set_id_counter(const std::string &schema_name, const int64_t value) {
     id_counters_[schema_name].store(value);
   }
 
+  /// Return the current value of the per-schema ID counter.
   int64_t get_id_counter(const std::string &schema_name) const {
     auto it = id_counters_.find(schema_name);
     if (it == id_counters_.end()) {
@@ -249,7 +272,7 @@ class NodeManager {
     return it->second.load();
   }
 
-  // Get all schema ID counters (for snapshot/manifest)
+  /// Return all per-schema ID counters (for snapshot/manifest persistence).
   std::unordered_map<std::string, int64_t> get_all_id_counters() const {
     std::unordered_map<std::string, int64_t> result;
     for (const auto &[schema_name, counter] : id_counters_) {
@@ -258,7 +281,7 @@ class NodeManager {
     return result;
   }
 
-  // Set all schema ID counters (for snapshot/manifest restore)
+  /// Restore all per-schema ID counters from a snapshot/manifest.
   void set_all_id_counters(
       const std::unordered_map<std::string, int64_t> &counters) {
     for (const auto &[schema_name, value] : counters) {

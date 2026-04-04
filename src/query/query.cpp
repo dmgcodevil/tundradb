@@ -5,8 +5,8 @@
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/StringMap.h>
 
-#include "core/edge.hpp"
 #include "common/logger.hpp"
+#include "core/edge.hpp"
 
 namespace tundradb {
 

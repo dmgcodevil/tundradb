@@ -6,9 +6,9 @@
 #include <fstream>
 #include <string>
 
-#include "json.hpp"
 #include "common/logger.hpp"
 #include "common/utils.hpp"
+#include "json.hpp"
 
 namespace tundradb {
 
