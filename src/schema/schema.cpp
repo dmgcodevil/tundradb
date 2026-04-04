@@ -4,7 +4,7 @@
 
 #include "arrow/map_union_types.hpp"
 #include "arrow/utils.hpp"
-#include "metadata.hpp"
+#include "storage/metadata.hpp"
 
 namespace tundradb {
 

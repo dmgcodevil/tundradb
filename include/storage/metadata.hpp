@@ -10,7 +10,7 @@
 #include <vector>
 
 #include "arrow/map_union_types.hpp"
-#include "file_utils.hpp"
+#include "storage/file_utils.hpp"
 #include "json.hpp"
 #include "llvm/ADT/SmallVector.h"
 #include "common/logger.hpp"

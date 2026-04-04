@@ -5,7 +5,7 @@
 #include <memory>
 
 #include "core/edge_store.hpp"
-#include "metadata.hpp"
+#include "storage/metadata.hpp"
 #include "schema/schema.hpp"
 
 namespace tundradb {

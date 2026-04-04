@@ -7,7 +7,7 @@
 #include "../include/core.hpp"
 #include "common/debug_utils.hpp"
 #include "common/logger.hpp"
-#include "../include/metadata.hpp"
+#include "storage/metadata.hpp"
 #include "../include/query.hpp"
 
 // Helper macro for Arrow operations

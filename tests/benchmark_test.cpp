@@ -11,7 +11,7 @@
 
 #include "../include/core.hpp"
 #include "common/logger.hpp"
-#include "../include/metadata.hpp"
+#include "storage/metadata.hpp"
 #include "../include/query.hpp"
 #include "common/types.hpp"
 

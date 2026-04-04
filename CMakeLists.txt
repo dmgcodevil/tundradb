@@ -239,6 +239,7 @@ add_subdirectory(src/common)
 add_subdirectory(src/arrow)
 add_subdirectory(src/schema)
 add_subdirectory(src/core)
+add_subdirectory(src/storage)
 
 # Sources not yet moved to domain folders
 target_sources(core PRIVATE
@@ -247,11 +248,6 @@ target_sources(core PRIVATE
         src/query_execution.cpp
         src/join.cpp
         src/row.cpp
-        src/shard.cpp
-        src/storage.cpp
-        src/metadata.cpp
-
-        src/snapshot_manager.cpp
 )
 
 target_include_directories(core

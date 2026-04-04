@@ -1,4 +1,4 @@
-#include "storage.hpp"
+#include "storage/storage.hpp"
 
 #include <arrow/api.h>
 #include <arrow/io/api.h>
@@ -24,9 +24,9 @@
 #include "core/edge_store.hpp"
 #include "json.hpp"
 #include "common/logger.hpp"
-#include "metadata.hpp"
+#include "storage/metadata.hpp"
 #include "core/node.hpp"
-#include "shard.hpp"
+#include "storage/shard.hpp"
 #include "arrow/table_info.hpp"
 
 namespace tundradb {

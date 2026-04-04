@@ -8,7 +8,7 @@
 
 #include "common/config.hpp"
 #include "core/edge.hpp"
-#include "metadata.hpp"
+#include "storage/metadata.hpp"
 
 namespace tundradb {
 

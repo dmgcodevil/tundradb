@@ -14,14 +14,14 @@
 #include "core/edge_store.hpp"
 #include "core/field_update.hpp"
 #include "common/logger.hpp"
-#include "metadata.hpp"
+#include "storage/metadata.hpp"
 #include "core/node.hpp"
 #include "query.hpp"
 #include "query_execution.hpp"
 #include "schema/schema.hpp"
-#include "shard.hpp"
-#include "snapshot_manager.hpp"
-#include "storage.hpp"
+#include "storage/shard.hpp"
+#include "storage/snapshot_manager.hpp"
+#include "storage/storage.hpp"
 #include "common/utils.hpp"
 
 namespace tundradb {

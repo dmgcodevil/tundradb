@@ -6,7 +6,7 @@
 #include "common/constants.hpp"
 #include "json.hpp"
 #include "common/logger.hpp"
-#include "metadata.hpp"
+#include "storage/metadata.hpp"
 
 namespace tundradb {
 

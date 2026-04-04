@@ -9,7 +9,7 @@
 #include "../include/core.hpp"
 #include "core/field_update.hpp"
 #include "common/logger.hpp"
-#include "../include/metadata.hpp"
+#include "storage/metadata.hpp"
 #include "../include/query.hpp"
 #include "common/utils.hpp"
 

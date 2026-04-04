@@ -1,4 +1,4 @@
-#include "metadata.hpp"
+#include "storage/metadata.hpp"
 
 #include <arrow/api.h>
 
