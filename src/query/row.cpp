@@ -221,4 +221,201 @@ std::string RowNode::toString(bool recursive, int indent_level) const {
   return ss.str();
 }
 
+// ---------------------------------------------------------------------------
+// Standalone functions moved from row.hpp
+// ---------------------------------------------------------------------------
+
+bool is_prefix(const std::vector<PathSegment>& prefix,
+               const std::vector<PathSegment>& path) {
+  if (prefix.size() > path.size()) return false;
+  for (size_t i = 0; i < prefix.size(); ++i) {
+    if (!(prefix[i] == path[i])) return false;
+  }
+  return true;
+}
+
+std::string join_schema_path(const std::vector<PathSegment>& schema_path) {
+  std::ostringstream oss;
+  for (size_t i = 0; i < schema_path.size(); ++i) {
+    if (i != 0) oss << "->";
+    oss << schema_path[i].toString();
+  }
+  return oss.str();
+}
+
+Row create_empty_row_from_schema(
+    const std::shared_ptr<arrow::Schema>& final_output_schema) {
+  Row new_row(final_output_schema->num_fields() + 32);
+  new_row.id = -1;
+  return new_row;
+}
+
+std::vector<Row> get_child_rows(const Row& parent,
+                                const std::vector<Row>& rows) {
+  std::vector<Row> child;
+  for (const auto& row : rows) {
+    if (parent.id != row.id && row.start_with(parent.path)) {
+      child.push_back(row);
+    }
+  }
+  return child;
+}
+
+// ---------------------------------------------------------------------------
+// Row methods moved from row.hpp
+// ---------------------------------------------------------------------------
+
+void Row::set_cell_from_node(const std::vector<int>& field_indices,
+                             const std::shared_ptr<Node>& node,
+                             TemporalContext* temporal_context) {
+  auto view = node->view(temporal_context);
+  const auto& fields = node->get_schema()->fields();
+  const size_t n = std::min(fields.size(), field_indices.size());
+  for (size_t i = 0; i < n; ++i) {
+    const auto& field = fields[i];
+    const int field_id = field_indices[i];
+    auto value_ref_result = view.get_value_ref(field);
+    if (value_ref_result.ok()) {
+      this->set_cell(field_id, value_ref_result.ValueOrDie());
+    }
+  }
+}
+
+void Row::set_cell_from_edge(
+    const std::vector<int>& field_indices, const std::shared_ptr<Edge>& edge,
+    const llvm::SmallVector<std::shared_ptr<Field>, 4>& fields,
+    TemporalContext* temporal_context) {
+  auto view = edge->view(temporal_context);
+  const auto edge_schema = edge->get_schema();
+  const size_t n = std::min(fields.size(), field_indices.size());
+  for (size_t i = 0; i < n; ++i) {
+    auto field = fields[i];
+    if (!field) continue;
+    const auto& name = field->name();
+    const bool structural =
+        (name == field_names::kId || name == field_names::kEdgeId ||
+         name == field_names::kSourceId || name == field_names::kTargetId ||
+         name == field_names::kCreatedTs);
+    if (!structural && edge_schema) {
+      auto real_field = edge_schema->get_field(name);
+      if (!real_field) continue;
+      field = real_field;
+    }
+    const int field_id = field_indices[i];
+    auto value_ref_result = view.get_value_ref(field);
+    if (value_ref_result.ok()) {
+      this->set_cell(field_id, value_ref_result.ValueOrDie());
+    }
+  }
+}
+
+const std::unordered_map<std::string, int64_t>& Row::extract_schema_ids(
+    const llvm::SmallDenseMap<int, std::string, 64>& field_id_to_name) {
+  if (ids_populated) return ids;
+  for (size_t i = 0; i < cells.size(); ++i) {
+    const auto& value = cells[i];
+    if (!value.data) continue;
+    const auto& field_name = field_id_to_name.at(static_cast<int>(i));
+    size_t dot_pos = field_name.find('.');
+    if (dot_pos != std::string::npos) {
+      std::string schema = field_name.substr(0, dot_pos);
+      if (field_name.substr(dot_pos + 1) == field_names::kId) {
+        ids[schema] = value.as_int64();
+      }
+    }
+  }
+  return ids;
+}
+
+std::shared_ptr<Row> Row::merge(const std::shared_ptr<Row>& other) const {
+  std::shared_ptr<Row> merged = std::make_shared<Row>(*this);
+  IF_DEBUG_ENABLED {
+    log_debug("Row::merge() - this: {}", this->ToString());
+    log_debug("Row::merge() - other: {}", other->ToString());
+  }
+  for (size_t i = 0; i < other->cells.size(); ++i) {
+    if (!merged->has_value(static_cast<int>(i))) {
+      IF_DEBUG_ENABLED {
+        log_debug("Row::merge() - adding field '{}' with value: {}", i,
+                  cells[i].ToString());
+      }
+      merged->cells[i] = other->cells[i];
+    } else {
+      IF_DEBUG_ENABLED {
+        log_debug("Row::merge() - skipping field '{}' (already has value)", i);
+      }
+    }
+  }
+  IF_DEBUG_ENABLED {
+    log_debug("Row::merge() - result: {}", merged->ToString());
+  }
+  return merged;
+}
+
+std::string Row::ToString() const {
+  std::stringstream ss;
+  ss << "Row{";
+  ss << "path='" << join_schema_path(path) << "', ";
+  bool first = true;
+  for (size_t i = 0; i < cells.size(); i++) {
+    if (!first) ss << ", ";
+    first = false;
+    ss << i << ": ";
+    const auto value_ref = cells[i];
+    if (!value_ref.data) {
+      ss << "NULL";
+    } else {
+      switch (value_ref.type) {
+        case ValueType::INT64:
+          ss << value_ref.as_int64();
+          break;
+        case ValueType::INT32:
+          ss << value_ref.as_int32();
+          break;
+        case ValueType::DOUBLE:
+          ss << value_ref.as_double();
+          break;
+        case ValueType::STRING:
+          ss << "\"" << value_ref.as_string_ref().to_string() << "\"";
+          break;
+        case ValueType::BOOL:
+          ss << (value_ref.as_bool() ? "true" : "false");
+          break;
+        default:
+          ss << "unknown";
+          break;
+      }
+    }
+  }
+  ss << "}";
+  return ss.str();
+}
+
+// ---------------------------------------------------------------------------
+// RowNode methods moved from row.hpp
+// ---------------------------------------------------------------------------
+
+void RowNode::insert_row_dfs(size_t path_idx,
+                             const std::shared_ptr<Row>& new_row) {
+  if (path_idx == new_row->path.size()) {
+    this->row = new_row;
+    return;
+  }
+  for (const auto& n : children) {
+    if (n->path_segment == new_row->path[path_idx]) {
+      n->insert_row_dfs(path_idx + 1, new_row);
+      return;
+    }
+  }
+  auto new_node = std::make_unique<RowNode>();
+  new_node->depth = depth + 1;
+  new_node->path_segment = new_row->path[path_idx];
+  new_node->insert_row_dfs(path_idx + 1, new_row);
+  children.emplace_back(std::move(new_node));
+}
+
+void RowNode::insert_row(const std::shared_ptr<Row>& new_row) {
+  insert_row_dfs(0, new_row);
+}
+
 }  // namespace tundradb

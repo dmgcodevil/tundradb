@@ -335,9 +335,11 @@ target_link_libraries(memory_arena_test
 
 target_link_libraries(free_list_arena_test
         PRIVATE
+        core
         GTest::GTest
         GTest::Main
         spdlog::spdlog
+        LLVMSupport LLVMCore
 )
 
 
