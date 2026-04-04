@@ -53,41 +53,12 @@ struct PathSegment {
   }
 };
 
-/**
- * @brief Checks whether @p prefix is a prefix of @p path.
- *
- * @param prefix The candidate prefix path.
- * @param path The full path to test against.
- * @return True if every element of @p prefix matches the corresponding element
- * of @p path.
- */
-inline bool is_prefix(const std::vector<PathSegment>& prefix,
-                      const std::vector<PathSegment>& path) {
-  if (prefix.size() > path.size()) {
-    return false;
-  }
-  for (size_t i = 0; i < prefix.size(); ++i) {
-    if (!(prefix[i] == path[i])) return false;
-  }
-  return true;
-}
+/// Checks whether @p prefix is a prefix of @p path.
+bool is_prefix(const std::vector<PathSegment>& prefix,
+               const std::vector<PathSegment>& path);
 
-/**
- * @brief Joins path segments into an arrow-delimited string (e.g.
- * "users:0->companies:1").
- *
- * @param schema_path The segments to join.
- * @return The formatted path string.
- */
-inline std::string join_schema_path(
-    const std::vector<PathSegment>& schema_path) {
-  std::ostringstream oss;
-  for (size_t i = 0; i < schema_path.size(); ++i) {
-    if (i != 0) oss << "->";
-    oss << schema_path[i].toString();
-  }
-  return oss.str();
-}
+/// Joins path segments into an arrow-delimited string.
+std::string join_schema_path(const std::vector<PathSegment>& schema_path);
 
 /**
  * @brief A single denormalised result row produced during BFS traversal.
@@ -126,228 +97,41 @@ struct Row {
            cells[field_id].data != nullptr;
   }
 
-  /**
-   * @brief Populates cells from a node's fields using the given index mapping.
-   *
-   * @param field_indices Maps each node field position to a row cell index.
-   * @param node The source node.
-   * @param temporal_context Temporal snapshot for versioned reads (may be
-   * nullptr).
-   */
+  /// Populates cells from a node's fields using the given index mapping.
   void set_cell_from_node(const std::vector<int>& field_indices,
                           const std::shared_ptr<Node>& node,
-                          TemporalContext* temporal_context) {
-    auto view = node->view(temporal_context);
+                          TemporalContext* temporal_context);
 
-    const auto& fields = node->get_schema()->fields();
-    const size_t n = std::min(fields.size(), field_indices.size());
-    for (size_t i = 0; i < n; ++i) {
-      const auto& field = fields[i];
-      const int field_id = field_indices[i];
-      auto value_ref_result = view.get_value_ref(field);
-      if (value_ref_result.ok()) {
-        this->set_cell(field_id, value_ref_result.ValueOrDie());
-      }
-    }
-  }
-
-  /**
-   * @brief Populates row cells from an edge projection.
-   *
-   * This is the edge equivalent of `set_cell_from_node()`, used when query
-   * output includes edge aliases (for example `SELECT e` or `SELECT e.role`).
-   *
-   * Mapping behavior:
-   * - `fields[i]` is the projected field metadata for the edge alias.
-   * - `field_indices[i]` is the destination row-cell index.
-   * - The method reads values through `EdgeView` so temporal snapshots are
-   *   honored.
-   *
-   * Field resolution behavior:
-   * - Structural edge fields (`id`, `_edge_id`, `source_id`, `target_id`,
-   *   `created_ts`) are read directly as-is.
-   * - Non-structural fields are resolved by name against the edge's runtime
-   *   schema to ensure type/layout consistency before reading.
-   * - Missing or unresolved fields are skipped (no write to the target cell).
-   *
-   * @param field_indices Maps each projected edge field to a row cell index.
-   * @param edge The source edge to read from.
-   * @param fields Projected edge fields for the alias in output-schema order.
-   * @param temporal_context Temporal snapshot for versioned reads (may be
-   * nullptr).
-   */
+  /// Populates row cells from an edge projection.
   void set_cell_from_edge(
       const std::vector<int>& field_indices, const std::shared_ptr<Edge>& edge,
       const llvm::SmallVector<std::shared_ptr<Field>, 4>& fields,
-      TemporalContext* temporal_context) {
-    auto view = edge->view(temporal_context);
-    const auto edge_schema = edge->get_schema();
-    const size_t n = std::min(fields.size(), field_indices.size());
-    for (size_t i = 0; i < n; ++i) {
-      auto field = fields[i];
-      if (!field) continue;
-      const auto& name = field->name();
-      const bool structural =
-          (name == field_names::kId || name == field_names::kEdgeId ||
-           name == field_names::kSourceId || name == field_names::kTargetId ||
-           name == field_names::kCreatedTs);
-      if (!structural && edge_schema) {
-        auto real_field = edge_schema->get_field(name);
-        if (!real_field) continue;
-        field = real_field;
-      }
-      const int field_id = field_indices[i];
-      auto value_ref_result = view.get_value_ref(field);
-      if (value_ref_result.ok()) {
-        this->set_cell(field_id, value_ref_result.ValueOrDie());
-      }
-    }
-  }
+      TemporalContext* temporal_context);
 
   /** @brief Returns true if this row's path starts with @p prefix. */
   [[nodiscard]] bool start_with(const std::vector<PathSegment>& prefix) const {
     return is_prefix(prefix, this->path);
   }
 
-  /**
-   * @brief Lazily extracts a schema-name->node-ID map from the "*.id" cells.
-   *
-   * @param field_id_to_name Mapping from field index to fully-qualified name.
-   * @return A reference to the cached schema-ID map.
-   */
+  /// Lazily extracts a schema-name->node-ID map from the "*.id" cells.
   const std::unordered_map<std::string, int64_t>& extract_schema_ids(
-      const llvm::SmallDenseMap<int, std::string, 64>& field_id_to_name) {
-    if (ids_populated) {
-      return ids;
-    }
-    for (size_t i = 0; i < cells.size(); ++i) {
-      const auto& value = cells[i];
-      if (!value.data) continue;
-      const auto& field_name = field_id_to_name.at(static_cast<int>(i));
-      size_t dot_pos = field_name.find('.');
-      if (dot_pos != std::string::npos) {
-        std::string schema = field_name.substr(0, dot_pos);
-        if (field_name.substr(dot_pos + 1) == field_names::kId) {
-          ids[schema] = value.as_int64();
-        }
-      }
-    }
-    return ids;
-  }
+      const llvm::SmallDenseMap<int, std::string, 64>& field_id_to_name);
 
-  /**
-   * @brief Merges another row into this one (non-destructive).
-   *
-   * Fields present in @p other but absent in this row are copied.
-   * Existing values are kept.
-   *
-   * @param other The row to merge from.
-   * @return A new Row combining both.
-   */
+  /// Merges another row into this one (non-destructive).
   [[nodiscard]] std::shared_ptr<Row> merge(
-      const std::shared_ptr<Row>& other) const {
-    std::shared_ptr<Row> merged = std::make_shared<Row>(*this);
-    IF_DEBUG_ENABLED {
-      log_debug("Row::merge() - this: {}", this->ToString());
-      log_debug("Row::merge() - other: {}", other->ToString());
-    }
+      const std::shared_ptr<Row>& other) const;
 
-    for (size_t i = 0; i < other->cells.size(); ++i) {
-      if (!merged->has_value(static_cast<int>(i))) {
-        IF_DEBUG_ENABLED {
-          log_debug("Row::merge() - adding field '{}' with value: {}", i,
-                    cells[i].ToString());
-        }
-        merged->cells[i] = other->cells[i];
-      } else {
-        IF_DEBUG_ENABLED {
-          log_debug("Row::merge() - skipping field '{}' (already has value)",
-                    i);
-        }
-      }
-    }
-    IF_DEBUG_ENABLED {
-      log_debug("Row::merge() - result: {}", merged->ToString());
-    }
-    return merged;
-  }
-
-  /** @brief Returns a debug string listing the path and all cell values. */
-  [[nodiscard]] std::string ToString() const {
-    std::stringstream ss;
-    ss << "Row{";
-    ss << "path='" << join_schema_path(path) << "', ";
-
-    bool first = true;
-    for (size_t i = 0; i < cells.size(); i++) {
-      if (!first) {
-        ss << ", ";
-      }
-      first = false;
-
-      ss << i << ": ";
-      const auto value_ref = cells[i];
-      if (!value_ref.data) {
-        ss << "NULL";
-      } else {
-        switch (value_ref.type) {
-          case ValueType::INT64:
-            ss << value_ref.as_int64();
-            break;
-          case ValueType::INT32:
-            ss << value_ref.as_int32();
-            break;
-          case ValueType::DOUBLE:
-            ss << value_ref.as_double();
-            break;
-          case ValueType::STRING:
-            ss << "\"" << value_ref.as_string_ref().to_string() << "\"";
-            break;
-          case ValueType::BOOL:
-            ss << (value_ref.as_bool() ? "true" : "false");
-            break;
-          default:
-            ss << "unknown";
-            break;
-        }
-      }
-    }
-    ss << "}";
-    return ss.str();
-  }
+  /// Returns a debug string listing the path and all cell values.
+  [[nodiscard]] std::string ToString() const;
 };
 
-/**
- * @brief Creates a blank Row sized to fit the given output schema.
- *
- * @param final_output_schema The Arrow schema of the final query output.
- * @return A Row with id = −1 and all cells null.
- */
-inline Row create_empty_row_from_schema(
-    const std::shared_ptr<arrow::Schema>& final_output_schema) {
-  Row new_row(final_output_schema->num_fields() + 32);
-  new_row.id = -1;
-  return new_row;
-}
+/// Creates a blank Row sized to fit the given output schema.
+Row create_empty_row_from_schema(
+    const std::shared_ptr<arrow::Schema>& final_output_schema);
 
-/**
- * @brief Collects rows whose path starts with @p parent's path (excluding @p
- * parent itself).
- *
- * @param parent The parent row.
- * @param rows All candidate rows.
- * @return The subset of @p rows that are children of @p parent.
- */
-inline std::vector<Row> get_child_rows(const Row& parent,
-                                       const std::vector<Row>& rows) {
-  std::vector<Row> child;
-  for (const auto& row : rows) {
-    if (parent.id != row.id && row.start_with(parent.path)) {
-      child.push_back(row);
-    }
-  }
-  return child;
-}
+/// Collects rows whose path starts with @p parent's path (excluding parent).
+std::vector<Row> get_child_rows(const Row& parent,
+                                const std::vector<Row>& rows);
 
 /**
  * @brief Tree node used to group and merge rows during BFS result assembly.
@@ -375,36 +159,11 @@ struct RowNode {
   /** @brief Returns true if this node carries a row (i.e. is a leaf). */
   bool leaf() const { return row.has_value(); }
 
-  /**
-   * @brief Recursively inserts a row into the tree following its path segments.
-   *
-   * @param path_idx Current index into new_row->path.
-   * @param new_row The row to insert.
-   */
-  void insert_row_dfs(size_t path_idx, const std::shared_ptr<Row>& new_row) {
-    if (path_idx == new_row->path.size()) {
-      this->row = new_row;
-      return;
-    }
+  /// Recursively inserts a row into the tree following its path segments.
+  void insert_row_dfs(size_t path_idx, const std::shared_ptr<Row>& new_row);
 
-    for (const auto& n : children) {
-      if (n->path_segment == new_row->path[path_idx]) {
-        n->insert_row_dfs(path_idx + 1, new_row);
-        return;
-      }
-    }
-
-    auto new_node = std::make_unique<RowNode>();
-    new_node->depth = depth + 1;
-    new_node->path_segment = new_row->path[path_idx];
-    new_node->insert_row_dfs(path_idx + 1, new_row);
-    children.emplace_back(std::move(new_node));
-  }
-
-  /** @brief Inserts a row starting from the root of its path. */
-  void insert_row(const std::shared_ptr<Row>& new_row) {
-    insert_row_dfs(0, new_row);
-  }
+  /// Inserts a row starting from the root of its path.
+  void insert_row(const std::shared_ptr<Row>& new_row);
 
   /**
    * @brief Recursively merges child rows via Cartesian product to produce

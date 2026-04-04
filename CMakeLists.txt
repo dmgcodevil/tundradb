@@ -240,6 +240,7 @@ add_subdirectory(src/arrow)
 add_subdirectory(src/schema)
 add_subdirectory(src/core)
 add_subdirectory(src/storage)
+add_subdirectory(src/memory)
 add_subdirectory(src/query)
 add_subdirectory(src/main)
 

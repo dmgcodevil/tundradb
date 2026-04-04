@@ -69,54 +69,7 @@ class StringPool {
    * @return Ok(StringRef) with ref_count = 1, or Error with reason
    */
   arrow::Result<StringRef> store_string(const std::string& str,
-                                        uint32_t pool_id) {
-    if (str.length() > max_size_) {
-      return arrow::Status::Invalid("StringPool::store_string: string length ",
-                                    str.length(), " exceeds pool max_size ",
-                                    max_size_);
-    }
-
-    // Check deduplication cache (thread-safe via tbb::concurrent_hash_map)
-    if (enable_deduplication_) {
-      typename decltype(dedup_cache_)::const_accessor acc;
-      if (dedup_cache_.find(acc, str)) {
-        return acc->second;
-      }
-    }
-
-    // CRITICAL: Lock arena allocation (FreeListArena is NOT thread-safe)
-    std::lock_guard<std::mutex> lock(arena_mutex_);
-
-    // Allocate: [header 16 bytes][string data][null terminator]
-    const size_t alloc_size = StringRef::HEADER_SIZE + str.length() + 1;
-    void* raw_storage = arena_->allocate(alloc_size);
-    if (!raw_storage) {
-      return arrow::Status::OutOfMemory(
-          "StringPool::store_string: arena allocation failed (requested ",
-          alloc_size, " bytes)");
-    }
-
-    auto* header = static_cast<StringRef::StringHeader*>(raw_storage);
-    header->ref_count.store(0, std::memory_order_relaxed);
-    header->length = static_cast<uint32_t>(str.length());
-    header->flags = 0;
-    header->padding = 0;
-
-    char* data = reinterpret_cast<char*>(header) + StringRef::HEADER_SIZE;
-    std::memcpy(data, str.c_str(), str.length());
-    data[str.length()] = '\0';
-
-    StringRef ref(data, static_cast<uint32_t>(str.length()), pool_id);
-    active_allocs_.fetch_add(1, std::memory_order_relaxed);
-
-    if (enable_deduplication_) {
-      typename decltype(dedup_cache_)::accessor acc;
-      dedup_cache_.insert(acc, str);
-      acc->second = ref;
-    }
-
-    return ref;
-  }
+                                        uint32_t pool_id);
 
   /**
    * Store a string view in this pool.
@@ -132,20 +85,7 @@ class StringPool {
    *
    * @param data Pointer to string data (NOT to header)
    */
-  void mark_for_deletion(const char* data) {
-    if (!data) return;
-
-    auto* header = reinterpret_cast<StringRef::StringHeader*>(
-        const_cast<char*>(data - StringRef::HEADER_SIZE));
-
-    header->mark_for_deletion();
-
-    // Remove from dedup cache immediately to prevent new references
-    if (enable_deduplication_) {
-      std::string str(data, header->length);
-      dedup_cache_.erase(str);
-    }
-  }
+  void mark_for_deletion(const char* data);
 
   /**
    * Deallocate a string's memory back to the FreeListArena.
@@ -158,28 +98,13 @@ class StringPool {
    *
    * @param data Pointer to string data (NOT to header)
    */
-  void release_string(const char* data) {
-    if (!data) return;
-
-    auto* header = reinterpret_cast<StringRef::StringHeader*>(
-        const_cast<char*>(data - StringRef::HEADER_SIZE));
-
-    active_allocs_.fetch_sub(1, std::memory_order_relaxed);
-
-    std::lock_guard<std::mutex> lock(arena_mutex_);
-    arena_->deallocate(header);
-  }
+  void release_string(const char* data);
 
   /**
    * Enable or disable string deduplication.
    * When enabled, identical strings share the same memory.
    */
-  void enable_deduplication(bool enable = true) {
-    enable_deduplication_ = enable;
-    if (!enable) {
-      dedup_cache_.clear();
-    }
-  }
+  void enable_deduplication(bool enable = true);
 
   // ========================================================================
   // STATISTICS
@@ -194,28 +119,14 @@ class StringPool {
 
   size_t get_total_allocated() const { return arena_->get_total_allocated(); }
 
-  size_t get_used_bytes() const {
-    if (auto* free_list = dynamic_cast<FreeListArena*>(arena_.get())) {
-      return free_list->get_used_bytes();
-    }
-    return 0;
-  }
+  size_t get_used_bytes() const;
 
   size_t get_string_count() const { return dedup_cache_.size(); }
 
   /**
    * Get total reference count across all strings (for debugging).
    */
-  size_t get_total_references() const {
-    size_t total = 0;
-    typename decltype(dedup_cache_)::const_accessor acc;
-    for (auto it = dedup_cache_.begin(); it != dedup_cache_.end(); ++it) {
-      if (dedup_cache_.find(acc, it->first)) {
-        total += acc->second.get_ref_count();
-      }
-    }
-    return total;
-  }
+  size_t get_total_references() const;
 
   /**
    * Reset the pool - clears all allocations.
@@ -282,14 +193,7 @@ class StringArena {
    * - Pool 2: strings up to 64 bytes
    * - Pool 3: unlimited size strings
    */
-  StringArena() {
-    pools_.reserve(4);
-    pools_.emplace_back(std::make_unique<StringPool>(16));
-    pools_.emplace_back(std::make_unique<StringPool>(32));
-    pools_.emplace_back(std::make_unique<StringPool>(64));
-    pools_.emplace_back(std::make_unique<StringPool>(SIZE_MAX));
-    register_pools();
-  }
+  StringArena();
 
   /**
    * Store a string in a specific pool by ID.
@@ -299,26 +203,13 @@ class StringArena {
    * @return Ok(StringRef) with ref_count = 1, or Error with reason
    */
   arrow::Result<StringRef> store_string(const std::string& str,
-                                        uint32_t pool_id = 3) {
-    if (pool_id >= pools_.size()) {
-      return arrow::Status::Invalid(
-          "StringArena::store_string: invalid pool_id ", pool_id,
-          " (max: ", pools_.size() - 1, ")");
-    }
-    return pools_[pool_id]->store_string(str, pool_id);
-  }
+                                        uint32_t pool_id = 3);
 
   /**
    * Store a string, automatically choosing the best pool.
    * Picks the smallest pool that can fit the string.
    */
-  arrow::Result<StringRef> store_string_auto(const std::string& str) {
-    size_t len = str.length();
-    if (len <= 16) return pools_[0]->store_string(str, 0);
-    if (len <= 32) return pools_[1]->store_string(str, 1);
-    if (len <= 64) return pools_[2]->store_string(str, 2);
-    return pools_[3]->store_string(str, 3);
-  }
+  arrow::Result<StringRef> store_string_auto(const std::string& str);
 
   /**
    * Mark a string for deletion.
@@ -326,11 +217,7 @@ class StringArena {
    *
    * @param ref StringRef to mark for deletion
    */
-  void mark_for_deletion(const StringRef& ref) {
-    if (!ref.is_null()) {
-      pools_[ref.pool_id()]->mark_for_deletion(ref.data());
-    }
-  }
+  void mark_for_deletion(const StringRef& ref);
 
   /**
    * Get string content from reference (zero-copy view).
@@ -342,48 +229,25 @@ class StringArena {
   /**
    * Enable or disable deduplication for all pools.
    */
-  void enable_deduplication(bool enable = true) {
-    for (auto& pool : pools_) {
-      pool->enable_deduplication(enable);
-    }
-  }
+  void enable_deduplication(bool enable = true);
 
   /** Total live (allocated but not freed) strings across all pools. */
-  int64_t get_active_allocs() const {
-    int64_t total = 0;
-    for (const auto& pool : pools_) {
-      total += pool->get_active_allocs();
-    }
-    return total;
-  }
+  int64_t get_active_allocs() const;
 
   /**
    * Get pool by ID.
    */
-  StringPool* get_pool(uint32_t pool_id) const {
-    if (pool_id < pools_.size()) {
-      return pools_[pool_id].get();
-    }
-    return nullptr;
-  }
+  StringPool* get_pool(uint32_t pool_id) const;
 
   /**
    * Reset all pools.
    */
-  void reset() {
-    for (auto& pool : pools_) {
-      pool->reset();
-    }
-  }
+  void reset();
 
   /**
    * Clear all memory.
    */
-  void clear() {
-    for (auto& pool : pools_) {
-      pool->clear();
-    }
-  }
+  void clear();
 
   /**
    * Register pools with the global registry.
@@ -424,59 +288,14 @@ class StringArenaRegistry {
     acc->second = pool;
   }
 
-  static StringPool* get_pool(uint32_t pool_id) {
-    typename decltype(pool_map_)::const_accessor acc;
-    if (instance().pool_map_.find(acc, pool_id)) {
-      return acc->second;
-    }
-    return nullptr;
-  }
+  static StringPool* get_pool(uint32_t pool_id);
 
   /**
    * Release a string reference.
    * Called by StringRef::release() to deallocate the string.
    */
-  static void release_string(uint32_t pool_id, const char* data) {
-    if (auto* pool = get_pool(pool_id)) {
-      pool->release_string(data);
-    }
-  }
+  static void release_string(uint32_t pool_id, const char* data);
 };
-
-// ============================================================================
-// StringArena::register_pools() implementation (after StringArenaRegistry)
-// ============================================================================
-
-inline void StringArena::register_pools() {
-  for (uint32_t i = 0; i < pools_.size(); ++i) {
-    StringArenaRegistry::register_pool(i, pools_[i].get());
-  }
-}
-
-// ============================================================================
-// StringRef::release() implementation
-// ============================================================================
-
-inline void StringRef::release() {
-  if (data_) {
-    if (auto* header = get_header()) {
-      assert(header->ref_count.load(std::memory_order_relaxed) > 0 &&
-             "StringRef::release() called with ref_count already 0 — "
-             "double-release or missing ref-count increment");
-
-      int32_t old_count =
-          header->ref_count.fetch_sub(1, std::memory_order_acq_rel);
-
-      if (old_count == 1 && header->is_marked_for_deletion()) {
-        StringArenaRegistry::release_string(pool_id_, data_);
-      }
-    }
-
-    data_ = nullptr;
-    length_ = 0;
-    pool_id_ = 0;
-  }
-}
 
 }  // namespace tundradb
 
