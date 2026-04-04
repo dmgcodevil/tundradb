@@ -162,16 +162,23 @@ class FreeListArena : public MemArena {
    */
 
   // Statistics
+  /// Total bytes reserved in all chunks (unchanged by reset; cleared by
+  /// clear()).
   size_t get_total_allocated() const override {
     return total_allocated_;
   }  // Total chunk memory
+  /// Cumulative bytes returned to the free list (used for fragmentation
+  /// metrics).
   size_t get_freed_bytes() const {
     return freed_bytes_;
   }  // Cumulative deallocations (for fragmentation)
+  /// Sum of live allocated block sizes (decreases on deallocate).
   size_t get_used_bytes() const {
     return total_used_;
   }  // Currently used memory
+  /// Number of allocated chunks.
   size_t get_chunk_count() const override { return chunks_.size(); }
+  /// Number of distinct free blocks indexed in the size map.
   size_t get_free_block_count() const {
     size_t count = 0;
     for (const auto& blocks : free_blocks_by_size_ | std::views::values) {
@@ -180,6 +187,7 @@ class FreeListArena : public MemArena {
     return count;
   }
 
+  /// Ratio of cumulative freed bytes to total chunk memory (0 if no chunks).
   double get_fragmentation_ratio() const {
     if (total_allocated_ == 0) return 0.0;
     return static_cast<double>(freed_bytes_) / total_allocated_;

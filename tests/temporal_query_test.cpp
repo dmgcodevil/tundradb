@@ -3,8 +3,8 @@
 #include <memory>
 
 #include "common/clock.hpp"
-#include "main/database.hpp"
 #include "common/logger.hpp"
+#include "main/database.hpp"
 #include "memory/node_arena.hpp"
 #include "query/query.hpp"
 #include "query/temporal_context.hpp"

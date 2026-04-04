@@ -9,13 +9,13 @@
 #include <unordered_map>
 #include <vector>
 
-#include "memory/array_ref.hpp"
+#include "common/types.hpp"
 #include "llvm/ADT/StringMap.h"
+#include "memory/array_ref.hpp"
 #include "memory/map_ref.hpp"
 #include "memory/mem_utils.hpp"
 #include "schema/schema.hpp"
 #include "schema/type_descriptor.hpp"
-#include "common/types.hpp"
 
 namespace tundradb {
 
@@ -116,6 +116,7 @@ class SchemaLayout {
     return data_offset_ + total_size_;
   }
 
+  /// Pointer to field storage, or nullptr if the field bit is unset.
   const char* get_value_ptr(const char* node_data,
                             const size_t field_index) const {
     const FieldLayout& field_layout = fields_[field_index];
@@ -130,24 +131,28 @@ class SchemaLayout {
     return field_ptr;
   }
 
-  // gets a pointer to field value
+  /// Pointer to field storage for \p field, or nullptr if unset.
   const char* get_value_ptr(const char* node_data,
                             const std::shared_ptr<Field>& field) const {
     return get_value_ptr(node_data, field->index_);
   }
 
+  /// Reads the field at \p field_index from node memory (unset reads as
+  /// default/null).
   Value get_value(const char* node_data, const size_t field_index) const {
     const FieldLayout& field_layout = fields_[field_index];
     return Value::read_value_from_memory(get_value_ptr(node_data, field_index),
                                          field_layout.type);
   }
 
+  /// Reads \p field_layout from node memory using its index and type.
   Value get_value(const char* node_data,
                   const FieldLayout& field_layout) const {
     return Value::read_value_from_memory(
         get_value_ptr(node_data, field_layout.index), field_layout.type);
   }
 
+  /// Reads the field identified by \p field from node memory.
   Value get_value(const char* node_data,
                   const std::shared_ptr<Field>& field) const {
     return get_value(node_data, field->index_);
@@ -213,12 +218,20 @@ class SchemaLayout {
   }
 
   // Getters
+  /// Schema name this layout was built for.
   const std::string& get_schema_name() const { return schema_name_; }
+  /// Size of the data region after the bitset (excludes bitset and padding to
+  /// alignment).
   size_t get_total_size() const { return total_size_; }
+  /// Maximum alignment required by any field in this layout.
   size_t get_alignment() const { return alignment_; }
+  /// True after finalize() (or implicit finalize from construction).
   bool is_finalized() const { return finalized_; }
+  /// Ordered field layouts (indices match schema field order).
   const std::vector<FieldLayout>& get_fields() const { return fields_; }
 
+  /// Layout entry for \p field, or nullptr if index is out of range or field is
+  /// null.
   const FieldLayout* get_field_layout(
       const std::shared_ptr<Field>& field) const {
     if (!field) {
@@ -353,10 +366,12 @@ class LayoutRegistry {
     return it != layouts_.end() ? it->second : nullptr;
   }
 
+  /// True if a layout is registered for \p schema_name.
   bool exists(const std::string& schema_name) const {
     return layouts_.contains(schema_name);
   }
 
+  /// Builds a SchemaLayout from \p schema and stores it under the schema name.
   std::shared_ptr<SchemaLayout> create_layout(
       const std::shared_ptr<Schema>& schema) {
     auto layout = std::make_shared<SchemaLayout>(schema);
@@ -365,10 +380,12 @@ class LayoutRegistry {
     return layout;
   }
 
+  /// Erases the layout for \p schema_name; returns whether an entry existed.
   bool remove_layout(const std::string& schema_name) {
     return layouts_.erase(schema_name) > 0;
   }
 
+  /// All registered schema names (order unspecified).
   [[nodiscard]] std::vector<std::string> get_schema_names() const {
     std::vector<std::string> names;
     names.reserve(layouts_.size());
@@ -378,8 +395,11 @@ class LayoutRegistry {
     return names;
   }
 
+  /// Number of registered layouts.
   size_t size() const { return layouts_.size(); }
+  /// True if no layouts are registered.
   bool empty() const { return layouts_.empty(); }
+  /// Removes all layouts from the registry.
   void clear() { layouts_.clear(); }
 
  private:

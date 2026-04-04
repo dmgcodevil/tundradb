@@ -5,10 +5,10 @@
 
 #include <unordered_map>
 
-#include "memory/node_arena.hpp"
-#include "schema/schema.hpp"
-#include "query/temporal_context.hpp"
 #include "common/types.hpp"
+#include "memory/node_arena.hpp"
+#include "query/temporal_context.hpp"
+#include "schema/schema.hpp"
 
 namespace tundradb {
 

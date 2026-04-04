@@ -5,8 +5,8 @@
 
 #include "memory/map_arena.hpp"
 #include "memory/node_arena.hpp"
-#include "schema/schema.hpp"
 #include "memory/schema_layout.hpp"
+#include "schema/schema.hpp"
 
 using namespace tundradb;
 

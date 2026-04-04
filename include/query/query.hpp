@@ -18,10 +18,10 @@
 #include <utility>
 #include <vector>
 
-#include "core/node.hpp"
-#include "schema/schema.hpp"
-#include "query/temporal_context.hpp"
 #include "common/types.hpp"
+#include "core/node.hpp"
+#include "query/temporal_context.hpp"
+#include "schema/schema.hpp"
 
 namespace tundradb {
 

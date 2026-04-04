@@ -4,11 +4,11 @@
 #include <memory>
 #include <string>
 
-#include "main/database.hpp"
 #include "common/debug_utils.hpp"
 #include "common/logger.hpp"
-#include "storage/metadata.hpp"
+#include "main/database.hpp"
 #include "query/query.hpp"
+#include "storage/metadata.hpp"
 
 // Helper macro for Arrow operations
 #define ASSERT_OK(expr) ASSERT_TRUE((expr).ok())

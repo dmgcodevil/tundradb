@@ -12,14 +12,20 @@
 #include <vector>
 
 #include "common/concurrency.hpp"
+#include "common/utils.hpp"
 #include "core/edge.hpp"
 #include "memory/node_arena.hpp"
-#include "schema/schema.hpp"
 #include "memory/schema_layout.hpp"
-#include "common/utils.hpp"
+#include "schema/schema.hpp"
 
 namespace tundradb {
 
+/// Central registry and index for all edges in the database.
+///
+/// Maintains directional adjacency indexes (outgoing/incoming), a
+/// type-based grouping, and an optional per-type Arrow Table cache for
+/// query materialisation.  Edge schemas may be registered to add
+/// arena-backed property fields to edges of a given type.
 class EdgeStore {
   struct TableCache;
 
@@ -81,23 +87,24 @@ class EdgeStore {
     tables_.clear();
   }
 
+  /// Current value of the edge ID sequence.
   int64_t get_edge_id_counter() const { return edge_id_counter_; }
 
-  // --- Edge schema management ---
-
+  /// Register a typed property schema for edges of @p edge_type.
   arrow::Result<bool> register_edge_schema(
       const std::string &edge_type,
       const std::vector<std::shared_ptr<Field>> &fields);
 
+  /// True when a property schema has been registered for this edge type.
   [[nodiscard]] bool has_edge_schema(const std::string &edge_type) const;
 
+  /// Return the Schema for a registered edge type (nullptr if none).
   [[nodiscard]] std::shared_ptr<Schema> get_edge_schema(
       const std::string &edge_type) const;
 
+  /// Return the memory layout for a registered edge type.
   [[nodiscard]] std::shared_ptr<SchemaLayout> get_edge_layout(
       const std::string &edge_type) const;
-
-  // --- Edge CRUD ---
 
   /**
    * Creates a new edge at runtime (user API / `connect`).
@@ -138,17 +145,20 @@ class EdgeStore {
    */
   arrow::Result<bool> add(const std::shared_ptr<Edge> &edge);
 
+  /// Remove an edge from all indexes.
   arrow::Result<bool> remove(int64_t edge_id);
 
+  /// Look up a single edge by ID.
   arrow::Result<std::shared_ptr<Edge>> get(int64_t edge_id) const;
 
+  /// Bulk-fetch edges by a set of IDs.
   std::vector<std::shared_ptr<Edge>> get(const std::set<int64_t> &ids) const;
 
-  // Template overload for any iterable container (including
-  // ConcurrentSet::LockedView)
+  /// Bulk-fetch edges from any iterable container of IDs.
   template <typename Container>
   std::vector<std::shared_ptr<Edge>> get(const Container &ids) const;
 
+  /// Return the number of edges for a given type (0 if type does not exist).
   int64_t get_count_by_type(const std::string &type) const {
     if (auto res = get_by_type(type); res.ok()) {
       return res.ValueOrDie().size();
@@ -156,29 +166,33 @@ class EdgeStore {
     return 0;
   }
 
+  /// Return all outgoing edges from a node, optionally filtered by type.
   arrow::Result<std::vector<std::shared_ptr<Edge>>> get_outgoing_edges(
       int64_t id, const std::string &type = "") const;
 
+  /// Return all incoming edges to a node, optionally filtered by type.
   arrow::Result<std::vector<std::shared_ptr<Edge>>> get_incoming_edges(
       int64_t id, const std::string &type = "") const;
 
+  /// Return all edges of a given type.
   arrow::Result<std::vector<std::shared_ptr<Edge>>> get_by_type(
       const std::string &type) const;
 
+  /// Materialise edges of a type into a cached Arrow Table.
   arrow::Result<std::shared_ptr<arrow::Table>> get_table(
       const std::string &edge_type);
 
+  /// Return the current mutation version counter for an edge type.
   arrow::Result<int64_t> get_version(const std::string &edge_type) const;
 
+  /// Return the set of all registered edge type names.
   std::set<std::string> get_edge_types() const;
 
   int64_t get_chunk_size() const { return chunk_size_; }
-
   size_t size() const { return edges.size(); }
-
   bool empty() const { return edges.empty(); }
 
-  // todo temporary solution, add initialize instead
+  /// Override the edge ID sequence (used during snapshot restore).
   void set_id_seq(const int64_t v) {
     edge_id_counter_.store(v, std::memory_order_relaxed);
   }

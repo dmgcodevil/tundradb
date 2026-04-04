@@ -2,8 +2,8 @@
 
 #include <climits>
 
-#include "schema/type_descriptor.hpp"
 #include "common/value_type.hpp"
+#include "schema/type_descriptor.hpp"
 
 using namespace tundradb;
 

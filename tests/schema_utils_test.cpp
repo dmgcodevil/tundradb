@@ -1,9 +1,8 @@
-#include "schema/utils.hpp"
-
 #include <arrow/api.h>
 #include <gtest/gtest.h>
 
 #include "arrow/utils.hpp"
+#include "schema/utils.hpp"
 
 namespace tundradb {
 

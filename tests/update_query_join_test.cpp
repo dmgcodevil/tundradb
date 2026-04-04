@@ -6,9 +6,9 @@
 #include <string>
 #include <vector>
 
+#include "common/utils.hpp"
 #include "main/database.hpp"
 #include "query/query.hpp"
-#include "common/utils.hpp"
 
 #define ASSERT_OK(expr) ASSERT_TRUE((expr).ok())
 

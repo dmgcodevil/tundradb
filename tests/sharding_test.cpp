@@ -5,8 +5,8 @@
 #include <vector>
 
 #include "arrow/utils.hpp"
-#include "main/database.hpp"
 #include "common/debug_utils.hpp"
+#include "main/database.hpp"
 using namespace tundradb;
 
 class ShardingTest : public ::testing::Test {

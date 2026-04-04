@@ -19,15 +19,15 @@
 #include <utility>
 #include <vector>
 
+#include "arrow/table_info.hpp"
 #include "arrow/utils.hpp"
 #include "common/constants.hpp"
-#include "core/edge_store.hpp"
-#include "json.hpp"
 #include "common/logger.hpp"
-#include "storage/metadata.hpp"
+#include "core/edge_store.hpp"
 #include "core/node.hpp"
+#include "json.hpp"
+#include "storage/metadata.hpp"
 #include "storage/shard.hpp"
-#include "arrow/table_info.hpp"
 
 namespace tundradb {
 

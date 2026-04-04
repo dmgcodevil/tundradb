@@ -1,3 +1,5 @@
+#include "main/database.hpp"
+
 #include <arrow/api.h>
 #include <arrow/io/api.h>
 #include <arrow/json/api.h>
@@ -6,7 +8,6 @@
 
 #include <filesystem>
 
-#include "main/database.hpp"
 #include "common/logger.hpp"
 
 using namespace tundradb;

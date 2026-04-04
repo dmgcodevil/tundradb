@@ -10,13 +10,13 @@
 #include <vector>
 
 #include "arrow/map_union_types.hpp"
-#include "storage/file_utils.hpp"
+#include "common/logger.hpp"
+#include "common/types.hpp"
 #include "json.hpp"
 #include "llvm/ADT/SmallVector.h"
-#include "common/logger.hpp"
 #include "schema/schema.hpp"
 #include "schema/type_descriptor.hpp"
-#include "common/types.hpp"
+#include "storage/file_utils.hpp"
 
 using namespace std::string_literals;
 
