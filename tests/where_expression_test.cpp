@@ -6,7 +6,7 @@
 #include <vector>
 
 #include "arrow/map_union_types.hpp"
-#include "../include/core.hpp"
+#include "main/database.hpp"
 #include "core/field_update.hpp"
 #include "common/logger.hpp"
 #include "storage/metadata.hpp"

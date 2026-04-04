@@ -28,7 +28,7 @@
 #include "TundraQLParser.h"
 #include "arrow/map_union_types.hpp"
 #include "common/constants.hpp"
-#include "core.hpp"
+#include "main/database.hpp"
 #include "linenoise.h"
 #include "common/logger.hpp"
 #include "common/types.hpp"

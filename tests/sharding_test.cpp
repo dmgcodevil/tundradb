@@ -5,7 +5,7 @@
 #include <vector>
 
 #include "arrow/utils.hpp"
-#include "../include/core.hpp"
+#include "main/database.hpp"
 #include "common/debug_utils.hpp"
 using namespace tundradb;
 

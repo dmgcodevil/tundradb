@@ -4,7 +4,7 @@
 #include <memory>
 #include <string>
 
-#include "../include/core.hpp"
+#include "main/database.hpp"
 #include "common/debug_utils.hpp"
 #include "common/logger.hpp"
 #include "storage/metadata.hpp"

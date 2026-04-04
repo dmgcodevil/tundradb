@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-#include "../include/core.hpp"
+#include "main/database.hpp"
 #include "common/logger.hpp"
 #include "storage/metadata.hpp"
 #include "query/query.hpp"

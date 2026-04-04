@@ -241,11 +241,7 @@ add_subdirectory(src/schema)
 add_subdirectory(src/core)
 add_subdirectory(src/storage)
 add_subdirectory(src/query)
-
-# Sources not yet moved to domain folders
-target_sources(core PRIVATE
-        src/core.cpp
-)
+add_subdirectory(src/main)
 
 target_include_directories(core
     PUBLIC

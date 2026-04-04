@@ -5,7 +5,7 @@
 #include <vector>
 
 #include "arrow/map_union_types.hpp"
-#include "../include/core.hpp"
+#include "main/database.hpp"
 #include "query/query.hpp"
 #include "common/utils.hpp"
 
