@@ -1,4 +1,4 @@
-#include "../include/node_arena.hpp"
+#include "memory/node_arena.hpp"
 
 #include <arrow/api.h>
 #include <gtest/gtest.h>
@@ -7,12 +7,12 @@
 #include <memory>
 #include <vector>
 
-#include "../include/field_update.hpp"
-#include "../include/memory_arena.hpp"
-#include "../include/node.hpp"
-#include "../include/schema.hpp"
-#include "../include/schema_layout.hpp"
-#include "../include/types.hpp"
+#include "core/field_update.hpp"
+#include "memory/memory_arena.hpp"
+#include "core/node.hpp"
+#include "schema/schema.hpp"
+#include "memory/schema_layout.hpp"
+#include "common/types.hpp"
 
 using namespace tundradb;
 

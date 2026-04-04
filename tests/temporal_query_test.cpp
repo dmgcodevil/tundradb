@@ -2,12 +2,12 @@
 
 #include <memory>
 
-#include "../include/clock.hpp"
-#include "../include/core.hpp"
-#include "../include/logger.hpp"
-#include "../include/node_arena.hpp"
-#include "../include/query.hpp"
-#include "../include/temporal_context.hpp"
+#include "common/clock.hpp"
+#include "main/database.hpp"
+#include "common/logger.hpp"
+#include "memory/node_arena.hpp"
+#include "query/query.hpp"
+#include "query/temporal_context.hpp"
 
 using namespace tundradb;
 

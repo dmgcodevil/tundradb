@@ -3,10 +3,10 @@
 #include <memory>
 #include <thread>
 
-#include "../include/map_arena.hpp"
-#include "../include/node_arena.hpp"
-#include "../include/schema.hpp"
-#include "../include/schema_layout.hpp"
+#include "memory/map_arena.hpp"
+#include "memory/node_arena.hpp"
+#include "schema/schema.hpp"
+#include "memory/schema_layout.hpp"
 
 using namespace tundradb;
 

@@ -1,4 +1,4 @@
-#include "../include/memory_arena.hpp"
+#include "memory/memory_arena.hpp"
 
 #include <gtest/gtest.h>
 

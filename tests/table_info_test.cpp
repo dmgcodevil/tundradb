@@ -1,4 +1,4 @@
-#include "table_info.hpp"
+#include "arrow/table_info.hpp"
 
 #include <arrow/api.h>
 #include <arrow/table.h>

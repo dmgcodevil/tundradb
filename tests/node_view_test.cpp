@@ -1,15 +1,15 @@
-#include "../include/node_view.hpp"
+#include "core/node_view.hpp"
 
 #include <gtest/gtest.h>
 
 #include <memory>
 #include <thread>
 
-#include "../include/node.hpp"
-#include "../include/node_arena.hpp"
-#include "../include/schema.hpp"
-#include "../include/schema_layout.hpp"
-#include "../include/temporal_context.hpp"
+#include "core/node.hpp"
+#include "memory/node_arena.hpp"
+#include "schema/schema.hpp"
+#include "memory/schema_layout.hpp"
+#include "query/temporal_context.hpp"
 
 using namespace tundradb;
 

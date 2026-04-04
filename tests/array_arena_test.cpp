@@ -1,10 +1,10 @@
-#include "../include/array_arena.hpp"
+#include "memory/array_arena.hpp"
 
 #include <gtest/gtest.h>
 
 #include <string>
 
-#include "../include/string_arena.hpp"
+#include "memory/string_arena.hpp"
 
 using namespace tundradb;
 

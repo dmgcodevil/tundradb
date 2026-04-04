@@ -1,8 +1,8 @@
-#include "edge_store.hpp"
+#include "core/edge_store.hpp"
 
 #include <gtest/gtest.h>
 
-#include "edge.hpp"
+#include "core/edge.hpp"
 
 namespace tundradb {
 

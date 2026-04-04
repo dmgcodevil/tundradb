@@ -15,7 +15,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "concurrency.hpp"
+#include "common/concurrency.hpp"
 
 using namespace std::string_literals;
 using namespace tundradb;

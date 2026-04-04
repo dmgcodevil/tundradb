@@ -14,9 +14,9 @@
 #include <thread>
 #include <vector>
 
-#include "../include/string_arena.hpp"
-#include "../include/string_ref.hpp"
-#include "../include/types.hpp"
+#include "memory/string_arena.hpp"
+#include "memory/string_ref.hpp"
+#include "common/types.hpp"
 
 using namespace tundradb;
 

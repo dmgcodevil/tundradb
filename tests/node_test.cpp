@@ -1,4 +1,4 @@
-#include "../include/node.hpp"
+#include "core/node.hpp"
 
 #include <arrow/api.h>
 #include <gtest/gtest.h>
@@ -7,10 +7,10 @@
 #include <memory>
 #include <unordered_map>
 
-#include "../include/field_update.hpp"
-#include "../include/logger.hpp"
-#include "../include/schema.hpp"
-#include "../include/types.hpp"
+#include "core/field_update.hpp"
+#include "common/logger.hpp"
+#include "schema/schema.hpp"
+#include "common/types.hpp"
 
 using namespace tundradb;
 

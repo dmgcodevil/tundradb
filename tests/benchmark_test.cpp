@@ -9,11 +9,11 @@
 #include <string>
 #include <vector>
 
-#include "../include/core.hpp"
-#include "../include/logger.hpp"
-#include "../include/metadata.hpp"
-#include "../include/query.hpp"
-#include "../include/types.hpp"
+#include "main/database.hpp"
+#include "common/logger.hpp"
+#include "storage/metadata.hpp"
+#include "query/query.hpp"
+#include "common/types.hpp"
 
 // Helper macro for Arrow operations
 #define ASSERT_OK(expr) ASSERT_TRUE((expr).ok())

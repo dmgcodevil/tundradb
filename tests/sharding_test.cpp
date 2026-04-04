@@ -4,9 +4,9 @@
 #include <tuple>
 #include <vector>
 
-#include "../include/arrow_utils.hpp"
-#include "../include/core.hpp"
-#include "../include/debug_utils.hpp"
+#include "arrow/utils.hpp"
+#include "main/database.hpp"
+#include "common/debug_utils.hpp"
 using namespace tundradb;
 
 class ShardingTest : public ::testing::Test {

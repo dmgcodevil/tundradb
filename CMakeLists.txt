@@ -232,25 +232,16 @@ include_directories(
 )
 
 # Core library
-add_library(core
-        src/core.cpp
-        src/query.cpp
-        src/query_execution.cpp
-        src/join.cpp
-        src/row.cpp
-        src/shard.cpp
-        src/storage.cpp
-        src/metadata.cpp
+add_library(core)
 
-        src/snapshot_manager.cpp
-        src/edge_store.cpp
-        src/table_info.cpp
-        src/utils.cpp
-        src/schema.cpp
-        src/arrow_utils.cpp
-        src/types.cpp
-        src/clock.cpp
-)
+# Per-domain source directories
+add_subdirectory(src/common)
+add_subdirectory(src/arrow)
+add_subdirectory(src/schema)
+add_subdirectory(src/core)
+add_subdirectory(src/storage)
+add_subdirectory(src/query)
+add_subdirectory(src/main)
 
 target_include_directories(core
     PUBLIC
@@ -384,7 +375,7 @@ if(TUNDRADB_BUILD_SHELL)
     endif()
 
     # Interactive shell executable
-    add_executable(tundra_shell src/tundra_shell.cpp libs/linenoise/linenoise.c)
+    add_executable(tundra_shell apps/tundra_shell.cpp libs/linenoise/linenoise.c)
 
     target_include_directories(tundra_shell
         PRIVATE

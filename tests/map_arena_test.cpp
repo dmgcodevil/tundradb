@@ -1,19 +1,19 @@
-#include "../include/map_arena.hpp"
+#include "memory/map_arena.hpp"
 
 #include <gtest/gtest.h>
 
 #include <limits>
 #include <string>
 
-#include "../include/array_arena.hpp"
-#include "../include/clock.hpp"
-#include "../include/edge.hpp"
-#include "../include/node.hpp"
-#include "../include/node_arena.hpp"
-#include "../include/schema.hpp"
-#include "../include/schema_layout.hpp"
-#include "../include/types.hpp"
-#include "edge_store.hpp"
+#include "memory/array_arena.hpp"
+#include "common/clock.hpp"
+#include "core/edge.hpp"
+#include "core/node.hpp"
+#include "memory/node_arena.hpp"
+#include "schema/schema.hpp"
+#include "memory/schema_layout.hpp"
+#include "common/types.hpp"
+#include "core/edge_store.hpp"
 
 using namespace tundradb;
 
