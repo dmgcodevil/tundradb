@@ -12,7 +12,7 @@
 #include "memory/node_arena.hpp"
 #include "schema/schema.hpp"
 #include "memory/schema_layout.hpp"
-#include "temporal_context.hpp"
+#include "query/temporal_context.hpp"
 #include "common/types.hpp"
 #include "core/update_type.hpp"
 

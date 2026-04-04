@@ -1,4 +1,4 @@
-#include "join.hpp"
+#include "query/join.hpp"
 
 #include "common/logger.hpp"
 #include "common/utils.hpp"

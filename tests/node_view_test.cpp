@@ -9,7 +9,7 @@
 #include "memory/node_arena.hpp"
 #include "schema/schema.hpp"
 #include "memory/schema_layout.hpp"
-#include "../include/temporal_context.hpp"
+#include "query/temporal_context.hpp"
 
 using namespace tundradb;
 

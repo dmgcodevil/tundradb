@@ -1,4 +1,4 @@
-#include "query.hpp"
+#include "query/query.hpp"
 
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/DenseSet.h>

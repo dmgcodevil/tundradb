@@ -12,7 +12,7 @@
 #include "../include/core.hpp"
 #include "common/logger.hpp"
 #include "storage/metadata.hpp"
-#include "../include/query.hpp"
+#include "query/query.hpp"
 #include "common/types.hpp"
 
 // Helper macro for Arrow operations

@@ -18,7 +18,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "query.hpp"
+#include "query/query.hpp"
 #include "schema/schema.hpp"
 
 namespace tundradb {

@@ -7,7 +7,7 @@
 #include <string>
 
 #include "../include/core.hpp"
-#include "../include/query.hpp"
+#include "query/query.hpp"
 #include "common/types.hpp"
 
 using namespace tundradb;

@@ -240,14 +240,11 @@ add_subdirectory(src/arrow)
 add_subdirectory(src/schema)
 add_subdirectory(src/core)
 add_subdirectory(src/storage)
+add_subdirectory(src/query)
 
 # Sources not yet moved to domain folders
 target_sources(core PRIVATE
         src/core.cpp
-        src/query.cpp
-        src/query_execution.cpp
-        src/join.cpp
-        src/row.cpp
 )
 
 target_include_directories(core

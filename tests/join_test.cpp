@@ -8,7 +8,7 @@
 #include "common/debug_utils.hpp"
 #include "common/logger.hpp"
 #include "storage/metadata.hpp"
-#include "../include/query.hpp"
+#include "query/query.hpp"
 
 // Helper macro for Arrow operations
 #define ASSERT_OK(expr) ASSERT_TRUE((expr).ok())

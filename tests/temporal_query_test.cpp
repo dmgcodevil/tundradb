@@ -6,8 +6,8 @@
 #include "../include/core.hpp"
 #include "common/logger.hpp"
 #include "memory/node_arena.hpp"
-#include "../include/query.hpp"
-#include "../include/temporal_context.hpp"
+#include "query/query.hpp"
+#include "query/temporal_context.hpp"
 
 using namespace tundradb;
 

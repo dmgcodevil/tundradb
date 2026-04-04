@@ -5,7 +5,7 @@
 
 #include <memory>
 
-#include "query.hpp"
+#include "query/query.hpp"
 
 namespace tundradb {
 

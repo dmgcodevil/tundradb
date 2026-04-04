@@ -11,7 +11,7 @@
 #include "memory/node_arena.hpp"
 #include "core/node_view.hpp"
 #include "schema/schema.hpp"
-#include "temporal_context.hpp"
+#include "query/temporal_context.hpp"
 #include "common/types.hpp"
 #include "core/update_type.hpp"
 

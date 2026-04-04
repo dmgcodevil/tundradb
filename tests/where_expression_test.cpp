@@ -10,7 +10,7 @@
 #include "core/field_update.hpp"
 #include "common/logger.hpp"
 #include "storage/metadata.hpp"
-#include "../include/query.hpp"
+#include "query/query.hpp"
 #include "common/utils.hpp"
 
 // Helper macro for Arrow operations
