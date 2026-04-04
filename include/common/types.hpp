@@ -204,7 +204,9 @@ struct ValueRef {
 
   bool operator==(const ValueRef& other) const;
   bool operator!=(const ValueRef& other) const { return !(*this == other); }
-  [[nodiscard]] bool equals(const ValueRef& other) const { return *this == other; }
+  [[nodiscard]] bool equals(const ValueRef& other) const {
+    return *this == other;
+  }
 
   /// Human-readable string representation (strings are quoted).
   std::string ToString() const;

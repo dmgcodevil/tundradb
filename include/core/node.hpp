@@ -106,8 +106,7 @@ class NodeManager {
   ///             snapshot restore); otherwise an auto-incremented ID is used.
   arrow::Result<std::shared_ptr<Node>> create_node(
       const std::string &schema_name,
-      const std::unordered_map<std::string, Value> &data,
-      bool add = false);
+      const std::unordered_map<std::string, Value> &data, bool add = false);
 
   /// Override the next-ID counter for a schema (used during restore).
   void set_id_counter(const std::string &schema_name, int64_t value);

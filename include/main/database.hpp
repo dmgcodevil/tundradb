@@ -53,15 +53,23 @@ class Database {
   /// Return a copy of the configuration used to create this database.
   DatabaseConfig get_config() const { return config_; }
   /// Return the schema registry (shared ownership).
-  std::shared_ptr<SchemaRegistry> get_schema_registry() { return schema_registry_; }
+  std::shared_ptr<SchemaRegistry> get_schema_registry() {
+    return schema_registry_;
+  }
   /// Return the metadata manager (nullptr when persistence is disabled).
-  std::shared_ptr<MetadataManager> get_metadata_manager() { return metadata_manager_; }
+  std::shared_ptr<MetadataManager> get_metadata_manager() {
+    return metadata_manager_;
+  }
   /// Return the node manager (shared ownership).
   std::shared_ptr<NodeManager> get_node_manager() { return node_manager_; }
   /// Return the edge store (shared ownership).
-  [[nodiscard]] std::shared_ptr<EdgeStore> get_edge_store() const { return edge_store_; }
+  [[nodiscard]] std::shared_ptr<EdgeStore> get_edge_store() const {
+    return edge_store_;
+  }
   /// Return the shard manager (shared ownership).
-  [[nodiscard]] std::shared_ptr<ShardManager> get_shard_manager() const { return shard_manager_; }
+  [[nodiscard]] std::shared_ptr<ShardManager> get_shard_manager() const {
+    return shard_manager_;
+  }
 
   /// Initialise persistence subsystems (storage, metadata, snapshots).
   arrow::Result<bool> initialize();
@@ -87,7 +95,8 @@ class Database {
       const std::vector<FieldUpdate> &field_updates, UpdateType update_type);
 
   /// Remove a node from both the node manager and its shard.
-  arrow::Result<bool> remove_node(const std::string &schema_name, int64_t node_id);
+  arrow::Result<bool> remove_node(const std::string &schema_name,
+                                  int64_t node_id);
 
   /// Register a typed edge schema for edges of @p edge_type.
   arrow::Result<bool> register_edge_schema(
@@ -99,9 +108,9 @@ class Database {
                               int64_t target_id);
 
   /// Create an edge with property values attached.
-  arrow::Result<bool> connect(int64_t source_id, const std::string &type,
-                              int64_t target_id,
-                              std::unordered_map<std::string, Value> properties);
+  arrow::Result<bool> connect(
+      int64_t source_id, const std::string &type, int64_t target_id,
+      std::unordered_map<std::string, Value> properties);
 
   /// Remove an edge by its unique ID.
   arrow::Result<bool> remove_edge(int64_t edge_id);
@@ -120,7 +129,8 @@ class Database {
   /// Return the number of shards backing the given schema.
   arrow::Result<size_t> get_shard_count(const std::string &schema_name) const;
   /// Return the node count in each shard for the given schema.
-  arrow::Result<std::vector<size_t>> get_shard_sizes(const std::string &schema_name) const;
+  arrow::Result<std::vector<size_t>> get_shard_sizes(
+      const std::string &schema_name) const;
   /// Return the [min_id, max_id] range for each shard of the given schema.
   arrow::Result<std::vector<std::pair<int64_t, int64_t>>> get_shard_ranges(
       const std::string &schema_name) const;

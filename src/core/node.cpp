@@ -68,8 +68,8 @@ NodeManager::NodeManager(std::shared_ptr<SchemaRegistry> schema_registry,
       schema_registry_(std::move(schema_registry)),
       layout_registry_(std::make_shared<LayoutRegistry>()),
       node_arena_(node_arena_factory::create_free_list_arena(
-          layout_registry_, NodeArena::kInitialSize, NodeArena::kMinFragmentSize,
-          enable_versioning)) {}
+          layout_registry_, NodeArena::kInitialSize,
+          NodeArena::kMinFragmentSize, enable_versioning)) {}
 
 arrow::Result<std::shared_ptr<Node>> NodeManager::get_node(
     const std::string &schema_name, const int64_t id) {

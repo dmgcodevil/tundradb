@@ -40,8 +40,7 @@ arrow::Status Value::append_element(Value element) {
     return arrow::Status::OK();
   }
   if (!holds_raw_array()) {
-    return arrow::Status::TypeError(
-        "APPEND: target value is not a raw array");
+    return arrow::Status::TypeError("APPEND: target value is not a raw array");
   }
   as_raw_array_mut().push_back(std::move(element));
   return arrow::Status::OK();
@@ -93,8 +92,8 @@ std::string Value::to_string() const {
         std::string result = "[";
         for (uint32_t i = 0; i < arr.length(); ++i) {
           if (i > 0) result += ", ";
-          auto elem =
-              Value::read_value_from_memory(arr.element_ptr(i), arr.elem_type());
+          auto elem = Value::read_value_from_memory(arr.element_ptr(i),
+                                                    arr.elem_type());
           result += elem.to_string();
         }
         result += "]";
