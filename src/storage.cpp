@@ -20,10 +20,10 @@
 #include <vector>
 
 #include "arrow_utils.hpp"
-#include "constants.hpp"
+#include "common/constants.hpp"
 #include "edge_store.hpp"
 #include "json.hpp"
-#include "logger.hpp"
+#include "common/logger.hpp"
 #include "metadata.hpp"
 #include "node.hpp"
 #include "shard.hpp"

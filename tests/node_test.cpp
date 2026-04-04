@@ -8,9 +8,9 @@
 #include <unordered_map>
 
 #include "../include/field_update.hpp"
-#include "../include/logger.hpp"
+#include "common/logger.hpp"
 #include "../include/schema.hpp"
-#include "../include/types.hpp"
+#include "common/types.hpp"
 
 using namespace tundradb;
 

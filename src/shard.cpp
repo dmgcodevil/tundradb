@@ -1,7 +1,7 @@
 #include "shard.hpp"
 
-#include "logger.hpp"
-#include "utils.hpp"
+#include "common/logger.hpp"
+#include "common/utils.hpp"
 
 namespace tundradb {
 

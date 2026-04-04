@@ -7,7 +7,7 @@
 
 #include "node_arena.hpp"
 #include "schema.hpp"
-#include "types.hpp"
+#include "common/types.hpp"
 
 namespace tundradb {
 

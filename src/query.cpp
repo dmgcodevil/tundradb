@@ -6,7 +6,7 @@
 #include <llvm/ADT/StringMap.h>
 
 #include "edge.hpp"
-#include "logger.hpp"
+#include "common/logger.hpp"
 
 namespace tundradb {
 

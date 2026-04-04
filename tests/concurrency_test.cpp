@@ -1,4 +1,4 @@
-#include "concurrency.hpp"
+#include "common/concurrency.hpp"
 
 #include <gtest/gtest.h>
 #include <sys/resource.h>

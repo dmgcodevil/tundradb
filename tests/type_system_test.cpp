@@ -3,7 +3,7 @@
 #include <climits>
 
 #include "../include/type_descriptor.hpp"
-#include "../include/value_type.hpp"
+#include "common/value_type.hpp"
 
 using namespace tundradb;
 

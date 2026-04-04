@@ -6,13 +6,13 @@
 #include <string>
 #include <unordered_map>
 
-#include "constants.hpp"
-#include "logger.hpp"
+#include "common/constants.hpp"
+#include "common/logger.hpp"
 #include "node_arena.hpp"
 #include "node_view.hpp"
 #include "schema.hpp"
 #include "temporal_context.hpp"
-#include "types.hpp"
+#include "common/types.hpp"
 #include "update_type.hpp"
 
 namespace tundradb {

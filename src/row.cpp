@@ -1,6 +1,6 @@
 #include "row.hpp"
 
-#include "logger.hpp"
+#include "common/logger.hpp"
 
 namespace tundradb {
 

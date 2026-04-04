@@ -15,7 +15,7 @@
 #include "mem_utils.hpp"
 #include "schema.hpp"
 #include "type_descriptor.hpp"
-#include "types.hpp"
+#include "common/types.hpp"
 
 namespace tundradb {
 

@@ -16,11 +16,11 @@
 #include <unordered_set>
 
 #include "arrow_utils.hpp"
-#include "constants.hpp"
-#include "logger.hpp"
+#include "common/constants.hpp"
+#include "common/logger.hpp"
 #include "node.hpp"
 #include "query.hpp"
-#include "types.hpp"
+#include "common/types.hpp"
 
 namespace tundradb {
 

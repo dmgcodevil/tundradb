@@ -12,12 +12,12 @@
 #include <unordered_map>
 #include <vector>
 
-#include "constants.hpp"
+#include "common/constants.hpp"
 #include "edge.hpp"
-#include "logger.hpp"
+#include "common/logger.hpp"
 #include "node.hpp"
 #include "query.hpp"
-#include "types.hpp"
+#include "common/types.hpp"
 
 namespace tundradb {
 

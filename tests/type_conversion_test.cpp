@@ -2,7 +2,7 @@
 #include <gtest/gtest.h>
 
 #include "../include/schema.hpp"
-#include "../include/types.hpp"
+#include "common/types.hpp"
 
 using namespace tundradb;
 

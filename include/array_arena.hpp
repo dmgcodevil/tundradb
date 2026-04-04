@@ -12,7 +12,7 @@
 #include "array_ref.hpp"
 #include "free_list_arena.hpp"
 #include "string_ref.hpp"
-#include "value_type.hpp"
+#include "common/value_type.hpp"
 
 namespace tundradb {
 

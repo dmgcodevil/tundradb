@@ -8,10 +8,10 @@
 #include "../include/arrow_map_union_types.hpp"
 #include "../include/core.hpp"
 #include "../include/field_update.hpp"
-#include "../include/logger.hpp"
+#include "common/logger.hpp"
 #include "../include/metadata.hpp"
 #include "../include/query.hpp"
-#include "../include/utils.hpp"
+#include "common/utils.hpp"
 
 // Helper macro for Arrow operations
 #define ASSERT_OK(expr) ASSERT_TRUE((expr).ok())

@@ -7,7 +7,7 @@
 #include <filesystem>
 
 #include "core.hpp"
-#include "logger.hpp"
+#include "common/logger.hpp"
 
 using namespace tundradb;
 

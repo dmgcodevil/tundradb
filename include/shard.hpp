@@ -13,7 +13,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "config.hpp"
+#include "common/config.hpp"
 #include "field_update.hpp"
 #include "node.hpp"
 #include "schema.hpp"

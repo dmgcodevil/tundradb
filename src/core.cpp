@@ -22,10 +22,10 @@
 
 #include "arrow_utils.hpp"
 #include "join.hpp"
-#include "logger.hpp"
+#include "common/logger.hpp"
 #include "row.hpp"
 #include "temporal_context.hpp"
-#include "utils.hpp"
+#include "common/utils.hpp"
 
 namespace fs = std::filesystem;
 

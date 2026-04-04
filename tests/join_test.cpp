@@ -5,8 +5,8 @@
 #include <string>
 
 #include "../include/core.hpp"
-#include "../include/debug_utils.hpp"
-#include "../include/logger.hpp"
+#include "common/debug_utils.hpp"
+#include "common/logger.hpp"
 #include "../include/metadata.hpp"
 #include "../include/query.hpp"
 

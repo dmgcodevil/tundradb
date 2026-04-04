@@ -16,7 +16,7 @@
 
 #include "../include/string_arena.hpp"
 #include "../include/string_ref.hpp"
-#include "../include/types.hpp"
+#include "common/types.hpp"
 
 using namespace tundradb;
 

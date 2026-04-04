@@ -7,9 +7,9 @@
 #include <cstring>
 #include <type_traits>
 
-#include "constants.hpp"
+#include "common/constants.hpp"
 #include "string_ref.hpp"
-#include "value_type.hpp"
+#include "common/value_type.hpp"
 
 namespace tundradb {
 

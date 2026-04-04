@@ -13,10 +13,10 @@
 #include "file_utils.hpp"
 #include "json.hpp"
 #include "llvm/ADT/SmallVector.h"
-#include "logger.hpp"
+#include "common/logger.hpp"
 #include "schema.hpp"
 #include "type_descriptor.hpp"
-#include "types.hpp"
+#include "common/types.hpp"
 
 using namespace std::string_literals;
 

@@ -6,13 +6,13 @@
 #include <string>
 
 #include "../include/array_arena.hpp"
-#include "../include/clock.hpp"
+#include "common/clock.hpp"
 #include "../include/edge.hpp"
 #include "../include/node.hpp"
 #include "../include/node_arena.hpp"
 #include "../include/schema.hpp"
 #include "../include/schema_layout.hpp"
-#include "../include/types.hpp"
+#include "common/types.hpp"
 #include "edge_store.hpp"
 
 using namespace tundradb;

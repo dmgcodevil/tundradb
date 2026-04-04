@@ -7,13 +7,13 @@
 #include <utility>
 #include <vector>
 
-#include "constants.hpp"
+#include "common/constants.hpp"
 #include "edge_view.hpp"
 #include "node_arena.hpp"
 #include "schema.hpp"
 #include "schema_layout.hpp"
 #include "temporal_context.hpp"
-#include "types.hpp"
+#include "common/types.hpp"
 #include "update_type.hpp"
 
 namespace tundradb {

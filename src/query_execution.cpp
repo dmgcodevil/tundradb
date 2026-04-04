@@ -5,10 +5,10 @@
 
 #include "arrow_map_union_types.hpp"
 #include "arrow_utils.hpp"
-#include "constants.hpp"
+#include "common/constants.hpp"
 #include "edge_store.hpp"
-#include "logger.hpp"
-#include "utils.hpp"
+#include "common/logger.hpp"
+#include "common/utils.hpp"
 
 namespace tundradb {
 

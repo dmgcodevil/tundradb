@@ -10,10 +10,10 @@
 #include <vector>
 
 #include "../include/core.hpp"
-#include "../include/logger.hpp"
+#include "common/logger.hpp"
 #include "../include/metadata.hpp"
 #include "../include/query.hpp"
-#include "../include/utils.hpp"
+#include "common/utils.hpp"
 
 // Helper macro for Arrow operations
 #define ASSERT_OK(expr) ASSERT_TRUE((expr).ok())

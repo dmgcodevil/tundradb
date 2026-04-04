@@ -11,12 +11,12 @@
 #include <unordered_map>
 #include <vector>
 
-#include "concurrency.hpp"
+#include "common/concurrency.hpp"
 #include "edge.hpp"
 #include "node_arena.hpp"
 #include "schema.hpp"
 #include "schema_layout.hpp"
-#include "utils.hpp"
+#include "common/utils.hpp"
 
 namespace tundradb {
 

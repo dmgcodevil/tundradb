@@ -12,7 +12,7 @@
 #include <unordered_map>
 
 #include "array_arena.hpp"
-#include "clock.hpp"
+#include "common/clock.hpp"
 #include "field_update.hpp"
 #include "free_list_arena.hpp"
 #include "map_arena.hpp"
@@ -20,7 +20,7 @@
 #include "memory_arena.hpp"
 #include "schema_layout.hpp"
 #include "string_arena.hpp"
-#include "types.hpp"
+#include "common/types.hpp"
 #include "update_type.hpp"
 
 namespace tundradb {

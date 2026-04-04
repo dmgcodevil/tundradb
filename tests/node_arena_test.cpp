@@ -12,7 +12,7 @@
 #include "../include/node.hpp"
 #include "../include/schema.hpp"
 #include "../include/schema_layout.hpp"
-#include "../include/types.hpp"
+#include "common/types.hpp"
 
 using namespace tundradb;
 

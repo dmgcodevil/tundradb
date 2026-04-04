@@ -2,9 +2,9 @@
 
 #include <memory>
 
-#include "../include/clock.hpp"
+#include "common/clock.hpp"
 #include "../include/core.hpp"
-#include "../include/logger.hpp"
+#include "common/logger.hpp"
 #include "../include/node_arena.hpp"
 #include "../include/query.hpp"
 #include "../include/temporal_context.hpp"

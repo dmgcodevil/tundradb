@@ -7,7 +7,7 @@
 #include <string_view>
 #include <type_traits>
 
-#include "constants.hpp"
+#include "common/constants.hpp"
 
 namespace tundradb {
 

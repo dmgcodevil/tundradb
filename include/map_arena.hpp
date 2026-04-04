@@ -13,8 +13,8 @@
 #include "free_list_arena.hpp"
 #include "map_ref.hpp"
 #include "string_ref.hpp"
-#include "types.hpp"
-#include "value_type.hpp"
+#include "common/types.hpp"
+#include "common/value_type.hpp"
 
 namespace tundradb {
 

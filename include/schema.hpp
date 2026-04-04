@@ -12,9 +12,9 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
-#include "logger.hpp"
+#include "common/logger.hpp"
 #include "type_descriptor.hpp"
-#include "types.hpp"
+#include "common/types.hpp"
 
 namespace tundradb {
 

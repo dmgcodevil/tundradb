@@ -7,7 +7,7 @@
 #include "../include/arrow_map_union_types.hpp"
 #include "../include/core.hpp"
 #include "../include/query.hpp"
-#include "../include/utils.hpp"
+#include "common/utils.hpp"
 
 #define ASSERT_OK(expr) ASSERT_TRUE((expr).ok())
 

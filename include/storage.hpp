@@ -6,7 +6,7 @@
 #include <filesystem>
 #include <string>
 
-#include "config.hpp"
+#include "common/config.hpp"
 #include "edge.hpp"
 #include "metadata.hpp"
 

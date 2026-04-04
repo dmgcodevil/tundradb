@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <string>
 
-#include "value_type.hpp"
+#include "common/value_type.hpp"
 
 namespace tundradb {
 

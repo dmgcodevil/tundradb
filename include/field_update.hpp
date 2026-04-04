@@ -7,7 +7,7 @@
 #include <vector>
 
 #include "schema.hpp"
-#include "types.hpp"
+#include "common/types.hpp"
 #include "update_type.hpp"
 
 namespace tundradb {

@@ -245,12 +245,11 @@ add_library(core
         src/snapshot_manager.cpp
         src/edge_store.cpp
         src/table_info.cpp
-        src/utils.cpp
         src/schema.cpp
         src/arrow_utils.cpp
-        src/types.cpp
-        src/clock.cpp
 )
+
+add_subdirectory(src/common)
 
 target_include_directories(core
     PUBLIC

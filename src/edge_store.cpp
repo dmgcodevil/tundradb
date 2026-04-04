@@ -3,9 +3,9 @@
 #include <algorithm>
 #include <string>
 
-#include "constants.hpp"
+#include "common/constants.hpp"
 #include "json.hpp"
-#include "logger.hpp"
+#include "common/logger.hpp"
 #include "metadata.hpp"
 
 namespace tundradb {

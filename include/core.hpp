@@ -10,10 +10,10 @@
 #include <vector>
 
 #include "arrow_utils.hpp"
-#include "config.hpp"
+#include "common/config.hpp"
 #include "edge_store.hpp"
 #include "field_update.hpp"
-#include "logger.hpp"
+#include "common/logger.hpp"
 #include "metadata.hpp"
 #include "node.hpp"
 #include "query.hpp"
@@ -22,7 +22,7 @@
 #include "shard.hpp"
 #include "snapshot_manager.hpp"
 #include "storage.hpp"
-#include "utils.hpp"
+#include "common/utils.hpp"
 
 namespace tundradb {
 

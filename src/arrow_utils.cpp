@@ -14,7 +14,7 @@
 #include <cstring>
 
 #include "arrow_map_union_types.hpp"
-#include "logger.hpp"
+#include "common/logger.hpp"
 #include "node.hpp"
 #include "query.hpp"
 #include "schema.hpp"

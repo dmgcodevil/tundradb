@@ -27,12 +27,12 @@
 #include "TundraQLLexer.h"
 #include "TundraQLParser.h"
 #include "arrow_map_union_types.hpp"
-#include "constants.hpp"
+#include "common/constants.hpp"
 #include "core.hpp"
 #include "linenoise.h"
-#include "logger.hpp"
-#include "types.hpp"
-#include "utils.hpp"
+#include "common/logger.hpp"
+#include "common/types.hpp"
+#include "common/utils.hpp"
 
 // Tee stream class that outputs to both console and file
 class TeeStream : public std::ostream {
