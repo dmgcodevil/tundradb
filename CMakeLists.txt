@@ -375,7 +375,7 @@ if(TUNDRADB_BUILD_SHELL)
     endif()
 
     # Interactive shell executable
-    add_executable(tundra_shell src/tundra_shell.cpp libs/linenoise/linenoise.c)
+    add_executable(tundra_shell apps/tundra_shell.cpp libs/linenoise/linenoise.c)
 
     target_include_directories(tundra_shell
         PRIVATE
