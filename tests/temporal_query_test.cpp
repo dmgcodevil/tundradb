@@ -5,7 +5,7 @@
 #include "common/clock.hpp"
 #include "../include/core.hpp"
 #include "common/logger.hpp"
-#include "../include/node_arena.hpp"
+#include "memory/node_arena.hpp"
 #include "../include/query.hpp"
 #include "../include/temporal_context.hpp"
 

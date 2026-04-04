@@ -8,7 +8,7 @@
 
 #include "common/constants.hpp"
 #include "common/logger.hpp"
-#include "node_arena.hpp"
+#include "memory/node_arena.hpp"
 #include "node_view.hpp"
 #include "schema.hpp"
 #include "temporal_context.hpp"

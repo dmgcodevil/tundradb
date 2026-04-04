@@ -12,9 +12,9 @@
 // Arrow includes for type conversion functions
 #include <arrow/api.h>
 
-#include "array_ref.hpp"
-#include "map_ref.hpp"
-#include "string_arena.hpp"
+#include "memory/array_ref.hpp"
+#include "memory/map_ref.hpp"
+#include "memory/string_arena.hpp"
 
 namespace tundradb {
 

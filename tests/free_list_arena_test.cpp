@@ -1,5 +1,5 @@
 #define TESTING_ENABLED
-#include "../include/free_list_arena.hpp"
+#include "memory/free_list_arena.hpp"
 
 #include <gtest/gtest.h>
 

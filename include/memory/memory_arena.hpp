@@ -4,8 +4,8 @@
 #include <memory>
 #include <vector>
 
-#include "mem_arena.hpp"
-#include "mem_utils.hpp"
+#include "memory/mem_arena.hpp"
+#include "memory/mem_utils.hpp"
 
 namespace tundradb {
 

@@ -9,9 +9,9 @@
 #include <mutex>
 #include <new>
 
-#include "array_ref.hpp"
-#include "free_list_arena.hpp"
-#include "string_ref.hpp"
+#include "memory/array_ref.hpp"
+#include "memory/free_list_arena.hpp"
+#include "memory/string_ref.hpp"
 #include "common/value_type.hpp"
 
 namespace tundradb {

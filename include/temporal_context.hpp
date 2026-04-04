@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <unordered_map>
 
-#include "node_arena.hpp"
+#include "memory/node_arena.hpp"
 
 namespace tundradb {
 

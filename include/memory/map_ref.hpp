@@ -8,7 +8,7 @@
 #include <type_traits>
 
 #include "common/constants.hpp"
-#include "string_ref.hpp"
+#include "memory/string_ref.hpp"
 #include "common/value_type.hpp"
 
 namespace tundradb {

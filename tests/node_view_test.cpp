@@ -6,9 +6,9 @@
 #include <thread>
 
 #include "../include/node.hpp"
-#include "../include/node_arena.hpp"
+#include "memory/node_arena.hpp"
 #include "../include/schema.hpp"
-#include "../include/schema_layout.hpp"
+#include "memory/schema_layout.hpp"
 #include "../include/temporal_context.hpp"
 
 using namespace tundradb;

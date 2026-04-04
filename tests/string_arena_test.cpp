@@ -1,4 +1,4 @@
-#include "../include/string_arena.hpp"
+#include "memory/string_arena.hpp"
 
 #include <gtest/gtest.h>
 

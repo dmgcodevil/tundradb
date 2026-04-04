@@ -13,9 +13,9 @@
 
 #include "common/concurrency.hpp"
 #include "edge.hpp"
-#include "node_arena.hpp"
+#include "memory/node_arena.hpp"
 #include "schema.hpp"
-#include "schema_layout.hpp"
+#include "memory/schema_layout.hpp"
 #include "common/utils.hpp"
 
 namespace tundradb {

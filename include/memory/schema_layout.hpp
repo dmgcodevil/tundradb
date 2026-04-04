@@ -9,10 +9,10 @@
 #include <unordered_map>
 #include <vector>
 
-#include "array_ref.hpp"
+#include "memory/array_ref.hpp"
 #include "llvm/ADT/StringMap.h"
-#include "map_ref.hpp"
-#include "mem_utils.hpp"
+#include "memory/map_ref.hpp"
+#include "memory/mem_utils.hpp"
 #include "schema.hpp"
 #include "type_descriptor.hpp"
 #include "common/types.hpp"

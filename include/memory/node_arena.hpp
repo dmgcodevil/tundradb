@@ -11,15 +11,15 @@
 #include <string>
 #include <unordered_map>
 
-#include "array_arena.hpp"
+#include "memory/array_arena.hpp"
 #include "common/clock.hpp"
 #include "field_update.hpp"
-#include "free_list_arena.hpp"
-#include "map_arena.hpp"
-#include "mem_arena.hpp"
-#include "memory_arena.hpp"
-#include "schema_layout.hpp"
-#include "string_arena.hpp"
+#include "memory/free_list_arena.hpp"
+#include "memory/map_arena.hpp"
+#include "memory/mem_arena.hpp"
+#include "memory/memory_arena.hpp"
+#include "memory/schema_layout.hpp"
+#include "memory/string_arena.hpp"
 #include "common/types.hpp"
 #include "update_type.hpp"
 
