@@ -281,20 +281,18 @@ arrow::Result<std::shared_ptr<arrow::Table>> enrich_nested_select_fields(
 
 arrow::Result<std::string> SchemaContext::register_schema(
     const SchemaRef& schema_ref) {
-  if (aliases_.contains(schema_ref.value()) && schema_ref.is_declaration()) {
-    IF_DEBUG_ENABLED {
-      log_debug("Schema alias '{}' already assigned to '{}'",
-                schema_ref.value(), aliases_.at(schema_ref.value()));
-    }
-    return aliases_[schema_ref.value()];
+  if (!schema_ref.is_declaration()) {
+    return resolve(schema_ref);
   }
 
-  if (schema_ref.is_declaration()) {
-    aliases_[schema_ref.value()] = schema_ref.schema();
-    return schema_ref.schema();
+  auto [it, inserted] =
+      aliases_.emplace(schema_ref.value(), schema_ref.schema());
+  if (!inserted && it->second != schema_ref.schema()) {
+    return arrow::Status::Invalid(
+        "Alias '", schema_ref.value(), "' already bound to '", it->second,
+        "', cannot re-bind to '", schema_ref.schema(), "'");
   }
-
-  return aliases_[schema_ref.value()];
+  return schema_ref.schema();
 }
 
 arrow::Result<std::string> SchemaContext::resolve(
@@ -772,11 +770,9 @@ arrow::Result<std::shared_ptr<arrow::Table>> inline_where(
  *    - Registers source / target node aliases.
  *    - If an edge alias is present (e.g. `[e:WORKS_AT]`), creates a
  *      shadow schema via `ensure_edge_shadow_schema` and registers the
- *      alias (e.g. "e" -> "__edge__WORKS_AT") so that edge fields can
- *      be resolved through the standard schema registry.
- *    - Records the edge alias -> raw edge type mapping separately in
- *      `query_state.edge_aliases` (used later by the traversal engine
- *      to look up edges in EdgeStore).
+ *      alias (e.g. "e" -> "__edge__WORKS_AT") into the unified alias
+ *      map so that edge fields can be resolved through the standard
+ *      schema registry.
  *    - Computes BFS tags for source/target.
  *
  *  Phase 3 — WHERE: resolves every `FieldRef` inside `ComparisonExpr`
@@ -825,8 +821,6 @@ arrow::Status prepare_query(Query& query, QueryState& query_state) {
             query_state.register_schema(SchemaRef::parse(
                 traverse->edge_alias().value() + ":" + edge_shadow_schema)));
         (void)_edge_schema_name;
-        ARROW_RETURN_NOT_OK(query_state.register_edge_alias(
-            traverse->edge_alias().value(), traverse->edge_type()));
       }
 
       traverse->mutable_source().set_tag(compute_tag(traverse->source()));

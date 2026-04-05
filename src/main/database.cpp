@@ -809,11 +809,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           std::unordered_map<std::string, std::set<int64_t>> new_front_ids;
           std::string variable = *variables.begin();
           if (!query_state.tables.contains(variable)) {
-            const bool known_node_alias =
-                query_state.aliases().contains(variable);
-            const bool known_edge_alias =
-                query_state.edge_aliases.contains(variable);
-            if (!known_node_alias && !known_edge_alias) {
+            if (!query_state.aliases().contains(variable)) {
               return arrow::Status::Invalid("Unknown variable '{}'", variable);
             }
             // Alias is valid but not materialized as a table at this point

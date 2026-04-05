@@ -112,8 +112,15 @@ class SchemaContext {
   /**
    * @brief Registers a schema alias (e.g. "u" -> "User").
    *
+   * For declarations (alias:Schema): inserts the mapping.  Idempotent when
+   * the alias already maps to the same schema; returns an error if the alias
+   * is already bound to a different schema.
+   *
+   * For bare references (alias only): delegates to resolve().
+   *
    * @param schema_ref The schema reference containing alias and schema name.
-   * @return The resolved concrete schema name, or an error if unknown.
+   * @return The resolved concrete schema name, or an error on conflict /
+   *         unknown alias.
    */
   arrow::Result<std::string> register_schema(const SchemaRef& schema_ref);
 
@@ -419,8 +426,6 @@ struct QueryState {
 
   SchemaRef from;                    ///< Source schema from the FROM clause.
   std::vector<Traverse> traversals;  ///< Traverse clauses in query order.
-  std::unordered_map<std::string, std::string>
-      edge_aliases;  ///< edge alias -> edge type
 
   std::shared_ptr<NodeManager> node_manager;  ///< Node storage.
   std::shared_ptr<EdgeStore> edge_store;      ///< Edge storage.
@@ -433,32 +438,6 @@ struct QueryState {
   /** @brief Registers a schema alias. @see SchemaContext::register_schema. */
   arrow::Result<std::string> register_schema(const SchemaRef& ref) {
     return schemas.register_schema(ref);
-  }
-
-  /**
-   * Records a mapping from an edge alias to its raw edge type name.
-   *
-   * This is separate from the schema alias (which maps the alias to the
-   * shadow schema name like "__edge__WORKS_AT").  The raw edge type is
-   * needed later by the traversal engine to query EdgeStore by type.
-   *
-   * @param alias      The edge variable (e.g. "e").
-   * @param edge_type  The raw edge type (e.g. "WORKS_AT").
-   * @return true, or Invalid if the alias is empty or already bound to a
-   *         different type.
-   */
-  arrow::Result<bool> register_edge_alias(const std::string& alias,
-                                          const std::string& edge_type) {
-    if (alias.empty()) {
-      return arrow::Status::Invalid("Edge alias cannot be empty");
-    }
-    if (auto [it, inserted] = edge_aliases.emplace(alias, edge_type);
-        !inserted && it->second != edge_type) {
-      return arrow::Status::Invalid("Edge alias '", alias,
-                                    "' is already bound to edge type '",
-                                    it->second, "'");
-    }
-    return true;
   }
 
   /** @brief Resolves a schema alias to its concrete name. */
