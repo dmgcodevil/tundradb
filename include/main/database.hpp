@@ -183,8 +183,6 @@ class Database {
    * are skipped.  Returns an error if the same alias is bound to two different
    * schemas.
    */
-  static arrow::Result<std::unordered_map<std::string, std::string>>
-  resolve_alias_map(const Query &query);
 };
 
 }  // namespace tundradb

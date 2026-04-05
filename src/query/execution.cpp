@@ -727,7 +727,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> inline_where(
  *                     and the schema registry.
  * @return OK on success, or a KeyError / Invalid status if resolution fails.
  */
-arrow::Status prepare_query(Query& query, QueryState& query_state) {
+arrow::Status prepare_query(const Query& query, QueryState& query_state) {
   // Phase 1: Process FROM clause to populate aliases
   {
     ARROW_ASSIGN_OR_RAISE(auto from_schema,

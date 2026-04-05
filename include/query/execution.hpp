@@ -713,7 +713,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> inline_where(
  * @param query_state The execution state to populate.
  * @return OK on success, or an error.
  */
-arrow::Status prepare_query(Query& query, QueryState& query_state);
+arrow::Status prepare_query(const Query& query, QueryState& query_state);
 
 }  // namespace tundradb
 

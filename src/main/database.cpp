@@ -718,13 +718,11 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
   }
   query_state.node_manager = this->node_manager_;
   query_state.edge_store = this->edge_store_;
-  query_state.from = query.from();
 
   {
     IF_DEBUG_ENABLED {
       log_debug("processing 'from' {}", query.from().toString());
     }
-    // Precompute tag for FROM schema (alias-based hash)
     query_state.from = query.from();
     query_state.from.set_tag(compute_tag(query_state.from));
     ARROW_ASSIGN_OR_RAISE(auto source_schema,
@@ -752,7 +750,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           "field references");
     }
     auto preparation_result =
-        prepare_query(const_cast<Query&>(query), query_state);
+        prepare_query(query, query_state);
     if (!preparation_result.ok()) {
       log_error("Failed to prepare query: {}", preparation_result.ToString());
       return preparation_result;
@@ -1244,8 +1242,18 @@ arrow::Result<UpdateResult> Database::update_by_match(const UpdateQuery& uq) {
   UpdateResult result;
   const auto& match_query = uq.match_query().value();
 
-  // 1. Resolve alias -> schema mapping
-  ARROW_ASSIGN_OR_RAISE(auto alias_to_schema, resolve_alias_map(match_query));
+  // 1. Build alias -> schema from node declarations
+  std::unordered_map<std::string, std::string> alias_to_schema;
+  if (match_query.from().is_declaration())
+    alias_to_schema[match_query.from().value()] = match_query.from().schema();
+  for (const auto& clause : match_query.clauses()) {
+    if (clause->type() != Clause::Type::TRAVERSE) continue;
+    auto t = std::static_pointer_cast<Traverse>(clause);
+    if (t->source().is_declaration())
+      alias_to_schema[t->source().value()] = t->source().schema();
+    if (t->target().is_declaration())
+      alias_to_schema[t->target().value()] = t->target().schema();
+  }
 
   auto find_traverse =
       [&](const std::string& edge_alias) -> std::shared_ptr<Traverse> {
@@ -1398,39 +1406,6 @@ void Database::apply_updates(
       }
     }
   }
-}
-
-// ---------------------------------------------------------------------------
-// resolve_alias_map - build alias->schema from declarations, reject conflicts
-// ---------------------------------------------------------------------------
-arrow::Result<std::unordered_map<std::string, std::string>>
-Database::resolve_alias_map(const Query& query) {
-  std::unordered_map<std::string, std::string> map;
-
-  auto register_ref = [&](const SchemaRef& ref) -> arrow::Status {
-    if (!ref.is_declaration()) return arrow::Status::OK();
-    const auto& alias = ref.value();
-    const auto& schema = ref.schema();
-    if (auto [it, inserted] = map.emplace(alias, schema);
-        !inserted && it->second != schema) {
-      return arrow::Status::Invalid("Alias '", alias, "' bound to '",
-                                    it->second, "' cannot be re-bound to '",
-                                    schema, "'");
-    }
-    return arrow::Status::OK();
-  };
-
-  ARROW_RETURN_NOT_OK(register_ref(query.from()));
-
-  for (const auto& clause : query.clauses()) {
-    if (clause->type() == Clause::Type::TRAVERSE) {
-      const auto t = std::static_pointer_cast<Traverse>(clause);
-      ARROW_RETURN_NOT_OK(register_ref(t->source()));
-      ARROW_RETURN_NOT_OK(register_ref(t->target()));
-    }
-  }
-
-  return map;
 }
 
 }  // namespace tundradb
