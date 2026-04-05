@@ -749,8 +749,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
           "Preparing query: populating aliases, traversals, and resolving "
           "field references");
     }
-    auto preparation_result =
-        prepare_query(query, query_state);
+    auto preparation_result = prepare_query(query, query_state);
     if (!preparation_result.ok()) {
       log_error("Failed to prepare query: {}", preparation_result.ToString());
       return preparation_result;
