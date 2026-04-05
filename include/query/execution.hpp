@@ -705,6 +705,47 @@ arrow::Result<std::shared_ptr<arrow::Table>> inline_where(
  */
 arrow::Status prepare_query(const Query& query, QueryState& query_state);
 
+/**
+ * @brief Executes one graph-pattern hop for a @c TRAVERSE clause.
+ *
+ * Walks the current source frontier in @p query_state (IDs under
+ * @c traverse.source().value()), loads each node's outgoing edges of type
+ * @c traverse.edge_type(), and keeps edges whose target resolves to a node in
+ * @p target_schema. Optional pruning applies when @p query_state already
+ * holds IDs for the target alias: targets not in that set are skipped.
+ *
+ * For each surviving edge, @p node_filters are evaluated on the target node and
+ * @p edge_filters on the edge (typically inlined WHERE expressions). Matches
+ * append a @c Connection to @p query_state (per-source connection lists and
+ * @c incoming on the target id) for later row materialization.
+ *
+ * The three output sets support @c JoinStrategy: sources with at least one
+ * matching edge, distinct matched target ids, and sources with no matching
+ * edge. Callers should clear these sets before calling if they are reused.
+ *
+ * @param traverse Parsed TRAVERSE (source/target aliases, edge type, optional
+ *        edge alias).
+ * @param target_schema Resolved concrete schema name for the target endpoint.
+ * @param query_state Execution state; must have @c node_manager, @c edge_store,
+ *        populated @c ids for the source alias, and (when used) target ids.
+ * @param node_filters WHERE expressions applied to each candidate target node.
+ * @param edge_filters WHERE expressions applied to each candidate edge.
+ * @param[out] matched_source_ids Source node ids that had ≥1 accepted edge.
+ * @param[out] matched_target_ids Distinct target node ids reached by accepted
+ *             edges.
+ * @param[out] unmatched_source_ids Source ids with no accepted edge.
+ * @return @c arrow::Status::OK() on success, or the first error from filter
+ *         evaluation.
+ */
+arrow::Status expand_traverse_hop(
+    const Traverse& traverse, const std::string& target_schema,
+    QueryState& query_state,
+    const std::vector<std::shared_ptr<WhereExpr>>& node_filters,
+    const std::vector<std::shared_ptr<WhereExpr>>& edge_filters,
+    llvm::DenseSet<int64_t>& matched_source_ids,
+    llvm::DenseSet<int64_t>& matched_target_ids,
+    llvm::DenseSet<int64_t>& unmatched_source_ids);
+
 }  // namespace tundradb
 
 #endif  // QUERY_EXECUTION_HPP

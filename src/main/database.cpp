@@ -886,105 +886,12 @@ arrow::Status Database::execute_traverse(
         query_state.update_table(source_table, traverse->source()));
   }
 
-  IF_DEBUG_ENABLED {
-    log_debug("Traversing from {} source nodes",
-              query_state.ids()[source.value()].size());
-  }
   llvm::DenseSet<int64_t> matched_source_ids;
   llvm::DenseSet<int64_t> matched_target_ids;
   llvm::DenseSet<int64_t> unmatched_source_ids;
-  for (auto source_id : query_state.ids()[source.value()]) {
-    auto outgoing_edges =
-        edge_store_->get_outgoing_edges(source_id, traverse->edge_type())
-            .ValueOrDie();
-    IF_DEBUG_ENABLED {
-      log_debug("Node {} has {} outgoing edges of type '{}'", source_id,
-                outgoing_edges.size(), traverse->edge_type());
-    }
-
-    bool source_had_match = false;
-    for (const auto& edge : outgoing_edges) {
-      auto target_id = edge->get_target_id();
-      if (query_state.ids().contains(traverse->target().value()) &&
-          !query_state.ids()
-               .at(traverse->target().value())
-               .contains(target_id)) {
-        continue;
-      }
-      auto node_result = node_manager_->get_node(target_schema, target_id);
-      if (node_result.ok()) {
-        if (const auto target_node = node_result.ValueOrDie();
-            target_node->schema_name == target_schema) {
-          bool passes_all_filters = true;
-          for (const auto& where_clause : where_clauses) {
-            auto node_where = apply_where_to_node(where_clause, target_node);
-            if (!node_where.ok()) {
-              return node_where.status();
-            }
-            if (!node_where.ValueOrDie()) {
-              passes_all_filters = false;
-              break;
-            }
-          }
-          if (passes_all_filters) {
-            for (const auto& where_clause : edge_where_clauses) {
-              auto edge_where = apply_where_to_edge(where_clause, edge);
-              if (!edge_where.ok()) {
-                return edge_where.status();
-              }
-              if (!edge_where.ValueOrDie()) {
-                passes_all_filters = false;
-                break;
-              }
-            }
-          }
-          if (passes_all_filters) {
-            IF_DEBUG_ENABLED {
-              log_debug("found edge {}:{} -[{}{}]-> {}:{}", source.value(),
-                        source_id,
-                        traverse->edge_alias().has_value()
-                            ? traverse->edge_alias().value() + ":"
-                            : "",
-                        traverse->edge_type(), traverse->target().value(),
-                        target_node->id);
-            }
-            if (!source_had_match) {
-              matched_source_ids.insert(source_id);
-              source_had_match = true;
-            }
-            matched_target_ids.insert(target_node->id);
-            auto& conn = query_state.connection_pool().get();
-            conn.source = traverse->source();
-            conn.source_id = source_id;
-            conn.edge_id = edge->get_id();
-            conn.edge_alias = traverse->edge_alias();
-            conn.edge_type = traverse->edge_type();
-            conn.label = "";
-            conn.target = traverse->target();
-            conn.target_id = target_node->id;
-
-            query_state.connections()[traverse->source().value()][source_id]
-                .push_back(conn);
-            query_state.incoming()[target_node->id].push_back(conn);
-          }
-        }
-      } else {
-        log_warn("Failed to get node {}:{}, error: {}",
-                 traverse->target().value(), target_id,
-                 node_result.status().ToString());
-      }
-    }
-    if (!source_had_match) {
-      IF_DEBUG_ENABLED {
-        log_debug("no edge found from {}:{}", source.value(), source_id);
-      }
-      unmatched_source_ids.insert(source_id);
-    }
-  }
-  IF_DEBUG_ENABLED {
-    log_debug("found {} neighbors for {}", matched_target_ids.size(),
-              traverse->target().toString());
-  }
+  ARROW_RETURN_NOT_OK(expand_traverse_hop(
+      *traverse, target_schema, query_state, where_clauses, edge_where_clauses,
+      matched_source_ids, matched_target_ids, unmatched_source_ids));
 
   llvm::DenseSet<int64_t> all_target_ids;
   if (traverse->traverse_type() == TraverseType::Right ||

@@ -786,4 +786,104 @@ arrow::Status prepare_query(const Query& query, QueryState& query_state) {
   return arrow::Status::OK();
 }
 
+// See declaration in execution.hpp for behavior and parameters.
+arrow::Status expand_traverse_hop(
+    const Traverse& traverse, const std::string& target_schema,
+    QueryState& query_state,
+    const std::vector<std::shared_ptr<WhereExpr>>& node_filters,
+    const std::vector<std::shared_ptr<WhereExpr>>& edge_filters,
+    llvm::DenseSet<int64_t>& matched_source_ids,
+    llvm::DenseSet<int64_t>& matched_target_ids,
+    llvm::DenseSet<int64_t>& unmatched_source_ids) {
+  const auto& source_alias = traverse.source().value();
+  for (auto source_id : query_state.ids()[source_alias]) {
+    auto outgoing_edges =
+        query_state.edge_store
+            ->get_outgoing_edges(source_id, traverse.edge_type())
+            .ValueOrDie();
+    IF_DEBUG_ENABLED {
+      log_debug("Node {} has {} outgoing edges of type '{}'", source_id,
+                outgoing_edges.size(), traverse.edge_type());
+    }
+
+    bool source_had_match = false;
+    for (const auto& edge : outgoing_edges) {
+      auto target_id = edge->get_target_id();
+      if (query_state.ids().contains(traverse.target().value()) &&
+          !query_state.ids()
+               .at(traverse.target().value())
+               .contains(target_id)) {
+        continue;
+      }
+      auto node_result =
+          query_state.node_manager->get_node(target_schema, target_id);
+      if (!node_result.ok()) {
+        log_warn("Failed to get node {}:{}, error: {}",
+                 traverse.target().value(), target_id,
+                 node_result.status().ToString());
+        continue;
+      }
+      const auto target_node = node_result.ValueOrDie();
+      if (target_node->schema_name != target_schema) continue;
+
+      bool passes = true;
+      for (const auto& wc : node_filters) {
+        ARROW_ASSIGN_OR_RAISE(const bool ok,
+                              apply_where_to_node(wc, target_node));
+        if (!ok) {
+          passes = false;
+          break;
+        }
+      }
+      if (passes) {
+        for (const auto& wc : edge_filters) {
+          ARROW_ASSIGN_OR_RAISE(bool ok, apply_where_to_edge(wc, edge));
+          if (!ok) {
+            passes = false;
+            break;
+          }
+        }
+      }
+      if (!passes) continue;
+
+      IF_DEBUG_ENABLED {
+        log_debug("found edge {}:{} -[{}{}]-> {}:{}", source_alias, source_id,
+                  traverse.edge_alias().has_value()
+                      ? traverse.edge_alias().value() + ":"
+                      : "",
+                  traverse.edge_type(), traverse.target().value(),
+                  target_node->id);
+      }
+      if (!source_had_match) {
+        matched_source_ids.insert(source_id);
+        source_had_match = true;
+      }
+      matched_target_ids.insert(target_node->id);
+
+      auto& conn = query_state.connection_pool().get();
+      conn.source = traverse.source();
+      conn.source_id = source_id;
+      conn.edge_id = edge->get_id();
+      conn.edge_alias = traverse.edge_alias();
+      conn.edge_type = traverse.edge_type();
+      conn.label = "";
+      conn.target = traverse.target();
+      conn.target_id = target_node->id;
+      query_state.connections()[source_alias][source_id].push_back(conn);
+      query_state.incoming()[target_node->id].push_back(conn);
+    }
+    if (!source_had_match) {
+      IF_DEBUG_ENABLED {
+        log_debug("no edge found from {}:{}", source_alias, source_id);
+      }
+      unmatched_source_ids.insert(source_id);
+    }
+  }
+  IF_DEBUG_ENABLED {
+    log_debug("found {} neighbors for {}", matched_target_ids.size(),
+              traverse.target().toString());
+  }
+  return arrow::Status::OK();
+}
+
 }  // namespace tundradb
