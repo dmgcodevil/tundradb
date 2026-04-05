@@ -580,102 +580,25 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_rows(
 
   // Create array builders for each field
   std::vector<std::unique_ptr<arrow::ArrayBuilder>> builders;
-  std::vector<std::string>
-      field_names;  // Cache field names to avoid repeated lookups
-
   for (const auto& field : output_schema->fields()) {
     ARROW_ASSIGN_OR_RAISE(auto builder, arrow::MakeBuilder(field->type()));
     builders.push_back(std::move(builder));
-    field_names.push_back(field->name());
   }
 
-  // Pre-allocate builders for better performance
+  const size_t num_fields = builders.size();
   const size_t num_rows = rows->size();
   for (auto& builder : builders) {
     ARROW_RETURN_NOT_OK(builder->Reserve(num_rows));
   }
 
-  // Populate the builders from each row
   for (const auto& row : *rows) {
-    for (size_t i = 0; i < field_names.size(); i++) {
-      const auto& field_name = field_names[i];  // Use cached field name
-
-      // Optimization: try indexed access first, fallback to string lookup
+    for (size_t i = 0; i < num_fields; i++) {
       ValueRef value_ref;
-      bool has_value = false;
-
       if (i < row->cells.size() && row->cells[i].data != nullptr) {
         value_ref = row->cells[i];
-        has_value = true;
       }
-
-      if (has_value) {
-        // We have a value for this field - append directly without creating
-        // scalars
-        arrow::Status append_status;
-
-        switch (value_ref.type) {
-          case ValueType::INT32:
-            append_status = static_cast<arrow::Int32Builder*>(builders[i].get())
-                                ->Append(value_ref.as_int32());
-            break;
-          case ValueType::INT64:
-            append_status = static_cast<arrow::Int64Builder*>(builders[i].get())
-                                ->Append(value_ref.as_int64());
-            break;
-          case ValueType::DOUBLE:
-            append_status =
-                static_cast<arrow::DoubleBuilder*>(builders[i].get())
-                    ->Append(value_ref.as_double());
-            break;
-          case ValueType::STRING: {
-            const auto& str_ref = value_ref.as_string_ref();
-            append_status =
-                static_cast<arrow::StringBuilder*>(builders[i].get())
-                    ->Append(str_ref.data(), str_ref.length());
-            break;
-          }
-          case ValueType::BOOL:
-            append_status =
-                static_cast<arrow::BooleanBuilder*>(builders[i].get())
-                    ->Append(value_ref.as_bool());
-            break;
-          case ValueType::ARRAY: {
-            const auto& arr_ref = value_ref.as_array_ref();
-            auto* list_builder =
-                dynamic_cast<arrow::ListBuilder*>(builders[i].get());
-            if (!list_builder) {
-              append_status = arrow::Status::Invalid(
-                  "Expected ListBuilder for field: ", field_name);
-              break;
-            }
-            append_status = append_array_to_list_builder(arr_ref, list_builder);
-            break;
-          }
-          case ValueType::MAP: {
-            const auto& map_ref = value_ref.as_map_ref();
-            auto* map_builder =
-                dynamic_cast<arrow::MapBuilder*>(builders[i].get());
-            if (!map_builder) {
-              append_status = arrow::Status::Invalid(
-                  "Expected MapBuilder for field: ", field_name);
-              break;
-            }
-            append_status = append_map_to_map_builder(map_ref, map_builder);
-            break;
-          }
-          default:
-            append_status = builders[i]->AppendNull();
-            break;
-        }
-
-        if (append_status.ok()) {
-          continue;
-        }
-      }
-
-      // Fall back to NULL if we couldn't append the value
-      ARROW_RETURN_NOT_OK(builders[i]->AppendNull());
+      ARROW_RETURN_NOT_OK(
+          append_value_to_builder(value_ref, builders[i].get()));
     }
   }
 

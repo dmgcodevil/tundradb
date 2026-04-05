@@ -254,85 +254,12 @@ static arrow::Result<std::shared_ptr<arrow::Table>> create_table(
 
     for (int i = 0; i < schema->num_fields(); i++) {
       const auto& field = schema->field(i);
-      auto field_result = view.get_value_ptr(field);  // ✅ Use NodeView!
-      if (!field_result.ok()) {
-        ARROW_RETURN_NOT_OK(builders[i]->AppendNull());
-      } else {
-        const auto value_ptr = field_result.ValueOrDie();
-        if (value_ptr == nullptr) {
-          ARROW_RETURN_NOT_OK(builders[i]->AppendNull());
-        } else {
-          switch (field->type()) {
-            case ValueType::INT32: {
-              ARROW_RETURN_NOT_OK(
-                  dynamic_cast<arrow::Int32Builder*>(builders[i].get())
-                      ->Append(*reinterpret_cast<const int32_t*>(value_ptr)));
-              break;
-            }
-            case ValueType::INT64: {
-              ARROW_RETURN_NOT_OK(
-                  dynamic_cast<arrow::Int64Builder*>(builders[i].get())
-                      ->Append(*reinterpret_cast<const int64_t*>(value_ptr)));
-              break;
-            }
-            case ValueType::FLOAT: {
-              //         return Value{*reinterpret_cast<const double*>(ptr)};
-              ARROW_RETURN_NOT_OK(
-                  dynamic_cast<arrow::FloatBuilder*>(builders[i].get())
-                      ->Append(*reinterpret_cast<const float*>(value_ptr)));
-              break;
-            }
-            case ValueType::DOUBLE: {
-              ARROW_RETURN_NOT_OK(
-                  dynamic_cast<arrow::DoubleBuilder*>(builders[i].get())
-                      ->Append(*reinterpret_cast<const double*>(value_ptr)));
-              break;
-            }
-            case ValueType::BOOL: {
-              ARROW_RETURN_NOT_OK(
-                  dynamic_cast<arrow::BooleanBuilder*>(builders[i].get())
-                      ->Append(*reinterpret_cast<const bool*>(value_ptr)));
-              break;
-            }
-            case ValueType::STRING: {
-              auto str_ref = *reinterpret_cast<const StringRef*>(value_ptr);
-
-              ARROW_RETURN_NOT_OK(
-                  dynamic_cast<arrow::StringBuilder*>(builders[i].get())
-                      ->Append(str_ref.to_string()));
-              break;
-            }
-            case ValueType::ARRAY: {
-              const auto& arr_ref =
-                  *reinterpret_cast<const ArrayRef*>(value_ptr);
-              auto* list_builder =
-                  dynamic_cast<arrow::ListBuilder*>(builders[i].get());
-              if (!list_builder) {
-                return arrow::Status::Invalid(
-                    "Expected ListBuilder for array field: ", field->name());
-              }
-              ARROW_RETURN_NOT_OK(
-                  append_array_to_list_builder(arr_ref, list_builder));
-              break;
-            }
-            case ValueType::MAP: {
-              const auto& map_ref = *reinterpret_cast<const MapRef*>(value_ptr);
-              auto* map_builder =
-                  dynamic_cast<arrow::MapBuilder*>(builders[i].get());
-              if (!map_builder) {
-                return arrow::Status::Invalid(
-                    "Expected MapBuilder for MAP field: ", field->name());
-              }
-              ARROW_RETURN_NOT_OK(
-                  append_map_to_map_builder(map_ref, map_builder));
-              break;
-            }
-            default:
-              return arrow::Status::NotImplemented("Unsupported type: ",
-                                                   to_string(field->type()));
-          }
-        }
+      auto field_result = view.get_value_ptr(field);
+      ValueRef vr;
+      if (field_result.ok() && field_result.ValueOrDie() != nullptr) {
+        vr = ValueRef(field_result.ValueOrDie(), field->type());
       }
+      ARROW_RETURN_NOT_OK(append_value_to_builder(vr, builders[i].get()));
     }
 
     nodes_in_current_chunk++;

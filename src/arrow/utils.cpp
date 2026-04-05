@@ -233,6 +233,50 @@ arrow::Result<Value> array_element_to_value(
   }
 }
 
+arrow::Status append_value_to_builder(const ValueRef& value,
+                                      arrow::ArrayBuilder* builder) {
+  if (value.data == nullptr) {
+    return builder->AppendNull();
+  }
+  switch (value.type) {
+    case ValueType::INT32:
+      return static_cast<arrow::Int32Builder*>(builder)->Append(
+          value.as_int32());
+    case ValueType::INT64:
+      return static_cast<arrow::Int64Builder*>(builder)->Append(
+          value.as_int64());
+    case ValueType::FLOAT:
+      return static_cast<arrow::FloatBuilder*>(builder)->Append(
+          value.as_float());
+    case ValueType::DOUBLE:
+      return static_cast<arrow::DoubleBuilder*>(builder)->Append(
+          value.as_double());
+    case ValueType::BOOL:
+      return static_cast<arrow::BooleanBuilder*>(builder)->Append(
+          value.as_bool());
+    case ValueType::STRING:
+    case ValueType::FIXED_STRING16:
+    case ValueType::FIXED_STRING32:
+    case ValueType::FIXED_STRING64: {
+      const auto& s = value.as_string_ref();
+      return static_cast<arrow::StringBuilder*>(builder)->Append(s.data(),
+                                                                 s.length());
+    }
+    case ValueType::ARRAY: {
+      auto* lb = dynamic_cast<arrow::ListBuilder*>(builder);
+      if (!lb) return arrow::Status::Invalid("Expected ListBuilder for ARRAY");
+      return append_array_to_list_builder(value.as_array_ref(), lb);
+    }
+    case ValueType::MAP: {
+      auto* mb = dynamic_cast<arrow::MapBuilder*>(builder);
+      if (!mb) return arrow::Status::Invalid("Expected MapBuilder for MAP");
+      return append_map_to_map_builder(value.as_map_ref(), mb);
+    }
+    default:
+      return builder->AppendNull();
+  }
+}
+
 arrow::Status append_array_to_list_builder(const ArrayRef& arr_ref,
                                            arrow::ListBuilder* list_builder) {
   if (arr_ref.is_null()) {
@@ -418,74 +462,14 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_table_from_nodes(
   }
   for (const auto& node : nodes) {
     auto view = node->view(nullptr);
-
     for (int i = 0; i < schema->num_fields(); i++) {
       auto field = schema->field(i);
-      const auto& field_name = field->name();
-
       auto res = view.get_value_ptr(field);
-      if (res.ok()) {
-        auto value = res.ValueOrDie();
-        if (value) {
-          if (field->type() == ValueType::ARRAY) {
-            const auto& arr_ref = *reinterpret_cast<const ArrayRef*>(value);
-            auto* list_builder =
-                dynamic_cast<arrow::ListBuilder*>(builders[i].get());
-            if (!list_builder) {
-              return arrow::Status::Invalid(
-                  "Expected ListBuilder for array field: ", field_name);
-            }
-            ARROW_RETURN_NOT_OK(
-                append_array_to_list_builder(arr_ref, list_builder));
-          } else if (field->type() == ValueType::MAP) {
-            const auto& map_ref = *reinterpret_cast<const MapRef*>(value);
-            auto* map_builder =
-                dynamic_cast<arrow::MapBuilder*>(builders[i].get());
-            if (!map_builder) {
-              return arrow::Status::Invalid(
-                  "Expected MapBuilder for MAP field: ", field_name);
-            }
-            ARROW_RETURN_NOT_OK(
-                append_map_to_map_builder(map_ref, map_builder));
-          } else {
-            auto scalar_result =
-                value_ptr_to_arrow_scalar(value, field->type());
-            if (!scalar_result.ok()) {
-              log_error("Failed to convert value to scalar for field '{}': {}",
-                        field_name, scalar_result.status().ToString());
-              return scalar_result.status();
-            }
-
-            const auto& scalar = scalar_result.ValueOrDie();
-            auto status = builders[i]->AppendScalar(*scalar);
-            if (!status.ok()) {
-              log_error("Failed to append scalar for field '{}': {}",
-                        field_name, status.ToString());
-              return status;
-            }
-          }
-        } else {
-          IF_DEBUG_ENABLED {
-            log_debug("Null value for field '{}', appending null", field_name);
-          }
-          auto status = builders[i]->AppendNull();
-          if (!status.ok()) {
-            log_error("Failed to append null for field '{}': {}", field_name,
-                      status.ToString());
-            return status;
-          }
-        }
-      } else {
-        IF_DEBUG_ENABLED {
-          log_debug("Field '{}' not found in node, appending null", field_name);
-        }
-        auto status = builders[i]->AppendNull();
-        if (!status.ok()) {
-          log_error("Failed to append null for field '{}': {}", field_name,
-                    status.ToString());
-          return status;
-        }
+      ValueRef vr;
+      if (res.ok() && res.ValueOrDie() != nullptr) {
+        vr = ValueRef(res.ValueOrDie(), field->type());
       }
+      ARROW_RETURN_NOT_OK(append_value_to_builder(vr, builders[i].get()));
     }
   }
 
