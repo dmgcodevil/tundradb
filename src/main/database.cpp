@@ -1254,17 +1254,6 @@ arrow::Result<UpdateResult> Database::update_by_match(const UpdateQuery& uq) {
       alias_to_schema[t->target().value()] = t->target().schema();
   }
 
-  auto find_traverse =
-      [&](const std::string& edge_alias) -> std::shared_ptr<Traverse> {
-    for (const auto& clause : match_query.clauses()) {
-      if (clause->type() != Clause::Type::TRAVERSE) continue;
-      auto t = std::static_pointer_cast<Traverse>(clause);
-      if (t->edge_alias().has_value() && t->edge_alias().value() == edge_alias)
-        return t;
-    }
-    return nullptr;
-  };
-
   // 2. Group SET assignments by alias: { alias -> [FieldUpdate] }
   std::unordered_map<std::string, std::vector<FieldUpdate>> updates_by_alias;
   for (const auto& a : uq.assignments()) {
@@ -1278,7 +1267,7 @@ arrow::Result<UpdateResult> Database::update_by_match(const UpdateQuery& uq) {
     const std::string& bare_field = parsed.field_name();
 
     std::shared_ptr<Field> field;
-    if (auto trav = find_traverse(alias); trav != nullptr) {
+    if (auto trav = match_query.find_traverse(alias); trav != nullptr) {
       auto edge_schema = edge_store_->get_edge_schema(trav->edge_type());
       if (!edge_schema) {
         return arrow::Status::KeyError("Edge schema '", trav->edge_type(),
@@ -1310,7 +1299,7 @@ arrow::Result<UpdateResult> Database::update_by_match(const UpdateQuery& uq) {
   // 3. Build SELECT with node IDs needed for updates and edge lookups.
   std::set<std::string> id_column_set;
   for (const auto& [alias, _] : updates_by_alias) {
-    if (auto trav = find_traverse(alias)) {
+    if (auto trav = match_query.find_traverse(alias)) {
       id_column_set.insert(trav->source().value() + ".id");
       id_column_set.insert(trav->target().value() + ".id");
     } else {
@@ -1332,7 +1321,7 @@ arrow::Result<UpdateResult> Database::update_by_match(const UpdateQuery& uq) {
 
   // 5. Apply updates per alias
   for (const auto& [alias, fields] : updates_by_alias) {
-    auto trav = find_traverse(alias);
+    auto trav = match_query.find_traverse(alias);
     if (!trav) {
       auto id_column = table->GetColumnByName(alias + ".id");
       if (!id_column) {

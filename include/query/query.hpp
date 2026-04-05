@@ -202,14 +202,10 @@ class WhereExpr {
    *
    * Called by `prepare_query` (Phase 3) after all aliases have been
    * registered.  Each `FieldRef` inside this expression tree is resolved
-   * by looking up its variable in @p aliases to find the schema name,
-   * then fetching the Field from @p schema_registry.
-   *
-   * For edge aliases the schema name is the shadow schema
+   * by looking up its variable via @p schema_resolver, which dispatches
+   * to the correct registry (nodes or edges) based on alias kind.
    *
    * @param schema_resolver  Maps a variable name (alias) to its Schema.
-   *                         The caller is responsible for dispatching to
-   *                         the correct registry based on alias kind.
    * @return true when all references are resolved, or an error status.
    */
   virtual arrow::Result<bool> resolve_field_ref(
@@ -508,6 +504,18 @@ class Query {
   [[nodiscard]] const std::optional<TemporalSnapshot>& temporal_snapshot()
       const {
     return temporal_snapshot_;
+  }
+
+  /** @brief Finds the Traverse clause whose edge alias matches, or nullptr. */
+  [[nodiscard]] std::shared_ptr<Traverse> find_traverse(
+      const std::string& alias) const {
+    for (const auto& clause : clauses_) {
+      if (clause->type() != Clause::Type::TRAVERSE) continue;
+      auto t = std::static_pointer_cast<Traverse>(clause);
+      if (t->edge_alias().has_value() && t->edge_alias().value() == alias)
+        return t;
+    }
+    return nullptr;
   }
 
   static Builder from(const std::string& schema) { return Builder(schema); }

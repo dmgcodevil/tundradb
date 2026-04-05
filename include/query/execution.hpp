@@ -472,17 +472,7 @@ struct QueryState {
     return schemas.register_alias(alias, edge_type, AliasKind::Edge);
   }
 
-  /** @brief Resolves an alias to its AliasEntry (name + kind). */
-  arrow::Result<AliasEntry> resolve_alias(const SchemaRef& ref) const {
-    return schemas.resolve(ref);
-  }
-
-  /** @brief Resolves an alias to its AliasEntry (name + kind). */
-  arrow::Result<AliasEntry> resolve_alias(const std::string& alias) const {
-    return schemas.resolve(alias);
-  }
-
-  /** @brief Resolves a node alias to its schema name (convenience). */
+  /** @brief Resolves an alias to its schema name. */
   arrow::Result<std::string> resolve_schema(const SchemaRef& ref) const {
     ARROW_ASSIGN_OR_RAISE(auto entry, schemas.resolve(ref));
     return entry.schema_name;
