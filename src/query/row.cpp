@@ -293,9 +293,8 @@ void Row::set_cell_from_edge(
     if (!field) continue;
     const auto& name = field->name();
     const bool structural =
-        (name == field_names::kId || name == field_names::kEdgeId ||
-         name == field_names::kSourceId || name == field_names::kTargetId ||
-         name == field_names::kCreatedTs);
+        (name == field_names::kId || name == field_names::kSourceId ||
+         name == field_names::kTargetId || name == field_names::kCreatedTs);
     if (!structural && edge_schema) {
       auto real_field = edge_schema->get_field(name);
       if (!real_field) continue;

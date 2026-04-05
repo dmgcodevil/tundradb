@@ -5,7 +5,6 @@
 
 #include "arrow/map_union_types.hpp"
 #include "arrow/utils.hpp"
-#include "common/constants.hpp"
 #include "common/logger.hpp"
 #include "common/utils.hpp"
 #include "core/edge_store.hpp"
@@ -13,75 +12,6 @@
 namespace tundradb {
 
 namespace {
-
-/**
- * Returns the canonical shadow-schema name for an edge type.
- *
- * Edge types like "WORKS_AT" are not node schemas, so they cannot be
- * stored directly in the SchemaRegistry.  Instead we create a synthetic
- * "shadow" schema (prefixed with "__edge__") that merges the structural
- * edge columns (_edge_id, source_id, target_id, created_ts) with the
- * user-defined edge properties.  This name is the key under which that
- * shadow schema is registered.
- */
-std::string edge_shadow_schema_name(const std::string& edge_type) {
-  return std::string(schema::kEdgeShadowPrefix) + edge_type;
-}
-
-/**
- * Lazily creates and registers a shadow Arrow schema for the given edge type.
- *
- * On first call for a given edge_type, this function:
- *  1. Looks up the edge schema from `EdgeStore` (user-defined fields like
- *     "since", "role").
- *  2. Prepends the four structural edge columns (_edge_id, source_id,
- *     target_id, created_ts).
- *  3. Registers the combined Arrow schema in the SchemaRegistry under the
- *     shadow name (e.g. "__edge__WORKS_AT").
- *
- * Subsequent calls for the same edge_type return the cached shadow name.
- *
- * The shadow schema allows the query engine to resolve edge field
- * references (e.g. `e.since`) through the same SchemaRegistry /
- * FieldRef resolution pipeline used for node fields.
- *
- * @param query_state  Mutable query state (provides schema registry and edge
- *                     store).
- * @param edge_type    The edge type name (e.g. "WORKS_AT").
- * @return The shadow schema name, or an error if the edge schema is missing.
- */
-arrow::Result<std::string> ensure_edge_shadow_schema(
-    QueryState& query_state, const std::string& edge_type) {
-  const std::string shadow = edge_shadow_schema_name(edge_type);
-  auto registry = query_state.schema_registry();
-  if (registry->get(shadow).ok()) {
-    return shadow;
-  }
-  if (!query_state.edge_store) {
-    return arrow::Status::Invalid("Edge store is not available in query state");
-  }
-  auto edge_schema = query_state.edge_store->get_edge_schema(edge_type);
-  if (!edge_schema) {
-    return arrow::Status::KeyError("Edge schema '", edge_type, "' not found");
-  }
-
-  std::vector<std::shared_ptr<arrow::Field>> fields{
-      arrow::field(std::string(field_names::kEdgeId), arrow::int64()),
-      arrow::field(std::string(field_names::kSourceId), arrow::int64()),
-      arrow::field(std::string(field_names::kTargetId), arrow::int64()),
-      arrow::field(std::string(field_names::kCreatedTs), arrow::int64())};
-  std::unordered_set<std::string> seen{std::string(field_names::kEdgeId),
-                                       std::string(field_names::kSourceId),
-                                       std::string(field_names::kTargetId),
-                                       std::string(field_names::kCreatedTs)};
-  for (const auto& f : edge_schema->arrow()->fields()) {
-    if (seen.insert(f->name()).second) {
-      fields.push_back(f);
-    }
-  }
-  ARROW_RETURN_NOT_OK(registry->create(shadow, arrow::schema(fields)));
-  return shadow;
-}
 
 /**
  * @brief Project one key from a MAP column into a flat Arrow array.
@@ -279,58 +209,61 @@ arrow::Result<std::shared_ptr<arrow::Table>> enrich_nested_select_fields(
 
 // SchemaContext implementation
 
+arrow::Result<std::string> SchemaContext::register_alias(
+    const std::string& alias, const std::string& schema_name, AliasKind kind) {
+  auto [it, inserted] = aliases_.emplace(alias, AliasEntry{schema_name, kind});
+  if (!inserted) {
+    if (it->second.schema_name != schema_name || it->second.kind != kind) {
+      return arrow::Status::Invalid("Alias '", alias, "' already bound to '",
+                                    it->second.schema_name,
+                                    "', cannot re-bind to '", schema_name, "'");
+    }
+  }
+  return schema_name;
+}
+
 arrow::Result<std::string> SchemaContext::register_schema(
     const SchemaRef& schema_ref) {
   if (!schema_ref.is_declaration()) {
-    return resolve(schema_ref);
+    ARROW_ASSIGN_OR_RAISE(auto entry, resolve(schema_ref));
+    return entry.schema_name;
   }
-
-  auto [it, inserted] =
-      aliases_.emplace(schema_ref.value(), schema_ref.schema());
-  if (!inserted && it->second != schema_ref.schema()) {
-    return arrow::Status::Invalid(
-        "Alias '", schema_ref.value(), "' already bound to '", it->second,
-        "', cannot re-bind to '", schema_ref.schema(), "'");
-  }
-  return schema_ref.schema();
+  return register_alias(schema_ref.value(), schema_ref.schema(),
+                        AliasKind::Node);
 }
 
-arrow::Result<std::string> SchemaContext::resolve(
+arrow::Result<AliasEntry> SchemaContext::resolve(
     const SchemaRef& schema_ref) const {
   if (schema_ref.is_declaration()) {
-    return schema_ref.schema();
+    return AliasEntry{schema_ref.schema(), AliasKind::Node};
   }
+  return resolve(schema_ref.value());
+}
 
-  auto it = aliases_.find(schema_ref.value());
+arrow::Result<AliasEntry> SchemaContext::resolve(
+    const std::string& alias) const {
+  auto it = aliases_.find(alias);
   if (it == aliases_.end()) {
-    return arrow::Status::KeyError("No alias for '{}'", schema_ref.value());
+    return arrow::Status::KeyError("No alias for '{}'", alias);
   }
-
   return it->second;
 }
 
 // FieldIndexer implementation
 
-arrow::Result<bool> FieldIndexer::compute_fq_names(
-    const SchemaRef& schema_ref, const std::string& resolved_schema,
-    SchemaRegistry* registry) {
+arrow::Result<bool> FieldIndexer::compute_fq_names(const SchemaRef& schema_ref,
+                                                   const Schema& schema) {
   const std::string& alias = schema_ref.value();
   if (fq_field_names_.contains(alias)) {
     return false;  // Already computed
   }
 
-  auto schema_res = registry->get(resolved_schema);
-  if (!schema_res.ok()) {
-    return schema_res.status();
-  }
-
-  const auto& schema = schema_res.ValueOrDie();
   std::vector<std::string> names;
   std::vector<int> indices;
-  names.reserve(schema->num_fields());
-  indices.reserve(schema->num_fields());
+  names.reserve(schema.num_fields());
+  indices.reserve(schema.num_fields());
 
-  for (const auto& field : schema->fields()) {
+  for (const auto& field : schema.fields()) {
     std::string fq_name = alias + "." + field->name();
     int field_id = next_field_id_.fetch_add(1);
 
@@ -350,7 +283,24 @@ arrow::Result<bool> FieldIndexer::compute_fq_names(
 // QueryState implementation
 
 QueryState::QueryState(std::shared_ptr<SchemaRegistry> registry)
-    : schemas(std::move(registry)) {}
+    : schema_registry(std::move(registry)) {}
+
+arrow::Result<std::shared_ptr<Schema>> QueryState::get_schema_for_alias(
+    const std::string& alias) const {
+  ARROW_ASSIGN_OR_RAISE(auto entry, schemas.resolve(alias));
+  if (entry.kind == AliasKind::Edge) {
+    if (!edge_store) {
+      return arrow::Status::Invalid("Edge store not available");
+    }
+    auto schema = edge_store->get_edge_schema(entry.schema_name);
+    if (!schema) {
+      return arrow::Status::KeyError("Edge schema '", entry.schema_name,
+                                     "' not found");
+    }
+    return schema;
+  }
+  return schema_registry->get(entry.schema_name);
+}
 
 void QueryState::reserve_capacity(const Query& query) {
   // Estimate schema count from FROM + TRAVERSE clauses
@@ -367,13 +317,8 @@ void QueryState::reserve_capacity(const Query& query) {
 
 arrow::Result<bool> QueryState::compute_fully_qualified_names(
     const SchemaRef& schema_ref) {
-  const auto& aliases_map = schemas.get_aliases();
-  const auto it = aliases_map.find(schema_ref.value());
-  if (it == aliases_map.end()) {
-    return arrow::Status::KeyError("keyset does not contain alias '{}'",
-                                   schema_ref.value());
-  }
-  return compute_fully_qualified_names(schema_ref, it->second);
+  ARROW_ASSIGN_OR_RAISE(auto schema, get_schema_for_alias(schema_ref.value()));
+  return fields.compute_fq_names(schema_ref, *schema);
 }
 
 arrow::Result<bool> QueryState::update_table(
@@ -404,8 +349,9 @@ std::string QueryState::ToString() const {
   }
 
   ss << "  Aliases (" << schemas.get_aliases().size() << "):\n";
-  for (const auto& [alias, schema_name] : schemas.get_aliases()) {
-    ss << "    - " << alias << " -> " << schema_name << "\n";
+  for (const auto& [alias, entry] : schemas.get_aliases()) {
+    ss << "    - " << alias << " -> " << entry.schema_name
+       << (entry.kind == AliasKind::Edge ? " [edge]" : " [node]") << "\n";
   }
 
   ss << "  Connections (Outgoing) (" << graph.outgoing().size()
@@ -548,8 +494,7 @@ arrow::Result<std::shared_ptr<arrow::Schema>> build_denormalized_schema(
     log_debug("Adding fields from FROM schema '{}'", from_schema);
   }
 
-  auto schema_result =
-      query_state.schema_registry()->get(query_state.aliases().at(from_schema));
+  auto schema_result = query_state.get_schema_for_alias(from_schema);
   if (!schema_result.ok()) {
     return schema_result.status();
   }
@@ -582,8 +527,7 @@ arrow::Result<std::shared_ptr<arrow::Schema>> build_denormalized_schema(
       log_debug("Adding fields from schema '{}'", schema_ref.value());
     }
 
-    schema_result = query_state.schema_registry()->get(
-        query_state.aliases().at(schema_ref.value()));
+    schema_result = query_state.get_schema_for_alias(schema_ref.value());
     if (!schema_result.ok()) {
       return schema_result.status();
     }
@@ -767,20 +711,15 @@ arrow::Result<std::shared_ptr<arrow::Table>> inline_where(
  *  Phase 1 — FROM: registers the root schema alias (e.g. "u" -> "User").
  *
  *  Phase 2 — TRAVERSE: for each traversal clause:
- *    - Registers source / target node aliases.
- *    - If an edge alias is present (e.g. `[e:WORKS_AT]`), creates a
- *      shadow schema via `ensure_edge_shadow_schema` and registers the
- *      alias (e.g. "e" -> "__edge__WORKS_AT") into the unified alias
- *      map so that edge fields can be resolved through the standard
- *      schema registry.
+ *    - Registers source / target node aliases (AliasKind::Node).
+ *    - If an edge alias is present (e.g. `[e:WORKS_AT]`), registers
+ *      it with AliasKind::Edge (e.g. "e" -> "WORKS_AT").
  *    - Computes BFS tags for source/target.
  *
  *  Phase 3 — WHERE: resolves every `FieldRef` inside `ComparisonExpr`
- *    nodes.  Each symbolic reference like "e.since" is looked up in the
- *    alias map ("e" -> "__edge__WORKS_AT"), then the field "since" is
- *    resolved from that schema's `Field` object and bound to the
- *    `FieldRef`.  After this phase, every `FieldRef::is_resolved()`
- *    returns true.
+ *    nodes via get_schema_for_alias(), which dispatches to SchemaRegistry
+ *    (nodes) or EdgeStore (edges) based on alias kind.  After this phase
+ *    every `FieldRef::is_resolved()` returns true.
  *
  * @param query        The query to prepare (may be mutated: tags set on
  *                     traversal sources/targets).
@@ -814,13 +753,10 @@ arrow::Status prepare_query(Query& query, QueryState& query_state) {
       }
       if (traverse->edge_alias().has_value()) {
         ARROW_ASSIGN_OR_RAISE(
-            auto edge_shadow_schema,
-            ensure_edge_shadow_schema(query_state, traverse->edge_type()));
-        ARROW_ASSIGN_OR_RAISE(
-            auto _edge_schema_name,
-            query_state.register_schema(SchemaRef::parse(
-                traverse->edge_alias().value() + ":" + edge_shadow_schema)));
-        (void)_edge_schema_name;
+            auto _edge_name,
+            query_state.register_edge_alias(traverse->edge_alias().value(),
+                                            traverse->edge_type()));
+        (void)_edge_name;
       }
 
       traverse->mutable_source().set_tag(compute_tag(traverse->source()));
@@ -831,15 +767,16 @@ arrow::Status prepare_query(Query& query, QueryState& query_state) {
   }
 
   // Phase 3: Resolve all ComparisonExpr field references.
-  // query_state.aliases() already maps edge aliases to their shadow schema
-  // names (e.g. "e" -> "__edge__WORKS_AT") from the register_schema call in
-  // Phase 2, so no override is needed here.
-  const auto& where_aliases = query_state.aliases();
+  // Use get_schema_for_alias which dispatches to SchemaRegistry (nodes)
+  // or EdgeStore (edges) based on AliasKind.
+  auto schema_resolver = [&query_state](const std::string& variable)
+      -> arrow::Result<std::shared_ptr<Schema>> {
+    return query_state.get_schema_for_alias(variable);
+  };
   for (const auto& clause : query.clauses()) {
     if (clause->type() == Clause::Type::WHERE) {
       auto where_expr = std::dynamic_pointer_cast<WhereExpr>(clause);
-      auto res = where_expr->resolve_field_ref(
-          where_aliases, query_state.schema_registry().get());
+      auto res = where_expr->resolve_field_ref(schema_resolver);
       if (!res.ok()) {
         return res.status();
       }

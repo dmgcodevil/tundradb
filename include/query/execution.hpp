@@ -92,51 +92,77 @@ class ConnectionPool {
   size_t size() const { return next_index_; }
 };
 
+/// Distinguishes node aliases from edge aliases in the unified alias map.
+enum class AliasKind { Node, Edge };
+
+/// A registered alias entry: the concrete schema/edge-type name and its kind.
+struct AliasEntry {
+  std::string schema_name;
+  AliasKind kind;
+};
+
 /**
  * @brief Manages schema resolution and aliases for query execution
  *
  * Responsibilities:
- * - Map aliases (e.g., "u") to schema names (e.g., "User")
+ * - Map aliases (e.g., "u") to schema names (e.g., "User") or edge types
  * - Resolve SchemaRef objects to concrete schema names
- * - Validate schema references
+ * - Validate schema references and detect alias conflicts
  */
 class SchemaContext {
  private:
-  std::unordered_map<std::string, std::string> aliases_;
-  std::shared_ptr<SchemaRegistry> schema_registry_;
+  std::unordered_map<std::string, AliasEntry> aliases_;
 
  public:
-  explicit SchemaContext(std::shared_ptr<SchemaRegistry> registry)
-      : schema_registry_(std::move(registry)) {}
+  SchemaContext() = default;
 
   /**
-   * @brief Registers a schema alias (e.g. "u" -> "User").
+   * @brief Registers a node or edge alias.
    *
-   * For declarations (alias:Schema): inserts the mapping.  Idempotent when
-   * the alias already maps to the same schema; returns an error if the alias
-   * is already bound to a different schema.
+   * Idempotent when the alias already maps to the same name+kind; returns
+   * an error if the alias is already bound to a different schema or kind.
    *
+   * @param alias       The alias string (e.g. "u", "e").
+   * @param schema_name The concrete schema name or edge type (e.g. "User",
+   *                    "WORKS_AT").
+   * @param kind        Whether this is a Node or Edge alias.
+   * @return The schema_name on success, or an error on conflict.
+   */
+  arrow::Result<std::string> register_alias(const std::string& alias,
+                                            const std::string& schema_name,
+                                            AliasKind kind);
+
+  /**
+   * @brief Registers a schema alias from a SchemaRef.
+   *
+   * For declarations (alias:Schema): calls register_alias with Node kind.
    * For bare references (alias only): delegates to resolve().
-   *
-   * @param schema_ref The schema reference containing alias and schema name.
-   * @return The resolved concrete schema name, or an error on conflict /
-   *         unknown alias.
    */
   arrow::Result<std::string> register_schema(const SchemaRef& schema_ref);
 
   /**
-   * @brief Resolves a schema reference to its concrete schema name.
+   * @brief Resolves a schema reference to its entry.
    *
    * @param schema_ref The reference to resolve.
-   * @return The concrete schema name, or an error if not registered.
+   * @return The AliasEntry, or an error if not registered.
    */
-  arrow::Result<std::string> resolve(const SchemaRef& schema_ref) const;
+  arrow::Result<AliasEntry> resolve(const SchemaRef& schema_ref) const;
 
-  /** @brief Returns the underlying SchemaRegistry. */
-  std::shared_ptr<SchemaRegistry> registry() const { return schema_registry_; }
+  /**
+   * @brief Resolves an alias string to its entry.
+   *
+   * @param alias The alias to resolve.
+   * @return The AliasEntry, or an error if not registered.
+   */
+  arrow::Result<AliasEntry> resolve(const std::string& alias) const;
 
-  /** @brief Returns all registered alias->schema mappings. */
-  const std::unordered_map<std::string, std::string>& get_aliases() const {
+  /** @brief Returns true if the alias is registered. */
+  bool contains(const std::string& alias) const {
+    return aliases_.contains(alias);
+  }
+
+  /** @brief Returns all registered alias entries. */
+  const std::unordered_map<std::string, AliasEntry>& get_aliases() const {
     return aliases_;
   }
 };
@@ -326,13 +352,11 @@ class FieldIndexer {
    * schema.
    *
    * @param schema_ref The schema reference (alias used as prefix).
-   * @param resolved_schema The concrete schema name.
-   * @param registry The schema registry for field lookup.
+   * @param schema The resolved Schema whose fields will be indexed.
    * @return True if names were computed (false if already done).
    */
   arrow::Result<bool> compute_fq_names(const SchemaRef& schema_ref,
-                                       const std::string& resolved_schema,
-                                       SchemaRegistry* registry);
+                                       const Schema& schema);
 
   arrow::Result<bool> compute_fq_names_from_fields(
       const std::string& alias,
@@ -417,7 +441,7 @@ class FieldIndexer {
  * - Tables: Arrow table storage
  */
 struct QueryState {
-  SchemaContext schemas;  ///< Schema resolution and aliases.
+  SchemaContext schemas;  ///< Alias resolution (unified node + edge).
   GraphState graph;       ///< Graph topology (IDs, connections).
   FieldIndexer fields;    ///< Field indexing for row operations.
 
@@ -427,23 +451,49 @@ struct QueryState {
   SchemaRef from;                    ///< Source schema from the FROM clause.
   std::vector<Traverse> traversals;  ///< Traverse clauses in query order.
 
-  std::shared_ptr<NodeManager> node_manager;  ///< Node storage.
-  std::shared_ptr<EdgeStore> edge_store;      ///< Edge storage.
+  std::shared_ptr<SchemaRegistry> schema_registry;  ///< Node schema registry.
+  std::shared_ptr<NodeManager> node_manager;        ///< Node storage.
+  std::shared_ptr<EdgeStore> edge_store;            ///< Edge storage.
+
   std::unique_ptr<TemporalContext>
       temporal_context;  ///< Temporal snapshot (nullptr = current).
 
   /** @brief Constructs a QueryState bound to the given schema registry. */
   explicit QueryState(std::shared_ptr<SchemaRegistry> registry);
 
-  /** @brief Registers a schema alias. @see SchemaContext::register_schema. */
+  /** @brief Registers a node alias. @see SchemaContext::register_schema. */
   arrow::Result<std::string> register_schema(const SchemaRef& ref) {
     return schemas.register_schema(ref);
   }
 
-  /** @brief Resolves a schema alias to its concrete name. */
-  arrow::Result<std::string> resolve_schema(const SchemaRef& ref) const {
+  /** @brief Registers an edge alias (alias -> edge_type). */
+  arrow::Result<std::string> register_edge_alias(const std::string& alias,
+                                                 const std::string& edge_type) {
+    return schemas.register_alias(alias, edge_type, AliasKind::Edge);
+  }
+
+  /** @brief Resolves an alias to its AliasEntry (name + kind). */
+  arrow::Result<AliasEntry> resolve_alias(const SchemaRef& ref) const {
     return schemas.resolve(ref);
   }
+
+  /** @brief Resolves an alias to its AliasEntry (name + kind). */
+  arrow::Result<AliasEntry> resolve_alias(const std::string& alias) const {
+    return schemas.resolve(alias);
+  }
+
+  /** @brief Resolves a node alias to its schema name (convenience). */
+  arrow::Result<std::string> resolve_schema(const SchemaRef& ref) const {
+    ARROW_ASSIGN_OR_RAISE(auto entry, schemas.resolve(ref));
+    return entry.schema_name;
+  }
+
+  /**
+   * @brief Resolves an alias and fetches the corresponding Schema object.
+   * Dispatches to SchemaRegistry for nodes, EdgeStore for edges.
+   */
+  arrow::Result<std::shared_ptr<Schema>> get_schema_for_alias(
+      const std::string& alias) const;
 
   /** @brief Returns the mutable ID set for the given schema. */
   llvm::DenseSet<int64_t>& get_ids(const SchemaRef& schema_ref) {
@@ -460,14 +510,13 @@ struct QueryState {
     return graph.has_outgoing(ref, node_id);
   }
 
-  /** @brief Computes FQ field names for the given schema reference. */
-  arrow::Result<bool> compute_fully_qualified_names(
-      const SchemaRef& ref, const std::string& resolved_schema) {
-    return fields.compute_fq_names(ref, resolved_schema,
-                                   schemas.registry().get());
+  /** @brief Computes FQ field names for the given alias. */
+  arrow::Result<bool> compute_fully_qualified_names(const SchemaRef& ref,
+                                                    const Schema& schema) {
+    return fields.compute_fq_names(ref, schema);
   }
 
-  /** @overload Resolves the schema name automatically. */
+  /** @overload Resolves the schema automatically via alias kind. */
   arrow::Result<bool> compute_fully_qualified_names(const SchemaRef& ref);
 
   /** @brief Removes a node from the graph. */
@@ -475,13 +524,13 @@ struct QueryState {
     graph.remove_node(node_id, ref);
   }
 
-  /** @brief Returns the schema registry. */
-  std::shared_ptr<SchemaRegistry> schema_registry() const {
-    return schemas.registry();
+  /** @brief Returns true if the alias is registered. */
+  bool has_alias(const std::string& alias) const {
+    return schemas.contains(alias);
   }
 
-  /** @brief Returns all alias->schema mappings. */
-  const std::unordered_map<std::string, std::string>& aliases() const {
+  /** @brief Returns all registered alias entries. */
+  const std::unordered_map<std::string, AliasEntry>& aliases() const {
     return schemas.get_aliases();
   }
 

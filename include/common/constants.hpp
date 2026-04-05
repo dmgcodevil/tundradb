@@ -11,7 +11,6 @@ namespace tundradb {
 /// renames safe.
 namespace field_names {
 inline constexpr std::string_view kId = "id";
-inline constexpr std::string_view kEdgeId = "_edge_id";
 inline constexpr std::string_view kSourceId = "source_id";
 inline constexpr std::string_view kTargetId = "target_id";
 inline constexpr std::string_view kCreatedTs = "created_ts";
@@ -21,11 +20,6 @@ inline constexpr std::string_view kCreatedTs = "created_ts";
 namespace arena_flags {
 inline constexpr uint32_t kMarkedForDeletion = 0x1;
 }  // namespace arena_flags
-
-/// Prefix for synthetic shadow schemas that wrap edge types.
-namespace schema {
-inline constexpr std::string_view kEdgeShadowPrefix = "__edge__";
-}  // namespace schema
 
 /// FNV-1a 32-bit hash parameters (used by compute_tag).
 namespace hash {

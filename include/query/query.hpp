@@ -9,6 +9,7 @@
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/StringMap.h>
 
+#include <functional>
 #include <memory>
 #include <optional>
 #include <set>
@@ -96,9 +97,9 @@ enum class CompareOp {
  *       field_=Field{name="since", type=INT64, index=4}
  *
  * Resolution is performed by `ComparisonExpr::resolve_field_ref`, which
- * maps the variable through the alias table to a schema name, then looks
- * up the field by name.  For edge aliases the schema is the shadow schema
- * (e.g. "__edge__WORKS_AT").
+ * maps the variable through the alias table to an AliasEntry (name + kind),
+ * then looks up the field in the appropriate registry (SchemaRegistry for
+ * nodes, EdgeStore for edges).
  *
  * Nested paths (e.g. "u.props.score") are stored in `nested_path_` for
  * MAP sub-key access during query evaluation.
@@ -205,16 +206,15 @@ class WhereExpr {
    * then fetching the Field from @p schema_registry.
    *
    * For edge aliases the schema name is the shadow schema
-   * (e.g. "__edge__WORKS_AT"), not the raw edge type.
    *
-   * @param aliases          Variable -> schema-name map (node aliases and
-   *                         edge shadow aliases).
-   * @param schema_registry  Registry holding all node and shadow schemas.
+   * @param schema_resolver  Maps a variable name (alias) to its Schema.
+   *                         The caller is responsible for dispatching to
+   *                         the correct registry based on alias kind.
    * @return true when all references are resolved, or an error status.
    */
   virtual arrow::Result<bool> resolve_field_ref(
-      const std::unordered_map<std::string, std::string>& aliases,
-      const SchemaRegistry* schema_registry) = 0;
+      const std::function<arrow::Result<std::shared_ptr<Schema>>(
+          const std::string&)>& schema_resolver) = 0;
   /** @brief Evaluates this expression against a node. */
   virtual arrow::Result<bool> matches(
       const std::shared_ptr<Node>& node) const = 0;
@@ -368,8 +368,8 @@ class ComparisonExpr : public Clause, public WhereExpr {
   std::set<std::string> get_all_variables() const override;
 
   arrow::Result<bool> resolve_field_ref(
-      const std::unordered_map<std::string, std::string>& aliases,
-      const SchemaRegistry* schema_registry) override;
+      const std::function<arrow::Result<std::shared_ptr<Schema>>(
+          const std::string&)>& schema_resolver) override;
 };
 
 /**
@@ -392,8 +392,8 @@ class LogicalExpr : public Clause, public WhereExpr {
   void set_inlined(bool inlined) override;
 
   arrow::Result<bool> resolve_field_ref(
-      const std::unordered_map<std::string, std::string>& aliases,
-      const SchemaRegistry* schema_registry) override;
+      const std::function<arrow::Result<std::shared_ptr<Schema>>(
+          const std::string&)>& schema_resolver) override;
 
   static std::shared_ptr<LogicalExpr> and_expr(
       std::shared_ptr<WhereExpr> left, std::shared_ptr<WhereExpr> right);

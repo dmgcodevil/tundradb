@@ -384,15 +384,13 @@ std::set<std::string> ComparisonExpr::get_all_variables() const {
  *
  * This method is idempotent: calling it again after resolution is a no-op.
  *
- * @param aliases          Variable -> schema-name map (includes both node
- *                         and edge shadow schemas).
- * @param schema_registry  Registry to look up schemas by name.
+ * @param schema_resolver  Maps a variable name to its Schema object.
  * @return true on success, or a KeyError if the variable, schema, or field
  *         cannot be found.
  */
 arrow::Result<bool> ComparisonExpr::resolve_field_ref(
-    const std::unordered_map<std::string, std::string>& aliases,
-    const SchemaRegistry* schema_registry) {
+    const std::function<arrow::Result<std::shared_ptr<Schema>>(
+        const std::string&)>& schema_resolver) {
   if (field_ref_.is_resolved()) {
     return true;
   }
@@ -400,25 +398,13 @@ arrow::Result<bool> ComparisonExpr::resolve_field_ref(
   const std::string& variable = field_ref_.variable();
   const std::string& field_name = field_ref_.field_name();
 
-  auto it = aliases.find(variable);
-  if (it == aliases.end()) {
-    return arrow::Status::KeyError("Unknown variable '", variable,
-                                   "' in field '", field_ref_.to_string(), "'");
-  }
+  ARROW_ASSIGN_OR_RAISE(auto schema, schema_resolver(variable));
 
-  const std::string& schema_name = it->second;
-
-  auto schema_result = schema_registry->get(schema_name);
-  if (!schema_result.ok()) {
-    return arrow::Status::KeyError("Schema '", schema_name,
-                                   "' not found for variable '", variable, "'");
-  }
-
-  auto schema = schema_result.ValueOrDie();
   auto field = schema->get_field(field_name);
   if (!field) {
     return arrow::Status::KeyError("Field '", field_name,
-                                   "' not found in schema '", schema_name, "'");
+                                   "' not found in schema for variable '",
+                                   variable, "'");
   }
   field_ref_.resolve(field);
 
@@ -434,16 +420,15 @@ void LogicalExpr::set_inlined(bool inlined) {
 }
 
 arrow::Result<bool> LogicalExpr::resolve_field_ref(
-    const std::unordered_map<std::string, std::string>& aliases,
-    const SchemaRegistry* schema_registry) {
+    const std::function<arrow::Result<std::shared_ptr<Schema>>(
+        const std::string&)>& schema_resolver) {
   if (left_) {
-    if (const auto res = left_->resolve_field_ref(aliases, schema_registry);
-        !res.ok()) {
+    if (const auto res = left_->resolve_field_ref(schema_resolver); !res.ok()) {
       return res.status();
     }
   }
   if (right_) {
-    if (const auto res = right_->resolve_field_ref(aliases, schema_registry);
+    if (const auto res = right_->resolve_field_ref(schema_resolver);
         !res.ok()) {
       return res.status();
     }
