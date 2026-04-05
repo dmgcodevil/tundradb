@@ -244,7 +244,7 @@ TEST_F(UpdateJoinCrossSchemaTest, UpdateEdgeFieldByMatchAlias) {
   EXPECT_EQ(vals[0], 2025);
 }
 
-TEST_F(UpdateJoinCrossSchemaTest, SelectEdgeAliasExpandsAllEdgeFields) {
+TEST_F(UpdateJoinCrossSchemaTest, SelectEdgeAliasReturnsOnlyUserDefinedFields) {
   auto query = Query::from("u:User")
                    .traverse("u", "WORKS_AT", "c:Company", TraverseType::Inner,
                              std::optional<std::string>{"e"})
@@ -254,31 +254,27 @@ TEST_F(UpdateJoinCrossSchemaTest, SelectEdgeAliasExpandsAllEdgeFields) {
   ASSERT_TRUE(result.ok()) << result.status().ToString();
   auto table = result.ValueOrDie()->table();
 
-  ASSERT_NE(table->GetColumnByName("e._edge_id"), nullptr);
-  ASSERT_NE(table->GetColumnByName("e.source_id"), nullptr);
-  ASSERT_NE(table->GetColumnByName("e.target_id"), nullptr);
-  ASSERT_NE(table->GetColumnByName("e.created_ts"), nullptr);
+  // Only user-defined edge fields should be present
   ASSERT_NE(table->GetColumnByName("e.since"), nullptr);
   ASSERT_NE(table->GetColumnByName("e.role"), nullptr);
 
-  auto edge_ids = get_column_values<int64_t>(table, "e._edge_id").ValueOrDie();
-  auto src_ids = get_column_values<int64_t>(table, "e.source_id").ValueOrDie();
-  auto dst_ids = get_column_values<int64_t>(table, "e.target_id").ValueOrDie();
+  // System fields must NOT appear in query output
+  EXPECT_EQ(table->GetColumnByName("e._edge_id"), nullptr);
+  EXPECT_EQ(table->GetColumnByName("e._source_id"), nullptr);
+  EXPECT_EQ(table->GetColumnByName("e._target_id"), nullptr);
+  EXPECT_EQ(table->GetColumnByName("e._created_ts"), nullptr);
+  EXPECT_EQ(table->GetColumnByName("e.source_id"), nullptr);
+  EXPECT_EQ(table->GetColumnByName("e.target_id"), nullptr);
+  EXPECT_EQ(table->GetColumnByName("e.created_ts"), nullptr);
+
   auto since = get_column_values<int64_t>(table, "e.since").ValueOrDie();
   auto role = get_column_values<std::string>(table, "e.role").ValueOrDie();
 
-  ASSERT_EQ(edge_ids.size(), 2u);
-  ASSERT_EQ(src_ids.size(), 2u);
-  ASSERT_EQ(dst_ids.size(), 2u);
   ASSERT_EQ(since.size(), 2u);
   ASSERT_EQ(role.size(), 2u);
 
-  std::set<int64_t> src_set(src_ids.begin(), src_ids.end());
-  std::set<int64_t> dst_set(dst_ids.begin(), dst_ids.end());
   std::set<int64_t> since_set(since.begin(), since.end());
   std::set<std::string> role_set(role.begin(), role.end());
-  EXPECT_EQ(src_set, (std::set<int64_t>{0, 1}));
-  EXPECT_EQ(dst_set, (std::set<int64_t>{0}));
   EXPECT_EQ(since_set, (std::set<int64_t>{2020, 2021}));
   EXPECT_EQ(role_set, (std::set<std::string>{"eng", "pm"}));
 }
@@ -301,6 +297,18 @@ TEST_F(UpdateJoinCrossSchemaTest, TraversalWithNoMatchUpdatesNothing) {
   // Everything unchanged
   EXPECT_EQ(get_field<bool>("User", 0, "employed"), false);
   EXPECT_EQ(get_field<int32_t>("Company", 0, "size"), 0);
+}
+
+TEST_F(UpdateJoinCrossSchemaTest, DuplicateAliasForNodeAndEdgeFails) {
+  // "u" is already used as a node alias (u:User); reusing it as an edge alias
+  // must fail during query preparation.
+  auto query = Query::from("u:User")
+                   .traverse("u", "WORKS_AT", "c:Company", TraverseType::Inner,
+                             std::optional<std::string>{"u"})
+                   .build();
+  auto result = db_->query(query);
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(result.status().IsInvalid()) << result.status().ToString();
 }
 
 // =========================================================================

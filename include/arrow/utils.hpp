@@ -98,6 +98,19 @@ arrow::Result<std::shared_ptr<arrow::Table>> create_empty_table(
     const std::shared_ptr<arrow::Schema>& schema);
 
 /**
+ * @brief Appends a single ValueRef to an Arrow ArrayBuilder.
+ *
+ * Dispatches by ValueType to the correct typed builder (Int32, Int64, etc.).
+ * Appends null when data is nullptr.
+ *
+ * @param value The value to append.
+ * @param builder The Arrow builder to append into.
+ * @return OK on success, or an error for unsupported types.
+ */
+arrow::Status append_value_to_builder(const ValueRef& value,
+                                      arrow::ArrayBuilder* builder);
+
+/**
  * @brief Appends an ArrayRef's contents to an Arrow ListBuilder.
  *
  * Handles null arrays (appends null), empty arrays (appends empty list),

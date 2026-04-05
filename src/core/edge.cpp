@@ -8,8 +8,7 @@ namespace tundradb {
 
 arrow::Result<Value> Edge::get_value(
     const std::shared_ptr<Field>& field) const {
-  if (field && (field->name() == field_names::kId ||
-                field->name() == field_names::kEdgeId)) {
+  if (field && field->name() == field_names::kId) {
     return Value{id_};
   }
   if (field && field->name() == field_names::kSourceId)
@@ -30,8 +29,7 @@ arrow::Result<const char*> Edge::get_value_ptr(
   if (!field) {
     return arrow::Status::Invalid("Field is null");
   }
-  if (field->name() == field_names::kId ||
-      field->name() == field_names::kEdgeId) {
+  if (field->name() == field_names::kId) {
     return reinterpret_cast<const char*>(&id_);
   }
   if (field->name() == field_names::kSourceId)
@@ -90,7 +88,6 @@ arrow::Result<const char*> EdgeView::get_value_ptr(
     return edge_->get_value_ptr(field);
   }
   if (field && (field->name() == field_names::kId ||
-                field->name() == field_names::kEdgeId ||
                 field->name() == field_names::kSourceId ||
                 field->name() == field_names::kTargetId ||
                 field->name() == field_names::kCreatedTs)) {
