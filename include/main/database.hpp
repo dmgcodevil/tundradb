@@ -177,6 +177,22 @@ class Database {
                      const std::vector<FieldUpdate> &fields,
                      UpdateType update_type, UpdateResult &result);
 
+  /** Initialize QueryState from query: temporal context, FROM table, prepare.
+   */
+  [[nodiscard]] arrow::Status init_query_state(const Query &query,
+                                               QueryState &query_state) const;
+
+  /** Inline WHERE clauses applicable to the FROM alias. */
+  [[nodiscard]] arrow::Status inline_from_where(const Query &query,
+                                                QueryState &query_state,
+                                                QueryResult &result) const;
+
+  /** Process all clauses (WHERE + TRAVERSE) and collect deferred expressions.
+   */
+  [[nodiscard]] arrow::Result<std::vector<std::shared_ptr<WhereExpr>>>
+  execute_clauses(const Query &query, QueryState &query_state,
+                  QueryResult &result) const;
+
   /** Execute a single TRAVERSE clause, updating query_state in-place. */
   [[nodiscard]] arrow::Status execute_traverse(
       const std::shared_ptr<Traverse> &traverse, QueryState &query_state,

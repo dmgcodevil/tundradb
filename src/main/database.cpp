@@ -621,7 +621,22 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
   QueryState query_state(this->schema_registry_);
   auto result = std::make_shared<QueryResult>();
 
-  // Initialize temporal context if AS OF clause is present
+  ARROW_RETURN_NOT_OK(init_query_state(query, query_state));
+  ARROW_RETURN_NOT_OK(inline_from_where(query, query_state, *result));
+  ARROW_ASSIGN_OR_RAISE(const auto post_where,
+                        execute_clauses(query, query_state, *result));
+  ARROW_ASSIGN_OR_RAISE(
+      auto output_table,
+      build_result_table(query, query_state, post_where, *result));
+  result->set_table(std::move(output_table));
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Database::init_query_state
+// ---------------------------------------------------------------------------
+arrow::Status Database::init_query_state(const Query& query,
+                                         QueryState& query_state) const {
   if (query.temporal_snapshot().has_value()) {
     query_state.temporal_context =
         std::make_unique<TemporalContext>(query.temporal_snapshot().value());
@@ -632,105 +647,71 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
     }
   }
 
-  // Pre-size hash maps to avoid expensive resizing during execution
   query_state.reserve_capacity(query);
-
-  IF_DEBUG_ENABLED {
-    log_debug("Executing query starting from schema '{}'",
-              query.from().toString());
-  }
   query_state.node_manager = this->node_manager_;
   query_state.edge_store = this->edge_store_;
 
-  {
-    IF_DEBUG_ENABLED {
-      log_debug("processing 'from' {}", query.from().toString());
-    }
-    query_state.from = query.from();
-    query_state.from.set_tag(compute_tag(query_state.from));
-    ARROW_ASSIGN_OR_RAISE(auto source_schema,
-                          query_state.register_schema(query.from()));
-    if (!this->schema_registry_->exists(source_schema)) {
-      log_error("schema '{}' doesn't exist", source_schema);
-      return arrow::Status::KeyError("schema doesn't exit: {}", source_schema);
-    }
-    ARROW_ASSIGN_OR_RAISE(
-        auto source_table,
-        this->get_table(source_schema, query_state.temporal_context.get()));
-    ARROW_RETURN_NOT_OK(query_state.update_table(source_table, query.from()));
-    if (auto res = query_state.compute_fully_qualified_names(query.from());
-        !res.ok()) {
-      return res.status();
-    }
-  }
-
-  // PHASE: Query Preparation - Populate aliases, traversals, tags, and resolve
-  // field references
-  {
-    IF_DEBUG_ENABLED {
-      log_debug(
-          "Preparing query: populating aliases, traversals, and resolving "
-          "field references");
-    }
-    auto preparation_result = prepare_query(query, query_state);
-    if (!preparation_result.ok()) {
-      log_error("Failed to prepare query: {}", preparation_result.ToString());
-      return preparation_result;
-    }
-    IF_DEBUG_ENABLED { log_debug("Query preparation completed successfully"); }
-  }
-
-  {
-    auto where_exps =
-        get_where_to_inline(query.from().value(), 0, query.clauses());
-    result->mutable_execution_stats().num_where_clauses_inlined +=
-        where_exps.size();
-    auto res =
-        inline_where(query.from(), query_state.tables[query.from().value()],
-                     query_state, where_exps);
-    if (!res.ok()) {
-      return res.status();
-    }
-  }
-
   IF_DEBUG_ENABLED {
-    log_debug("Processing {} query clauses", query.clauses().size());
+    log_debug("processing 'from' {}", query.from().toString());
   }
+  query_state.from = query.from();
+  query_state.from.set_tag(compute_tag(query_state.from));
+  ARROW_ASSIGN_OR_RAISE(auto source_schema,
+                        query_state.register_schema(query.from()));
+  if (!this->schema_registry_->exists(source_schema)) {
+    return arrow::Status::KeyError("schema doesn't exit: {}", source_schema);
+  }
+  ARROW_ASSIGN_OR_RAISE(
+      auto source_table,
+      this->get_table(source_schema, query_state.temporal_context.get()));
+  ARROW_RETURN_NOT_OK(query_state.update_table(source_table, query.from()));
+  ARROW_RETURN_NOT_OK(
+      query_state.compute_fully_qualified_names(query.from()).status());
 
+  return prepare_query(query, query_state);
+}
+
+// ---------------------------------------------------------------------------
+// Database::inline_from_where
+// ---------------------------------------------------------------------------
+arrow::Status Database::inline_from_where(const Query& query,
+                                          QueryState& query_state,
+                                          QueryResult& result) const {
+  auto where_exps =
+      get_where_to_inline(query.from().value(), 0, query.clauses());
+  result.mutable_execution_stats().num_where_clauses_inlined +=
+      where_exps.size();
+  return inline_where(query.from(), query_state.tables[query.from().value()],
+                      query_state, where_exps)
+      .status();
+}
+
+// ---------------------------------------------------------------------------
+// Database::execute_clauses
+// ---------------------------------------------------------------------------
+arrow::Result<std::vector<std::shared_ptr<WhereExpr>>>
+Database::execute_clauses(const Query& query, QueryState& query_state,
+                          QueryResult& result) const {
   std::vector<std::shared_ptr<WhereExpr>> post_where;
   for (size_t i = 0; i < query.clauses().size(); ++i) {
     auto clause = query.clauses()[i];
     switch (clause->type()) {
-      case Clause::Type::WHERE: {
+      case Clause::Type::WHERE:
         ARROW_RETURN_NOT_OK(
             apply_where_filter(std::dynamic_pointer_cast<WhereExpr>(clause),
                                query_state, post_where));
         break;
-      }
-      case Clause::Type::TRAVERSE: {
+      case Clause::Type::TRAVERSE:
         ARROW_RETURN_NOT_OK(
             execute_traverse(std::static_pointer_cast<Traverse>(clause),
-                             query_state, query, i, *result));
+                             query_state, query, i, result));
         break;
-      }
       default:
-        log_error("Unsupported clause type: {}",
-                  static_cast<int>(clause->type()));
         return arrow::Status::NotImplemented(
             "Database::query unsupported clause");
     }
   }
-
-  IF_DEBUG_ENABLED {
-    log_debug("Query processing complete, building result");
-    log_debug("Query state: {}", query_state.ToString());
-  }
-
-  ARROW_ASSIGN_OR_RAISE(
-      auto output_table,
-      build_result_table(query, query_state, post_where, *result));
-  result->set_table(std::move(output_table));
-  return result;
+  return post_where;
 }
 
 // ---------------------------------------------------------------------------
