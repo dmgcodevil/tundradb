@@ -778,8 +778,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
   // Also precompute fully-qualified field names per alias used in the query
   std::vector<std::shared_ptr<WhereExpr>> post_where;
   for (auto i = 0; i < query.clauses().size(); ++i) {
-    auto clause = query.clauses()[i];
-    switch (clause->type()) {
+    switch (auto clause = query.clauses()[i]; clause->type()) {
       case Clause::Type::WHERE: {
         auto where = std::dynamic_pointer_cast<WhereExpr>(clause);
         if (where->inlined()) {
@@ -957,8 +956,8 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
             auto node_result =
                 node_manager_->get_node(target_schema, target_id);
             if (node_result.ok()) {
-              const auto target_node = node_result.ValueOrDie();
-              if (target_node->schema_name == target_schema) {
+              if (const auto target_node = node_result.ValueOrDie();
+                  target_node->schema_name == target_schema) {
                 // Then apply all WHERE clauses with AND logic
                 bool passes_all_filters = true;
                 // Multiple conditions - could optimize by creating a
@@ -1321,8 +1320,7 @@ arrow::Result<UpdateResult> Database::update_by_match(const UpdateQuery& uq) {
 
   // 5. Apply updates per alias
   for (const auto& [alias, fields] : updates_by_alias) {
-    auto trav = match_query.find_traverse(alias);
-    if (!trav) {
+    if (auto trav = match_query.find_traverse(alias); !trav) {
       auto id_column = table->GetColumnByName(alias + ".id");
       if (!id_column) {
         return arrow::Status::Invalid("Could not find '", alias,
