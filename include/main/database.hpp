@@ -177,12 +177,38 @@ class Database {
                      const std::vector<FieldUpdate> &fields,
                      UpdateType update_type, UpdateResult &result);
 
-  /**
-   * Build an alias->schema mapping from a Query's FROM + TRAVERSE clauses.
-   * Only declarations ("alias:Schema") are recorded; bare references ("alias")
-   * are skipped.  Returns an error if the same alias is bound to two different
-   * schemas.
+  /** Initialize QueryState from query: temporal context, FROM table, prepare.
    */
+  [[nodiscard]] arrow::Status init_query_state(const Query &query,
+                                               QueryState &query_state) const;
+
+  /** Inline WHERE clauses applicable to the FROM alias. */
+  [[nodiscard]] arrow::Status inline_from_where(const Query &query,
+                                                QueryState &query_state,
+                                                QueryResult &result) const;
+
+  /** Process all clauses (WHERE + TRAVERSE) and collect deferred expressions.
+   */
+  [[nodiscard]] arrow::Result<std::vector<std::shared_ptr<WhereExpr>>>
+  execute_clauses(const Query &query, QueryState &query_state,
+                  QueryResult &result) const;
+
+  /** Execute a single TRAVERSE clause, updating query_state in-place. */
+  [[nodiscard]] arrow::Status execute_traverse(
+      const std::shared_ptr<Traverse> &traverse, QueryState &query_state,
+      const Query &query, size_t clause_index, QueryResult &result) const;
+
+  /** Apply a single-variable WHERE filter, or defer to post_where. */
+  [[nodiscard]] arrow::Status apply_where_filter(
+      const std::shared_ptr<WhereExpr> &where, QueryState &query_state,
+      std::vector<std::shared_ptr<WhereExpr>> &post_where) const;
+
+  /** Build the final output table: denormalize, populate rows, apply
+   *  deferred WHERE filters, and project via SELECT. */
+  [[nodiscard]] arrow::Result<std::shared_ptr<arrow::Table>> build_result_table(
+      const Query &query, QueryState &query_state,
+      const std::vector<std::shared_ptr<WhereExpr>> &post_where,
+      QueryResult &result) const;
 };
 
 }  // namespace tundradb
