@@ -886,12 +886,10 @@ arrow::Status Database::execute_traverse(
         query_state.update_table(source_table, traverse->source()));
   }
 
-  llvm::DenseSet<int64_t> matched_source_ids;
-  llvm::DenseSet<int64_t> matched_target_ids;
-  llvm::DenseSet<int64_t> unmatched_source_ids;
-  ARROW_RETURN_NOT_OK(expand_traverse_hop(
-      *traverse, target_schema, query_state, where_clauses, edge_where_clauses,
-      matched_source_ids, matched_target_ids, unmatched_source_ids));
+  ARROW_ASSIGN_OR_RAISE(
+      auto hop_result,
+      expand_traverse_hop(*traverse, target_schema, query_state, where_clauses,
+                          edge_where_clauses));
 
   llvm::DenseSet<int64_t> all_target_ids;
   if (traverse->traverse_type() == TraverseType::Right ||
@@ -915,10 +913,10 @@ arrow::Status Database::execute_traverse(
   JoinInput join_input{
       .source_ids = query_state.ids()[source.value()],
       .all_target_ids = all_target_ids,
-      .matched_source_ids = matched_source_ids,
-      .matched_target_ids = matched_target_ids,
+      .matched_source_ids = hop_result.matched_source_ids,
+      .matched_target_ids = hop_result.matched_target_ids,
       .existing_target_ids = query_state.get_ids(traverse->target()),
-      .unmatched_source_ids = unmatched_source_ids,
+      .unmatched_source_ids = hop_result.unmatched_source_ids,
       .is_self_join = is_self_join,
   };
 

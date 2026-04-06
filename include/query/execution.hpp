@@ -605,6 +605,37 @@ struct QueryState {
 };
 
 /**
+ * @brief Results of an expand traverse hop operation in a graph traversal
+ *
+ * Holds the sets of source and target node IDs identified during a single
+ * traversal hop, categorized by their connection statuses.
+ */
+struct ExpandTraverseHopResult {
+  /**
+   * @brief Source node IDs with matched connections discovered during traversal
+   *
+   * Represents the set of source node identifiers that have at least one valid
+   * connection to matching target nodes, as determined by traversal criteria.
+   */
+  llvm::DenseSet<int64_t> matched_source_ids;
+  /**
+   * @brief Target node IDs that were successfully matched during traversal
+   *
+   * Represents the set of target node identifiers that satisfy the traversal
+   * criteria and have a valid connection from at least one source node.
+   */
+  llvm::DenseSet<int64_t> matched_target_ids;
+
+  /**
+   * @brief Source node IDs without any accepted edges
+   *
+   * Represents the set of node IDs that were part of the traversal but did not
+   * have any connecting edges or target nodes meeting the required criteria.
+   */
+  llvm::DenseSet<int64_t> unmatched_source_ids;
+};
+
+/**
  * @brief Recursively collects all paths from a node in a connection graph
  * (debug).
  *
@@ -730,21 +761,13 @@ arrow::Status prepare_query(const Query& query, QueryState& query_state);
  *        populated @c ids for the source alias, and (when used) target ids.
  * @param node_filters WHERE expressions applied to each candidate target node.
  * @param edge_filters WHERE expressions applied to each candidate edge.
- * @param[out] matched_source_ids Source node ids that had ≥1 accepted edge.
- * @param[out] matched_target_ids Distinct target node ids reached by accepted
- *             edges.
- * @param[out] unmatched_source_ids Source ids with no accepted edge.
- * @return @c arrow::Status::OK() on success, or the first error from filter
- *         evaluation.
+ * @return @c ExpandTraverseHopResult
  */
-arrow::Status expand_traverse_hop(
+arrow::Result<ExpandTraverseHopResult> expand_traverse_hop(
     const Traverse& traverse, const std::string& target_schema,
     QueryState& query_state,
     const std::vector<std::shared_ptr<WhereExpr>>& node_filters,
-    const std::vector<std::shared_ptr<WhereExpr>>& edge_filters,
-    llvm::DenseSet<int64_t>& matched_source_ids,
-    llvm::DenseSet<int64_t>& matched_target_ids,
-    llvm::DenseSet<int64_t>& unmatched_source_ids);
+    const std::vector<std::shared_ptr<WhereExpr>>& edge_filters);
 
 }  // namespace tundradb
 

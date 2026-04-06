@@ -787,14 +787,14 @@ arrow::Status prepare_query(const Query& query, QueryState& query_state) {
 }
 
 // See declaration in execution.hpp for behavior and parameters.
-arrow::Status expand_traverse_hop(
+arrow::Result<ExpandTraverseHopResult> expand_traverse_hop(
     const Traverse& traverse, const std::string& target_schema,
     QueryState& query_state,
     const std::vector<std::shared_ptr<WhereExpr>>& node_filters,
-    const std::vector<std::shared_ptr<WhereExpr>>& edge_filters,
-    llvm::DenseSet<int64_t>& matched_source_ids,
-    llvm::DenseSet<int64_t>& matched_target_ids,
-    llvm::DenseSet<int64_t>& unmatched_source_ids) {
+    const std::vector<std::shared_ptr<WhereExpr>>& edge_filters) {
+  llvm::DenseSet<int64_t> matched_source_ids;
+  llvm::DenseSet<int64_t> matched_target_ids;
+  llvm::DenseSet<int64_t> unmatched_source_ids;
   const auto& source_alias = traverse.source().value();
   for (auto source_id : query_state.ids()[source_alias]) {
     auto outgoing_edges =
@@ -826,25 +826,20 @@ arrow::Status expand_traverse_hop(
       const auto target_node = node_result.ValueOrDie();
       if (target_node->schema_name != target_schema) continue;
 
-      bool passes = true;
-      for (const auto& wc : node_filters) {
-        ARROW_ASSIGN_OR_RAISE(const bool ok,
-                              apply_where_to_node(wc, target_node));
-        if (!ok) {
-          passes = false;
-          break;
+      const auto inlined_wheres_pass = [&]() -> arrow::Result<bool> {
+        for (const auto& wc : node_filters) {
+          ARROW_ASSIGN_OR_RAISE(const bool ok,
+                                apply_where_to_node(wc, target_node));
+          if (!ok) return false;
         }
-      }
-      if (passes) {
         for (const auto& wc : edge_filters) {
-          ARROW_ASSIGN_OR_RAISE(bool ok, apply_where_to_edge(wc, edge));
-          if (!ok) {
-            passes = false;
-            break;
-          }
+          ARROW_ASSIGN_OR_RAISE(const bool ok, apply_where_to_edge(wc, edge));
+          if (!ok) return false;
         }
-      }
-      if (!passes) continue;
+        return true;
+      };
+      ARROW_ASSIGN_OR_RAISE(const bool ok, inlined_wheres_pass());
+      if (!ok) continue;
 
       IF_DEBUG_ENABLED {
         log_debug("found edge {}:{} -[{}{}]-> {}:{}", source_alias, source_id,
@@ -883,7 +878,8 @@ arrow::Status expand_traverse_hop(
     log_debug("found {} neighbors for {}", matched_target_ids.size(),
               traverse.target().toString());
   }
-  return arrow::Status::OK();
+  return ExpandTraverseHopResult{matched_source_ids, matched_target_ids,
+                                 unmatched_source_ids};
 }
 
 }  // namespace tundradb
