@@ -206,7 +206,7 @@ void StringRef::release() {
   if (data_) {
     if (auto* header = get_header()) {
       assert(header->ref_count.load(std::memory_order_relaxed) > 0 &&
-             "StringRef::release() called with ref_count already 0 — "
+             "StringRef::release() called with ref_count already 0 - "
              "double-release or missing ref-count increment");
 
       int32_t old_count =

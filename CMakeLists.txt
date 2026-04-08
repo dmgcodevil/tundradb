@@ -242,6 +242,7 @@ add_subdirectory(src/core)
 add_subdirectory(src/storage)
 add_subdirectory(src/memory)
 add_subdirectory(src/query)
+add_subdirectory(src/update)
 add_subdirectory(src/main)
 
 target_include_directories(core
@@ -517,4 +518,3 @@ set(CPACK_SOURCE_IGNORE_FILES
 )
 
 include(CPack)
-

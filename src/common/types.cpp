@@ -27,7 +27,7 @@ std::string ValueRef::as_string() const {
 }
 
 // ---------------------------------------------------------------------------
-// Value — large methods moved from types.hpp
+// Value - large methods moved from types.hpp
 // ---------------------------------------------------------------------------
 
 arrow::Status Value::append_element(Value element) {
@@ -168,7 +168,7 @@ Value Value::read_value_from_memory(const char* ptr, const ValueType type) {
 }
 
 // ---------------------------------------------------------------------------
-// ValueRef — large methods moved from types.hpp
+// ValueRef - large methods moved from types.hpp
 // ---------------------------------------------------------------------------
 
 arrow::Result<std::shared_ptr<arrow::Scalar>> ValueRef::as_scalar() const {

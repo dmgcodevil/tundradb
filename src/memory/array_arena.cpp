@@ -247,7 +247,7 @@ void ArrayRef::release() {
   if (!data_) return;
   if (auto* h = get_header()) {
     assert(h->ref_count.load(std::memory_order_relaxed) > 0 &&
-           "ArrayRef::release() called with ref_count already 0 — "
+           "ArrayRef::release() called with ref_count already 0 - "
            "double-release or missing ref-count increment");
 
     const int32_t old_count =

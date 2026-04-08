@@ -230,7 +230,7 @@ static_assert(sizeof(ArrayRef) == 16,
               "ArrayRef must be 16 bytes (same as StringRef)");
 
 // ArrayRef has custom copy/move/destructor for ref counting.
-// It MUST NOT be trivially copyable — using memcpy on it skips ref-count
+// It MUST NOT be trivially copyable - using memcpy on it skips ref-count
 // updates and causes use-after-free. Always use copy/move constructors.
 static_assert(!std::is_trivially_copyable_v<ArrayRef>,
               "ArrayRef must not be trivially copyable");
