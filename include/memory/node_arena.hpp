@@ -371,7 +371,7 @@ class NodeArena {
                                    const Value& value);
 
   // =========================================================================
-  // apply_updates — single public write entry point
+  // apply_updates - single public write entry point
   // =========================================================================
 
   /// Applies field updates; creates a new version when versioning is enabled.

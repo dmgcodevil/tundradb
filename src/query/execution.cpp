@@ -704,19 +704,19 @@ arrow::Result<std::shared_ptr<arrow::Table>> inline_where(
 /**
  * Prepares a Query for execution by resolving all symbolic references.
  *
- * This is the first step before any data is read.  It runs three phases
+ * This is the first step before any data is read. It runs three phases
  * that progressively bind abstract query syntax to concrete schemas and
  * fields:
  *
- *  Phase 1 — FROM: registers the root schema alias (e.g. "u" -> "User").
+ *  Phase 1 - FROM: registers the root schema alias (e.g. "u" -> "User").
  *
- *  Phase 2 — TRAVERSE: for each traversal clause:
+ *  Phase 2 - TRAVERSE: for each traversal clause:
  *    - Registers source / target node aliases (AliasKind::Node).
  *    - If an edge alias is present (e.g. `[e:WORKS_AT]`), registers
  *      it with AliasKind::Edge (e.g. "e" -> "WORKS_AT").
  *    - Computes BFS tags for source/target.
  *
- *  Phase 3 — WHERE: resolves every `FieldRef` inside `ComparisonExpr`
+ *  Phase 3 - WHERE: resolves every `FieldRef` inside `ComparisonExpr`
  *    nodes via get_schema_for_alias(), which dispatches to SchemaRegistry
  *    (nodes) or EdgeStore (edges) based on alias kind.  After this phase
  *    every `FieldRef::is_resolved()` returns true.

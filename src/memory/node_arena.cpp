@@ -54,7 +54,7 @@ const VersionInfo* NodeHandle::find_version_at_time(uint64_t ts) const {
 }
 
 // ===========================================================================
-// NodeArena — constructor / destructor
+// NodeArena - constructor / destructor
 // ===========================================================================
 
 NodeArena::NodeArena(std::unique_ptr<MemArena> mem_arena,
@@ -84,7 +84,7 @@ NodeArena::~NodeArena() {
 }
 
 // ===========================================================================
-// NodeArena — public methods
+// NodeArena - public methods
 // ===========================================================================
 
 NodeHandle NodeArena::allocate_node(const std::string& schema_name) {
@@ -317,7 +317,7 @@ arrow::Result<Value> NodeArena::get_value_at_version(
 }
 
 // ===========================================================================
-// NodeArena — private methods
+// NodeArena - private methods
 // ===========================================================================
 
 uint64_t NodeArena::get_current_timestamp_ns() {
