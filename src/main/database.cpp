@@ -205,7 +205,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
   auto result = std::make_shared<QueryResult>();
 
   ARROW_RETURN_NOT_OK(init_query_state(query, query_state));
-  ARROW_RETURN_NOT_OK(inline_from_where(query, query_state, *result));
+  ARROW_RETURN_NOT_OK(inline_root_where(query, query_state, *result));
   ARROW_ASSIGN_OR_RAISE(const auto post_where,
                         execute_clauses(query, query_state, *result));
   ARROW_ASSIGN_OR_RAISE(

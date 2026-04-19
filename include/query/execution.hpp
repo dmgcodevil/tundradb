@@ -448,7 +448,7 @@ struct QueryState {
   /// Arrow tables keyed by schema alias.
   std::unordered_map<std::string, std::shared_ptr<arrow::Table>> tables;
 
-  SchemaRef from;                    ///< Source schema from the FROM clause.
+  SchemaRef root;                    ///< Root schema for query execution.
   std::vector<Traverse> traversals;  ///< Traverse clauses in query order.
 
   std::shared_ptr<SchemaRegistry> schema_registry;  ///< Node schema registry.

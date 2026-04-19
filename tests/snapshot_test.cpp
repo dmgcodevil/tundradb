@@ -349,7 +349,7 @@ TEST_F(DatabaseSnapshotTest, SnapshotReloadPreservesEdgeSchemaProperties) {
   auto new_db = create_test_database();
   ASSERT_TRUE(new_db->initialize().ValueOrDie());
 
-  auto q = Query::from("u:User")
+  auto q = Query::match("u:User")
                .traverse("u", "WORKS_AT", "c:Company", TraverseType::Inner, "e")
                .select({"u.name", "e.since", "e.role"})
                .build();

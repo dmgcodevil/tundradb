@@ -303,8 +303,8 @@ arrow::Result<std::shared_ptr<Schema>> QueryState::get_schema_for_alias(
 }
 
 void QueryState::reserve_capacity(const Query& query) {
-  // Estimate schema count from FROM + TRAVERSE clauses
-  size_t estimated_schemas = 1;  // FROM clause
+  // Estimate schema count from the root alias plus TRAVERSE clauses.
+  size_t estimated_schemas = 1;  // Root alias
   for (const auto& clause : query.clauses()) {
     if (clause->type() == Clause::Type::TRAVERSE) {
       estimated_schemas += 2;  // source + target schemas
@@ -336,7 +336,7 @@ arrow::Result<bool> QueryState::update_table(
 std::string QueryState::ToString() const {
   std::stringstream ss;
   ss << "QueryState {\n";
-  ss << "  From: " << from.toString() << "\n";
+  ss << "  Root: " << root.toString() << "\n";
 
   ss << "  Tables (" << tables.size() << "):\n";
   for (const auto& [alias, table_ptr] : tables) {
@@ -488,13 +488,13 @@ arrow::Result<std::shared_ptr<arrow::Schema>> build_denormalized_schema(
   std::vector<std::shared_ptr<arrow::Field>> fields;
   std::set<std::string> processed_schemas;
 
-  std::string from_schema = query_state.from.value();
+  std::string root_schema = query_state.root.value();
 
   IF_DEBUG_ENABLED {
-    log_debug("Adding fields from FROM schema '{}'", from_schema);
+    log_debug("Adding fields from root schema '{}'", root_schema);
   }
 
-  auto schema_result = query_state.get_schema_for_alias(from_schema);
+  auto schema_result = query_state.get_schema_for_alias(root_schema);
   if (!schema_result.ok()) {
     return schema_result.status();
   }
@@ -502,11 +502,11 @@ arrow::Result<std::shared_ptr<arrow::Schema>> build_denormalized_schema(
   auto schema = schema_result.ValueOrDie();
   auto arrow_schema = schema->arrow();
   for (const auto& field : arrow_schema->fields()) {
-    std::string prefixed_field_name = from_schema + "." + field->name();
+    std::string prefixed_field_name = root_schema + "." + field->name();
     processed_fields.insert(prefixed_field_name);
     fields.push_back(arrow::field(prefixed_field_name, field->type()));
   }
-  processed_schemas.insert(from_schema);
+  processed_schemas.insert(root_schema);
 
   std::vector<SchemaRef> unique_schemas;
   for (const auto& traverse : query_state.traversals) {
@@ -708,7 +708,7 @@ arrow::Result<std::shared_ptr<arrow::Table>> inline_where(
  * that progressively bind abstract query syntax to concrete schemas and
  * fields:
  *
- *  Phase 1 - FROM: registers the root schema alias (e.g. "u" -> "User").
+ *  Phase 1 - Root: registers the root schema alias (e.g. "u" -> "User").
  *
  *  Phase 2 - TRAVERSE: for each traversal clause:
  *    - Registers source / target node aliases (AliasKind::Node).
@@ -728,10 +728,10 @@ arrow::Result<std::shared_ptr<arrow::Table>> inline_where(
  * @return OK on success, or a KeyError / Invalid status if resolution fails.
  */
 arrow::Status prepare_query(const Query& query, QueryState& query_state) {
-  // Phase 1: Process FROM clause to populate aliases
+  // Phase 1: Process the root alias to populate aliases.
   {
-    ARROW_ASSIGN_OR_RAISE(auto from_schema,
-                          query_state.register_schema(query.from()));
+    ARROW_ASSIGN_OR_RAISE(auto root_schema,
+                          query_state.register_schema(query.root()));
   }
 
   // Phase 2: Process TRAVERSE clauses to populate aliases and traversals

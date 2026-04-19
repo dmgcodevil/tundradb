@@ -244,7 +244,9 @@ class WhereExpr {
   get_conditions_for_variable(const std::string& variable) const = 0;
 
   /** @brief Returns the set of all variables referenced in this expression. */
-  virtual std::set<std::string> get_all_variables() const = 0;
+  virtual const std::set<std::string>& get_all_variables() const = 0;
+
+  size_t get_vars_count() const { return get_all_variables().size(); }
 
   /** @brief Returns the first variable name found (useful for single-var
    * conditions). */
@@ -253,6 +255,9 @@ class WhereExpr {
   /** @brief Returns true if this expression can be inlined for the given
    * variable. */
   virtual bool can_inline(const std::string& variable) const = 0;
+
+ protected:
+  mutable std::set<std::string> vars_;
 };
 
 /** @brief The type of graph traversal / join to perform. */
@@ -361,7 +366,7 @@ class ComparisonExpr : public Clause, public WhereExpr {
 
   std::string extract_first_variable() const override;
 
-  std::set<std::string> get_all_variables() const override;
+  const std::set<std::string>& get_all_variables() const override;
 
   arrow::Result<bool> resolve_field_ref(
       const std::function<arrow::Result<std::shared_ptr<Schema>>(
@@ -422,7 +427,7 @@ class LogicalExpr : public Clause, public WhereExpr {
 
   friend std::ostream& operator<<(std::ostream& os, const LogicalExpr& expr);
 
-  std::set<std::string> get_all_variables() const override;
+  const std::set<std::string>& get_all_variables() const override;
 
   bool can_inline(const std::string& variable) const override;
 };
@@ -463,12 +468,12 @@ struct ExecutionConfig {
 /**
  * @brief Immutable query descriptor built via Query::Builder.
  *
- * Contains the FROM schema, a list of clauses (TRAVERSE, WHERE, SELECT),
- * execution configuration, and optional temporal snapshot.
+ * Contains the initial MATCH binding, a list of clauses (TRAVERSE, WHERE,
+ * SELECT), execution configuration, and optional temporal snapshot.
  */
 class Query {
  private:
-  SchemaRef from_;
+  SchemaRef root_;
   std::vector<std::shared_ptr<Clause>> clauses_;
   std::shared_ptr<Select> select_;
   bool inline_where_;
@@ -476,11 +481,11 @@ class Query {
   std::optional<TemporalSnapshot> temporal_snapshot_;
 
  public:
-  Query(SchemaRef from, std::vector<std::shared_ptr<Clause>> clauses,
+  Query(SchemaRef root, std::vector<std::shared_ptr<Clause>> clauses,
         std::shared_ptr<Select> select, bool optimize_where,
         ExecutionConfig execution_config,
         std::optional<TemporalSnapshot> temporal_snapshot = std::nullopt)
-      : from_(std::move(from)),
+      : root_(std::move(root)),
         clauses_(std::move(clauses)),
         select_(std::move(select)),
         inline_where_(optimize_where),
@@ -488,7 +493,7 @@ class Query {
         temporal_snapshot_(std::move(temporal_snapshot)) {}
 
   class Builder;
-  [[nodiscard]] const SchemaRef& from() const { return from_; }
+  [[nodiscard]] const SchemaRef& root() const { return root_; }
   [[nodiscard]] const std::vector<std::shared_ptr<Clause>>& clauses() const {
     return clauses_;
   }
@@ -518,12 +523,13 @@ class Query {
     return nullptr;
   }
 
-  static Builder from(const std::string& schema) { return Builder(schema); }
+  /** @brief Begin a MATCH query from the initial bound schema alias. */
+  static Builder match(const std::string& schema) { return Builder(schema); }
 
   /** @brief Fluent builder for constructing Query objects. */
   class Builder {
    private:
-    SchemaRef from_;
+    SchemaRef root_;
     std::vector<std::shared_ptr<Clause>> clauses_;
     std::shared_ptr<Select> select_;
     bool inline_where_ = false;
@@ -532,7 +538,7 @@ class Query {
 
    public:
     explicit Builder(const std::string& schema)
-        : from_(SchemaRef::parse(schema)) {}
+        : root_(SchemaRef::parse(schema)) {}
 
     /** @brief Adds a simple comparison WHERE clause. */
     Builder& where(std::string field, CompareOp op, Value value) {
@@ -676,7 +682,7 @@ class Query {
      */
     Query build() {
       return {
-          from_,         std::move(clauses_), std::move(select_),
+          root_,         std::move(clauses_), std::move(select_),
           inline_where_, execution_config_,   std::move(temporal_snapshot_)};
     }
   };
@@ -730,14 +736,14 @@ struct SetAssignment {
  *   @code
  *   // Simple WHERE - update one schema:
  *   UpdateQuery::match(
- *       Query::from("u:User")
+ *       Query::match("u:User")
  *           .where("u.city", CompareOp::Eq, Value("NYC"))
  *           .build()
  *   ).set("u.status", Value("active")).build();
  *
  *   // Traversal - update multiple schemas:
  *   UpdateQuery::match(
- *       Query::from("u:User")
+ *       Query::match("u:User")
  *           .traverse("u", "WORKS_AT", "c:Company")
  *           .where("c.name", CompareOp::Eq, Value("Google"))
  *           .build()

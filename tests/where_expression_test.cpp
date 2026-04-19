@@ -135,7 +135,8 @@ class WhereExpressionTest : public ::testing::Test {
 // Test simple WHERE expressions
 TEST_F(WhereExpressionTest, SimpleWhereCondition) {
   // Test basic WHERE clause
-  Query query = Query::from("u:User").where("u.age", CompareOp::Gt, 40).build();
+  Query query =
+      Query::match("u:User").where("u.age", CompareOp::Gt, 40).build();
 
   auto result = db_->query(query);
   ASSERT_OK(result);
@@ -153,7 +154,7 @@ TEST_F(WhereExpressionTest, SimpleWhereCondition) {
 // Test compound WHERE with AND - fluent API
 TEST_F(WhereExpressionTest, CompoundWhereAndFluent) {
   // Test: age > 30 AND city = "NYC"
-  Query query = Query::from("u:User")
+  Query query = Query::match("u:User")
                     .where("u.age", CompareOp::Gt, 30)
                     .and_where("u.city", CompareOp::Eq, "NYC")
                     .build();
@@ -178,7 +179,7 @@ TEST_F(WhereExpressionTest, CompoundWhereAndFluent) {
 TEST_F(WhereExpressionTest, CompoundWhereOrFluent) {
   Logger::get_instance().set_level(LogLevel::DEBUG);
   // Test: city = "SF" OR salary > 150000
-  Query query = Query::from("u:User")
+  Query query = Query::match("u:User")
                     .where("u.city", CompareOp::Eq, "SF")
                     .or_where("u.salary", CompareOp::Gt, 150000)
                     .build();
@@ -220,7 +221,7 @@ TEST_F(WhereExpressionTest, ComplexExpressionWithPrecedence) {
   // age > 30 AND (city = "NYC" OR salary > 150000)
   auto final_expr = LogicalExpr::and_expr(age_condition, or_expr);
 
-  Query query = Query::from("u:User").where_logical_expr(final_expr).build();
+  Query query = Query::match("u:User").where_logical_expr(final_expr).build();
 
   auto result = db_->query(query);
   ASSERT_OK(result);
@@ -245,7 +246,7 @@ TEST_F(WhereExpressionTest, ComplexExpressionWithPrecedence) {
 // Test inline WHERE with simple condition
 TEST_F(WhereExpressionTest, InlineWhereSimple) {
   // Test inline optimization with simple WHERE
-  Query query = Query::from("u:User")
+  Query query = Query::match("u:User")
                     .traverse("u", "FRIEND", "f:User")
                     .where("f.age", CompareOp::Gt, 40)
                     .inline_where()
@@ -268,7 +269,7 @@ TEST_F(WhereExpressionTest, InlineWhereSimple) {
 // Test inline WHERE with compound condition
 TEST_F(WhereExpressionTest, InlineWhereCompound) {
   // Test inline optimization with compound WHERE: f.age > 25 AND f.city = "NYC"
-  Query query = Query::from("u:User")
+  Query query = Query::match("u:User")
                     .traverse("u", "FRIEND", "f:User")
                     .where("f.age", CompareOp::Gt, 25)
                     .and_where("f.city", CompareOp::Eq, "NYC")
@@ -302,7 +303,7 @@ TEST_F(WhereExpressionTest, MultipleDifferentPrecedence) {
   // Left-to-right: (age > 40 AND city = "LA") OR salary > 100000
   // This will match: Bob(salary), Charlie(salary), Eve(salary), Henry(salary),
   // Jack(both) = 5 users
-  Query query_left = Query::from("u:User")
+  Query query_left = Query::match("u:User")
                          .where("u.age", CompareOp::Gt, 40)
                          .and_where("u.city", CompareOp::Eq, "LA")
                          .or_where("u.salary", CompareOp::Gt, 100000)
@@ -325,7 +326,7 @@ TEST_F(WhereExpressionTest, MultipleDifferentPrecedence) {
   auto final_expr = LogicalExpr::and_expr(age_cond, or_part);
 
   Query query_explicit =
-      Query::from("u:User").where_logical_expr(final_expr).build();
+      Query::match("u:User").where_logical_expr(final_expr).build();
 
   auto result_explicit = db_->query(query_explicit);
   ASSERT_OK(result_explicit);
@@ -368,7 +369,7 @@ TEST_F(WhereExpressionTest, ExpressionToString) {
 // Test error handling
 TEST_F(WhereExpressionTest, ErrorHandling) {
   // Test invalid field name
-  Query query = Query::from("u:User")
+  Query query = Query::match("u:User")
                     .where("u.nonexistent", CompareOp::Eq, "value")
                     .build();
 
@@ -444,7 +445,7 @@ TEST_F(WhereExpressionTest, PerformanceComparison) {
   // Test simple WHERE performance
   auto start = std::chrono::high_resolution_clock::now();
 
-  Query query = Query::from("u:User")
+  Query query = Query::match("u:User")
                     .where("u.age", CompareOp::Gt, 40)
                     .and_where("u.city", CompareOp::Eq, "NYC")
                     .build();
@@ -505,7 +506,7 @@ TEST_F(WhereExpressionTest, OrWithMultipleVariablesNotInlined) {
   auto final_expr = LogicalExpr::and_expr(age_condition, or_expr);
 
   // Create query that should match our test data
-  Query query = Query::from("a:User")
+  Query query = Query::match("a:User")
                     .traverse("a", "WORKS_AT", "c:Company")
                     .select({"a.age", "a.city",
                              "c.size"})  // Explicitly select the fields we need
@@ -540,7 +541,7 @@ TEST_F(WhereExpressionTest, TraversalWhereCombinations) {
 
   // Test Case 1: Single variable where clause (should be inlined)
   {
-    Query query = Query::from("u:User")
+    Query query = Query::match("u:User")
                       .where("u.age", CompareOp::Gt, 35)
                       .traverse("u", "WORKS_AT", "c:Company")
 
@@ -561,7 +562,7 @@ TEST_F(WhereExpressionTest, TraversalWhereCombinations) {
 }
 
 TEST_F(WhereExpressionTest, TraversalWhereCombinations2) {
-  Query query = Query::from("u:User")
+  Query query = Query::match("u:User")
                     .traverse("u", "WORKS_AT", "c:Company")
                     .where("u.age", CompareOp::Gte, 35)
                     .and_where("c.size", CompareOp::Gt, 1000)
@@ -582,7 +583,7 @@ TEST_F(WhereExpressionTest, TraversalWhereCombinations2) {
 
 TEST_F(WhereExpressionTest, TraversalWhereCombinations3) {
   Query query =
-      Query::from("u:User")
+      Query::match("u:User")
           .where("u.age", CompareOp::Gte, 35)  // Should be inlined
           .traverse("u", "WORKS_AT", "c:Company")
           .where("c.size", CompareOp::Gt, 1000)  // Should be inlined
@@ -620,7 +621,7 @@ TEST_F(WhereExpressionTest, QueryMaterializesMapColumn) {
                                    std::vector<std::string>{"score"}}})
                   .ok());
 
-  Query query = Query::from("m:MapUser").build();
+  Query query = Query::match("m:MapUser").build();
   auto result = db_->query(query);
   ASSERT_OK(result);
 
@@ -662,7 +663,7 @@ TEST_F(WhereExpressionTest, QueryFiltersByMapProperty) {
   ASSERT_OK(ben->update_fields(
       {FieldUpdate{props, Value{int32_t(7)}, UpdateType::SET, score_key}}));
 
-  Query query = Query::from("m:MapUserFilter")
+  Query query = Query::match("m:MapUserFilter")
                     .where("m.props.score", CompareOp::Eq, Value(int32_t(42)))
                     .build();
   auto result = db_->query(query);

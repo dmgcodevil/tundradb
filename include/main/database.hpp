@@ -150,7 +150,7 @@ class Database {
    *
    * Mode 2 - by MATCH query (alias-qualified SET, multi-schema):
    *   db.update(UpdateQuery::match(
-   *       Query::from("u:User")
+   *       Query::match("u:User")
    *           .traverse("u", "WORKS_AT", "c:Company")
    *           .where("c.name", CompareOp::Eq, Value("Google"))
    *           .build()
@@ -177,13 +177,13 @@ class Database {
                      const std::vector<FieldUpdate> &fields,
                      UpdateType update_type, UpdateResult &result);
 
-  /** Initialize QueryState from query: temporal context, FROM table, prepare.
+  /** Initialize QueryState from query: temporal context, root table, prepare.
    */
   [[nodiscard]] arrow::Status init_query_state(const Query &query,
                                                QueryState &query_state) const;
 
-  /** Inline WHERE clauses applicable to the FROM alias. */
-  [[nodiscard]] arrow::Status inline_from_where(const Query &query,
+  /** Inline WHERE clauses applicable to the root alias. */
+  [[nodiscard]] arrow::Status inline_root_where(const Query &query,
                                                 QueryState &query_state,
                                                 QueryResult &result) const;
 
