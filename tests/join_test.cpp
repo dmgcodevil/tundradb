@@ -688,6 +688,48 @@ TEST(JoinTest, LeftJoin) {
       << "Expected NULL for c.size in jeff's row";
 }
 
+TEST(JoinTest, LeftJoinTargetWhereFiltersFinalRows) {
+  auto db = setup_test_db();
+  db->connect(0, "friend", 1).ValueOrDie();    // alex -> bob
+  db->connect(0, "friend", 2).ValueOrDie();    // alex -> jeff
+  db->connect(1, "works-at", 1).ValueOrDie();  // bob -> google
+  db->connect(2, "works-at", 0).ValueOrDie();  // jeff -> ibm
+
+  Query query =
+      Query::match("u:users")
+          .traverse("u", "friend", "f:users", TraverseType::Inner)
+          .traverse("f", "works-at", "c:companies", TraverseType::Left)
+          .where("c.name", CompareOp::Eq, Value("google"))
+          .build();
+
+  auto query_result = db->query(query);
+  ASSERT_TRUE(query_result.ok());
+  auto result_table = query_result.ValueOrDie()->table();
+  ASSERT_NE(result_table, nullptr);
+  ASSERT_EQ(result_table->num_rows(), 1);
+
+  auto friend_name_col = result_table->GetColumnByName("f.name");
+  auto company_name_col = result_table->GetColumnByName("c.name");
+  ASSERT_NE(friend_name_col, nullptr);
+  ASSERT_NE(company_name_col, nullptr);
+
+  int bob_index = -1;
+  for (int64_t i = 0; i < result_table->num_rows(); ++i) {
+    auto friend_name_scalar = std::static_pointer_cast<arrow::StringScalar>(
+        friend_name_col->GetScalar(i).ValueOrDie());
+    if (friend_name_scalar->view() == "bob") {
+      bob_index = static_cast<int>(i);
+    }
+  }
+
+  ASSERT_NE(bob_index, -1);
+
+  auto bob_company = std::static_pointer_cast<arrow::StringScalar>(
+      company_name_col->GetScalar(bob_index).ValueOrDie());
+  ASSERT_TRUE(bob_company->is_valid);
+  EXPECT_EQ(bob_company->ToString(), "google");
+}
+
 TEST(JoinTest, RightJoin) {
   auto db = setup_test_db();
   // Create relationships where some targets don't have matching sources
