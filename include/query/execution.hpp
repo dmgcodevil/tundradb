@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "query/query.hpp"
+#include "query/where_planner.hpp"
 #include "schema/schema.hpp"
 
 namespace tundradb {
@@ -450,6 +451,7 @@ struct QueryState {
 
   SchemaRef root;                    ///< Root schema for query execution.
   std::vector<Traverse> traversals;  ///< Traverse clauses in query order.
+  std::optional<WhereExecutionPlan> where_plan;  ///< Planned WHERE execution.
 
   std::shared_ptr<SchemaRegistry> schema_registry;  ///< Node schema registry.
   std::shared_ptr<NodeManager> node_manager;        ///< Node storage.

@@ -474,6 +474,7 @@ TEST(JoinTest, MultiPathToSameTarget) {
           .where(
               "c2.id", CompareOp::Eq,
               Value((int64_t)0))  // Filter for friend's company (also IBM ID 0)
+          .inline_where()
           .build();
 
   auto query_result = db->query(query);
@@ -700,6 +701,7 @@ TEST(JoinTest, LeftJoinTargetWhereFiltersFinalRows) {
           .traverse("u", "friend", "f:users", TraverseType::Inner)
           .traverse("f", "works-at", "c:companies", TraverseType::Left)
           .where("c.name", CompareOp::Eq, Value("google"))
+          .inline_where()
           .build();
 
   auto query_result = db->query(query);

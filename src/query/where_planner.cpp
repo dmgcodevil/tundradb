@@ -34,6 +34,81 @@ struct AliasActivation {
   AliasKind kind;
 };
 
+/**
+ * @brief Record the clause index for each prepared traverse in query order.
+ *
+ * The planner needs this mapping because a predicate is only pushable if it
+ * can be consumed before the original WHERE clause position without crossing a
+ * traverse that changes nullability for that alias.
+ */
+std::vector<size_t> build_traverse_clause_indices(const Query& query) {
+  std::vector<size_t> indices;
+  indices.reserve(query.clauses().size());
+  for (size_t clause_index = 0; clause_index < query.clauses().size();
+       ++clause_index) {
+    if (query.clauses()[clause_index]->type() == Clause::Type::TRAVERSE) {
+      indices.push_back(clause_index);
+    }
+  }
+  return indices;
+}
+
+/**
+ * @brief Return whether this traverse can null-extend the given alias.
+ *
+ * Single-alias predicates are only safe to consume early while the alias is
+ * guaranteed to stay materialized. Once an outer join can produce NULLs for
+ * that alias, consuming the predicate before the join changes post-WHERE
+ * semantics into join-condition semantics.
+ */
+bool alias_becomes_nullable_during_traverse(const std::string& alias,
+                                            const AliasKind alias_kind,
+                                            const Traverse& traverse) {
+  switch (alias_kind) {
+    case AliasKind::Node:
+      if (alias == traverse.source().value()) {
+        return traverse.traverse_type() == TraverseType::Right ||
+               traverse.traverse_type() == TraverseType::Full;
+      }
+      if (alias == traverse.target().value()) {
+        return traverse.traverse_type() == TraverseType::Left ||
+               traverse.traverse_type() == TraverseType::Full;
+      }
+      return false;
+    case AliasKind::Edge:
+      return traverse.edge_alias().has_value() &&
+             alias == traverse.edge_alias().value() &&
+             traverse.traverse_type() != TraverseType::Inner;
+  }
+  return false;
+}
+
+/**
+ * @brief Check whether a planned fragment may be consumed before a WHERE.
+ *
+ * We walk from the alias activation site up to the WHERE clause and reject
+ * pushdown if any traverse along the way can null-extend that alias. In that
+ * case the fragment stays residual so final row filtering preserves the
+ * user-visible post-join semantics.
+ */
+bool can_consume_pushdown_before_clause(
+    const std::string& alias, const AliasActivation& activation,
+    size_t where_clause_index, const QueryState& query_state,
+    const std::vector<size_t>& traverse_clause_indices) {
+  const size_t start_traverse_index = activation.traverse_index.value_or(0);
+  for (size_t traverse_index = start_traverse_index;
+       traverse_index < query_state.traversals.size(); ++traverse_index) {
+    if (traverse_clause_indices[traverse_index] >= where_clause_index) {
+      break;
+    }
+    if (alias_becomes_nullable_during_traverse(
+            alias, activation.kind, query_state.traversals[traverse_index])) {
+      return false;
+    }
+  }
+  return true;
+}
+
 std::shared_ptr<WhereExpr> combine_with_and(std::shared_ptr<WhereExpr> left,
                                             std::shared_ptr<WhereExpr> right) {
   if (!left) return right;
@@ -147,6 +222,7 @@ arrow::Result<WhereExecutionPlan> build_where_plan(
   plan.residual_by_clause.resize(query.clauses().size());
 
   auto activation = build_alias_activation_map(query, query_state);
+  const auto traverse_clause_indices = build_traverse_clause_indices(query);
 
   for (size_t clause_index = 0; clause_index < query.clauses().size();
        ++clause_index) {
@@ -165,6 +241,14 @@ arrow::Result<WhereExecutionPlan> build_where_plan(
       if (it == activation.end()) {
         return arrow::Status::KeyError(
             "Alias '", alias, "' is not registered for WHERE pushdown");
+      }
+
+      if (!can_consume_pushdown_before_clause(alias, it->second, clause_index,
+                                              query_state,
+                                              traverse_clause_indices)) {
+        parts.residual =
+            combine_with_and(std::move(parts.residual), std::move(expr));
+        continue;
       }
 
       ARROW_RETURN_NOT_OK(append_pushdown(

@@ -222,18 +222,31 @@ arrow::Result<std::vector<std::shared_ptr<WhereExpr>>>
 Database::execute_clauses(const Query& query, QueryState& query_state,
                           QueryResult& result) const {
   std::vector<std::shared_ptr<WhereExpr>> post_where;
+  size_t traverse_index = 0;
   for (size_t i = 0; i < query.clauses().size(); ++i) {
     auto clause = query.clauses()[i];
     switch (clause->type()) {
-      case Clause::Type::WHERE:
-        ARROW_RETURN_NOT_OK(
-            apply_where_filter(std::dynamic_pointer_cast<WhereExpr>(clause),
-                               query_state, post_where));
+      case Clause::Type::WHERE: {
+        if (query.inline_where() && query_state.where_plan.has_value()) {
+          const auto residual = query_state.where_plan->residual_by_clause[i];
+          if (residual) {
+            post_where.push_back(residual);
+            auto& stats = result.mutable_execution_stats();
+            stats.num_where_predicates_deferred++;
+            stats.deferred_conditions.push_back(residual->toString());
+          }
+        } else {
+          ARROW_RETURN_NOT_OK(
+              apply_where_filter(std::dynamic_pointer_cast<WhereExpr>(clause),
+                                 query_state, post_where));
+        }
         break;
+      }
       case Clause::Type::TRAVERSE:
         ARROW_RETURN_NOT_OK(
             execute_traverse(std::static_pointer_cast<Traverse>(clause),
-                             query_state, query, i, result));
+                             query_state, query, i, traverse_index, result));
+        ++traverse_index;
         break;
       default:
         return arrow::Status::NotImplemented(

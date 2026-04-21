@@ -601,8 +601,11 @@ TEST_F(WhereExpressionTest, TraversalWhereCombinations3) {
   ASSERT_EQ(table->num_rows(), 0);
 
   const auto& stats = result.ValueOrDie()->execution_stats();
-  EXPECT_EQ(stats.num_where_clauses_inlined, 2);
-  EXPECT_EQ(stats.num_where_clauses_post_processed, 1);
+  EXPECT_EQ(stats.num_where_clauses_inlined, 4);
+  EXPECT_EQ(stats.num_where_clauses_post_processed, 0);
+  EXPECT_EQ(stats.num_where_predicates_pushed_to_root, 2);
+  EXPECT_EQ(stats.num_where_predicates_pushed_to_traverse, 2);
+  EXPECT_EQ(stats.num_where_predicates_deferred, 0);
 }
 
 TEST_F(WhereExpressionTest, QueryMaterializesMapColumn) {

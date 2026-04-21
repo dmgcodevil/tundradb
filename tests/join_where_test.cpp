@@ -163,6 +163,7 @@ TEST_F(JoinWhereTest, InnerJoinTargetWhereFiltersMatchedRows) {
           .traverse("u", "works-at", "c:companies", TraverseType::Inner)
           .where("c.name", CompareOp::Eq, Value("google"s))
           .select({"u.name", "c.name"})
+          .inline_where()
           .build();
 
   expect_query_output(query, query_text, expected_table);
@@ -192,6 +193,7 @@ TEST_F(JoinWhereTest, InnerJoinSourceWhereFiltersBeforeTraverse) {
           .traverse("u", "works-at", "c:companies", TraverseType::Inner)
           .where("u.name", CompareOp::Eq, Value("alex"s))
           .select({"u.name", "c.name"})
+          .inline_where()
           .build();
 
   expect_query_output(query, query_text, expected_table);
@@ -222,6 +224,7 @@ TEST_F(JoinWhereTest, InnerJoinSourceAndTargetWhereMatchesSingleRow) {
           .where("u.name", CompareOp::Eq, Value("alex"s))
           .and_where("c.name", CompareOp::Eq, Value("google"s))
           .select({"u.name", "c.name"})
+          .inline_where()
           .build();
 
   expect_query_output(query, query_text, expected_table);
@@ -250,6 +253,7 @@ TEST_F(JoinWhereTest, LeftJoinSourceWhereKeepsNullExtendedSourceRow) {
                    .traverse("u", "works-at", "c:companies", TraverseType::Left)
                    .where("u.name", CompareOp::Eq, Value("jeff"s))
                    .select({"u.name", "c.name"})
+                   .inline_where()
                    .build();
 
   expect_query_output(query, query_text, expected_table);
@@ -279,6 +283,7 @@ TEST_F(JoinWhereTest, LeftJoinSourceAndTargetWhereMatchesQualifiedRow) {
                    .where("u.name", CompareOp::Eq, Value("alex"s))
                    .and_where("c.name", CompareOp::Eq, Value("google"s))
                    .select({"u.name", "c.name"})
+                   .inline_where()
                    .build();
 
   expect_query_output(query, query_text, expected_table);
@@ -310,6 +315,7 @@ TEST_F(JoinWhereTest, LeftJoinMixedAliasOrRemainsResidual) {
                    .where("c.name", CompareOp::Eq, Value("google"s))
                    .or_where("u.name", CompareOp::Eq, Value("jeff"s))
                    .select({"u.name", "c.name"})
+                   .inline_where()
                    .build();
 
   expect_query_output(query, query_text, expected_table);
@@ -325,8 +331,7 @@ Expected output table:
 u.name | c.name
 alex | google
 */
-TEST_F(JoinWhereTest,
-       DISABLED_LeftJoinTargetWhereShouldFilterOutNullExtendedRows) {
+TEST_F(JoinWhereTest, LeftJoinTargetWhereShouldFilterOutNullExtendedRows) {
   const std::string query_text =
       "MATCH (u:users)-[:works-at LEFT]->(c:companies)\n"
       "WHERE c.name = \"google\"\n"
@@ -339,6 +344,7 @@ TEST_F(JoinWhereTest,
                    .traverse("u", "works-at", "c:companies", TraverseType::Left)
                    .where("c.name", CompareOp::Eq, Value("google"s))
                    .select({"u.name", "c.name"})
+                   .inline_where()
                    .build();
 
   expect_query_output(query, query_text, expected_table);
@@ -354,7 +360,7 @@ Expected output table:
 u.name | c.name
 alex | google
 */
-TEST_F(JoinWhereTest, DISABLED_RightJoinSourceWhereDropsNullSourceRows) {
+TEST_F(JoinWhereTest, RightJoinSourceWhereDropsNullSourceRows) {
   const std::string query_text =
       "MATCH (u:users)-[:works-at RIGHT]->(c:companies)\n"
       "WHERE u.name = \"alex\"\n"
@@ -368,6 +374,7 @@ TEST_F(JoinWhereTest, DISABLED_RightJoinSourceWhereDropsNullSourceRows) {
           .traverse("u", "works-at", "c:companies", TraverseType::Right)
           .where("u.name", CompareOp::Eq, Value("alex"s))
           .select({"u.name", "c.name"})
+          .inline_where()
           .build();
 
   expect_query_output(query, query_text, expected_table);
@@ -397,6 +404,7 @@ TEST_F(JoinWhereTest, RightJoinTargetWhereKeepsUnmatchedTargetRow) {
           .traverse("u", "works-at", "c:companies", TraverseType::Right)
           .where("c.name", CompareOp::Eq, Value("meta"s))
           .select({"u.name", "c.name"})
+          .inline_where()
           .build();
 
   expect_query_output(query, query_text, expected_table);
@@ -412,7 +420,7 @@ Expected output table:
 u.name | c.name
 jeff | NULL
 */
-TEST_F(JoinWhereTest, DISABLED_FullJoinSourceWhereKeepsUnmatchedSourceRow) {
+TEST_F(JoinWhereTest, FullJoinSourceWhereKeepsUnmatchedSourceRow) {
   const std::string query_text =
       "MATCH (u:users)-[:works-at FULL]->(c:companies)\n"
       "WHERE u.name = \"jeff\"\n"
@@ -425,6 +433,7 @@ TEST_F(JoinWhereTest, DISABLED_FullJoinSourceWhereKeepsUnmatchedSourceRow) {
                    .traverse("u", "works-at", "c:companies", TraverseType::Full)
                    .where("u.name", CompareOp::Eq, Value("jeff"s))
                    .select({"u.name", "c.name"})
+                   .inline_where()
                    .build();
 
   expect_query_output(query, query_text, expected_table);
@@ -440,7 +449,7 @@ Expected output table:
 u.name | c.name
 NULL | meta
 */
-TEST_F(JoinWhereTest, DISABLED_FullJoinTargetWhereKeepsUnmatchedTargetRow) {
+TEST_F(JoinWhereTest, FullJoinTargetWhereKeepsUnmatchedTargetRow) {
   const std::string query_text =
       "MATCH (u:users)-[:works-at FULL]->(c:companies)\n"
       "WHERE c.name = \"meta\"\n"
@@ -453,6 +462,7 @@ TEST_F(JoinWhereTest, DISABLED_FullJoinTargetWhereKeepsUnmatchedTargetRow) {
                    .traverse("u", "works-at", "c:companies", TraverseType::Full)
                    .where("c.name", CompareOp::Eq, Value("meta"s))
                    .select({"u.name", "c.name"})
+                   .inline_where()
                    .build();
 
   expect_query_output(query, query_text, expected_table);
@@ -485,6 +495,7 @@ TEST_F(JoinWhereTest, TwoHopInnerJoinMiddleAndTargetWhere) {
           .where("f.name", CompareOp::Eq, Value("bob"s))
           .and_where("c.name", CompareOp::Eq, Value("acme"s))
           .select({"u.name", "f.name", "c.name"})
+          .inline_where()
           .build();
 
   expect_query_output(query, query_text, expected_table);
@@ -500,8 +511,7 @@ Expected output table:
 u.name | f.name | c.name
 alex | jeff | NULL
 */
-TEST_F(JoinWhereTest,
-       DISABLED_TwoHopLeftJoinMiddleWhereKeepsNullExtendedTargetRow) {
+TEST_F(JoinWhereTest, TwoHopLeftJoinMiddleWhereKeepsNullExtendedTargetRow) {
   const std::string query_text =
       "MATCH (u:users)-[:friend INNER]->(f:users)-[:works-at LEFT]->"
       "(c:companies)\n"
@@ -516,6 +526,7 @@ TEST_F(JoinWhereTest,
                    .traverse("f", "works-at", "c:companies", TraverseType::Left)
                    .where("f.name", CompareOp::Eq, Value("jeff"s))
                    .select({"u.name", "f.name", "c.name"})
+                   .inline_where()
                    .build();
 
   expect_query_output(query, query_text, expected_table);
@@ -548,6 +559,7 @@ TEST_F(JoinWhereTest, TwoHopLeftJoinRootMiddleAndTargetWhere) {
                    .and_where("f.name", CompareOp::Eq, Value("bob"s))
                    .and_where("c.name", CompareOp::Eq, Value("acme"s))
                    .select({"u.name", "f.name", "c.name"})
+                   .inline_where()
                    .build();
 
   expect_query_output(query, query_text, expected_table);

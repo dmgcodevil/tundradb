@@ -694,8 +694,14 @@ struct QueryExecutionStats {
   int num_edges_traversed = 0;
   int num_where_clauses_inlined = 0;
   int num_where_clauses_post_processed = 0;
+  int num_where_predicates_pushed_to_root = 0;
+  int num_where_predicates_pushed_to_traverse = 0;
+  int num_where_predicates_deferred = 0;
   std::vector<std::string> inlined_conditions;         // For debugging
   std::vector<std::string> post_processed_conditions;  // For debugging
+  std::vector<std::string> root_pushdown_conditions;
+  std::vector<std::string> traverse_pushdown_conditions;
+  std::vector<std::string> deferred_conditions;
 };
 
 /** @brief Holds the output Arrow table and execution statistics from a query.

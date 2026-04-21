@@ -196,7 +196,8 @@ class Database {
   /** Execute a single TRAVERSE clause, updating query_state in-place. */
   [[nodiscard]] arrow::Status execute_traverse(
       const std::shared_ptr<Traverse> &traverse, QueryState &query_state,
-      const Query &query, size_t clause_index, QueryResult &result) const;
+      const Query &query, size_t clause_index, size_t traverse_index,
+      QueryResult &result) const;
 
   /** Apply a single-variable WHERE filter, or defer to post_where. */
   [[nodiscard]] arrow::Status apply_where_filter(

@@ -790,6 +790,8 @@ arrow::Result<std::shared_ptr<arrow::Table>> Database::build_result_table(
 
   for (const auto& expr : post_where) {
     result.mutable_execution_stats().num_where_clauses_post_processed++;
+    result.mutable_execution_stats().post_processed_conditions.push_back(
+        expr->toString());
     IF_DEBUG_ENABLED { log_debug("post process where: {}", expr->toString()); }
     ARROW_ASSIGN_OR_RAISE(table, filter(table, *expr, false));
   }
