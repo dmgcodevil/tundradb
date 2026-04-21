@@ -683,7 +683,8 @@ std::vector<std::shared_ptr<WhereExpr>> get_where_to_inline(
 arrow::Result<std::shared_ptr<arrow::Table>> inline_where(
     const SchemaRef& ref, std::shared_ptr<arrow::Table> table,
     QueryState& query_state,
-    const std::vector<std::shared_ptr<WhereExpr>>& where_exprs) {
+    const std::vector<std::shared_ptr<WhereExpr>>& where_exprs,
+    bool mark_inlined) {
   auto curr_table = std::move(table);
   for (const auto& exp : where_exprs) {
     IF_DEBUG_ENABLED { log_debug("inline where '{}'", exp->toString()); }
@@ -696,7 +697,9 @@ arrow::Result<std::shared_ptr<arrow::Table>> inline_where(
     }
     ARROW_RETURN_NOT_OK(query_state.update_table(result.ValueOrDie(), ref));
     curr_table = result.ValueOrDie();
-    exp->set_inlined(true);
+    if (mark_inlined) {
+      exp->set_inlined(true);
+    }
   }
   return curr_table;
 }

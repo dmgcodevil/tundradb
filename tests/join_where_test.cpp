@@ -347,7 +347,15 @@ TEST_F(JoinWhereTest, LeftJoinTargetWhereShouldFilterOutNullExtendedRows) {
                    .inline_where()
                    .build();
 
-  expect_query_output(query, query_text, expected_table);
+  auto result = db_->query(query);
+  ASSERT_TRUE(result.ok()) << result.status().ToString();
+  auto actual = table_to_test_string(result.ValueOrDie()->table());
+  EXPECT_EQ(actual, expected_table) << "Query:\n" << query_text;
+
+  const auto& stats = result.ValueOrDie()->execution_stats();
+  EXPECT_EQ(stats.num_where_predicates_pushed_to_traverse, 0);
+  EXPECT_EQ(stats.num_where_predicates_prefiltered_at_traverse, 1);
+  EXPECT_EQ(stats.num_where_predicates_deferred, 1);
 }
 
 /*

@@ -16,15 +16,20 @@ std::vector<std::shared_ptr<WhereExpr>> extract_predicates(
   return exprs;
 }
 
-void record_root_pushdowns(QueryResult& result,
-                           const std::vector<PlannedPredicate>& predicates) {
+void record_root_planned_predicates(
+    QueryResult& result, const std::vector<PlannedPredicate>& predicates) {
   auto& stats = result.mutable_execution_stats();
-  stats.num_where_predicates_pushed_to_root += predicates.size();
-  stats.num_where_clauses_inlined += predicates.size();
   for (const auto& predicate : predicates) {
     const auto text = predicate.expr->toString();
-    stats.inlined_conditions.push_back(text);
-    stats.root_pushdown_conditions.push_back(text);
+    if (predicate.mode == PlannedPredicateMode::Consume) {
+      stats.num_where_predicates_pushed_to_root++;
+      stats.num_where_clauses_inlined++;
+      stats.inlined_conditions.push_back(text);
+      stats.root_pushdown_conditions.push_back(text);
+    } else {
+      stats.num_where_predicates_prefiltered_at_root++;
+      stats.root_prefilter_conditions.push_back(text);
+    }
   }
 }
 
@@ -82,9 +87,9 @@ arrow::Status Database::inline_root_where(const Query& query,
       return arrow::Status::OK();
     }
 
-    record_root_pushdowns(result, root_filters);
+    record_root_planned_predicates(result, root_filters);
     return inline_where(query.root(), query_state.tables[query.root().value()],
-                        query_state, extract_predicates(root_filters))
+                        query_state, extract_predicates(root_filters), false)
         .status();
   }
 

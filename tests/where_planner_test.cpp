@@ -73,12 +73,17 @@ TEST_F(WherePlannerTest, SplitsAndAcrossRootTargetAndEdge) {
   ASSERT_EQ(plan.root_filters.size(), 1u);
   EXPECT_EQ(plan.root_filters[0].source_clause_index, 1u);
   EXPECT_EQ(plan.root_filters[0].expr->extract_first_variable(), "u");
+  EXPECT_EQ(plan.root_filters[0].mode, PlannedPredicateMode::Consume);
 
   ASSERT_EQ(plan.traverse_filters.size(), 1u);
   ASSERT_EQ(plan.traverse_filters[0].target_filters.size(), 1u);
   ASSERT_EQ(plan.traverse_filters[0].edge_filters.size(), 1u);
   EXPECT_EQ(plan.traverse_filters[0].target_filters[0].source_clause_index, 1u);
   EXPECT_EQ(plan.traverse_filters[0].edge_filters[0].source_clause_index, 1u);
+  EXPECT_EQ(plan.traverse_filters[0].target_filters[0].mode,
+            PlannedPredicateMode::Consume);
+  EXPECT_EQ(plan.traverse_filters[0].edge_filters[0].mode,
+            PlannedPredicateMode::Consume);
   EXPECT_EQ(
       plan.traverse_filters[0].target_filters[0].expr->extract_first_variable(),
       "c");
@@ -109,6 +114,10 @@ TEST_F(WherePlannerTest, PullsLaterAliasFiltersBackToEarliestTraverseSlot) {
   ASSERT_EQ(plan.traverse_filters[0].target_filters.size(), 2u);
   EXPECT_EQ(plan.traverse_filters[0].target_filters[0].source_clause_index, 1u);
   EXPECT_EQ(plan.traverse_filters[0].target_filters[1].source_clause_index, 3u);
+  EXPECT_EQ(plan.traverse_filters[0].target_filters[0].mode,
+            PlannedPredicateMode::Consume);
+  EXPECT_EQ(plan.traverse_filters[0].target_filters[1].mode,
+            PlannedPredicateMode::Consume);
   EXPECT_EQ(
       plan.traverse_filters[0].target_filters[0].expr->extract_first_variable(),
       "c");
@@ -118,6 +127,8 @@ TEST_F(WherePlannerTest, PullsLaterAliasFiltersBackToEarliestTraverseSlot) {
 
   ASSERT_EQ(plan.traverse_filters[1].target_filters.size(), 1u);
   EXPECT_EQ(plan.traverse_filters[1].target_filters[0].source_clause_index, 3u);
+  EXPECT_EQ(plan.traverse_filters[1].target_filters[0].mode,
+            PlannedPredicateMode::Consume);
   EXPECT_EQ(
       plan.traverse_filters[1].target_filters[0].expr->extract_first_variable(),
       "r");
@@ -152,6 +163,32 @@ TEST_F(WherePlannerTest, KeepsMixedAliasOrAsResidual) {
   ASSERT_EQ(plan.residual_by_clause.size(), 2u);
   ASSERT_NE(plan.residual_by_clause[1], nullptr);
   EXPECT_EQ(plan.residual_by_clause[1]->get_all_variables().size(), 2u);
+}
+
+TEST_F(WherePlannerTest, PrefiltersNullableLeftTargetAndKeepsResidual) {
+  auto query = Query::match("u:User")
+                   .traverse("u", "WORKS_AT", "c:Company", TraverseType::Left)
+                   .where("c.z", CompareOp::Eq, Value(int32_t(3)))
+                   .traverse("c", "LOCATED_IN", "r:Region")
+                   .build();
+
+  QueryState state(registry_);
+  prepare_state(query, state);
+  auto plan_res = build_where_plan(query, state);
+  ASSERT_TRUE(plan_res.ok()) << plan_res.status().ToString();
+  const auto& plan = plan_res.ValueOrDie();
+
+  ASSERT_EQ(plan.traverse_filters.size(), 2u);
+  ASSERT_EQ(plan.traverse_filters[0].target_filters.size(), 1u);
+  EXPECT_EQ(plan.traverse_filters[0].target_filters[0].mode,
+            PlannedPredicateMode::PrefilterOnly);
+  EXPECT_EQ(
+      plan.traverse_filters[0].target_filters[0].expr->extract_first_variable(),
+      "c");
+
+  ASSERT_EQ(plan.residual_by_clause.size(), 3u);
+  ASSERT_NE(plan.residual_by_clause[1], nullptr);
+  EXPECT_EQ(plan.residual_by_clause[1]->extract_first_variable(), "c");
 }
 
 }  // namespace tundradb

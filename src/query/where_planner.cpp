@@ -246,13 +246,19 @@ arrow::Result<WhereExecutionPlan> build_where_plan(
       if (!can_consume_pushdown_before_clause(alias, it->second, clause_index,
                                               query_state,
                                               traverse_clause_indices)) {
+        ARROW_RETURN_NOT_OK(append_pushdown(
+            plan, it->second,
+            PlannedPredicate{clause_index, expr,
+                             PlannedPredicateMode::PrefilterOnly}));
         parts.residual =
             combine_with_and(std::move(parts.residual), std::move(expr));
         continue;
       }
 
-      ARROW_RETURN_NOT_OK(append_pushdown(
-          plan, it->second, PlannedPredicate{clause_index, std::move(expr)}));
+      ARROW_RETURN_NOT_OK(
+          append_pushdown(plan, it->second,
+                          PlannedPredicate{clause_index, std::move(expr),
+                                           PlannedPredicateMode::Consume}));
     }
     plan.residual_by_clause[clause_index] = std::move(parts.residual);
   }
