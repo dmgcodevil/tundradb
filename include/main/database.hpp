@@ -211,20 +211,10 @@ class Database {
     std::string alias;
   };
 
-  enum class PlannedPredicateSite {
-    Root,
-    Traverse,
-  };
-
   /** Classify a WHERE clause as skipped, deferred, or directly applicable. */
   [[nodiscard]] arrow::Result<WhereDisposition> classify_where_filter(
       const std::shared_ptr<WhereExpr> &where,
       const QueryState &query_state) const;
-
-  /** Record planner-driven WHERE stats for one execution site. */
-  void record_planned_predicates(
-      QueryResult &result, const std::vector<PlannedPredicate> &predicates,
-      PlannedPredicateSite site) const;
 
   /** Apply a single-alias WHERE clause to an already materialized alias. */
   [[nodiscard]] arrow::Status apply_alias_where(

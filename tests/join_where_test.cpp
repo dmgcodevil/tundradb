@@ -353,9 +353,21 @@ TEST_F(JoinWhereTest, LeftJoinTargetWhereShouldFilterOutNullExtendedRows) {
   EXPECT_EQ(actual, expected_table) << "Query:\n" << query_text;
 
   const auto& stats = result.ValueOrDie()->execution_stats();
-  EXPECT_EQ(stats.num_where_predicates_pushed_to_traverse, 0);
-  EXPECT_EQ(stats.num_where_predicates_prefiltered_at_traverse, 1);
-  EXPECT_EQ(stats.num_where_predicates_deferred, 1);
+  const auto it = stats.planned_conditions.find(PlannedPredicateSite::Traverse);
+  ASSERT_NE(it, stats.planned_conditions.end());
+  EXPECT_EQ(std::ranges::count_if(it->second.begin(), it->second.end(),
+                                  [](const PlannedPredicateStat& stat) {
+                                    return stat.mode ==
+                                           PlannedPredicateMode::Consume;
+                                  }),
+            0);
+  EXPECT_EQ(std::ranges::count_if(it->second.begin(), it->second.end(),
+                                  [](const PlannedPredicateStat& stat) {
+                                    return stat.mode ==
+                                           PlannedPredicateMode::PrefilterOnly;
+                                  }),
+            1);
+  EXPECT_EQ(stats.deferred_conditions.size(), 1u);
 }
 
 /*

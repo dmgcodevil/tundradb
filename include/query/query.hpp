@@ -10,6 +10,7 @@
 #include <llvm/ADT/StringMap.h>
 
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <set>
@@ -688,24 +689,52 @@ class Query {
   };
 };
 
-/** @brief Counters collected during query execution for diagnostics. */
+/** @brief How a planned predicate behaves relative to residual filtering. */
+enum class PlannedPredicateMode {
+  Consume,
+  PrefilterOnly,
+};
+
+/** @brief The execution phase where a predicate was applied early. */
+enum class PlannedPredicateSite {
+  Root,
+  Traverse,
+};
+
+/** @brief Diagnostic snapshot of one planned predicate application. */
+struct PlannedPredicateStat {
+  std::string condition;
+  PlannedPredicateMode mode = PlannedPredicateMode::Consume;
+};
+
+/** @brief Counters and predicate traces collected during query execution. */
 struct QueryExecutionStats {
   int num_nodes_processed = 0;
   int num_edges_traversed = 0;
   int num_where_clauses_inlined = 0;
   int num_where_clauses_post_processed = 0;
-  int num_where_predicates_pushed_to_root = 0;
-  int num_where_predicates_pushed_to_traverse = 0;
-  int num_where_predicates_prefiltered_at_root = 0;
-  int num_where_predicates_prefiltered_at_traverse = 0;
-  int num_where_predicates_deferred = 0;
   std::vector<std::string> inlined_conditions;         // For debugging
   std::vector<std::string> post_processed_conditions;  // For debugging
-  std::vector<std::string> root_pushdown_conditions;
-  std::vector<std::string> traverse_pushdown_conditions;
-  std::vector<std::string> root_prefilter_conditions;
-  std::vector<std::string> traverse_prefilter_conditions;
+  std::map<PlannedPredicateSite, std::vector<PlannedPredicateStat>>
+      planned_conditions;
   std::vector<std::string> deferred_conditions;
+
+  /**
+   * Record one early predicate application in the execution stats.
+   *
+   * This is diagnostics metadata only; actual execution behavior is still
+   * defined by the presence of predicates in the where plan and residual list.
+   */
+  void record_planned_predicate(PlannedPredicateSite site,
+                                std::string condition,
+                                PlannedPredicateMode mode) {
+    planned_conditions[site].push_back(
+        PlannedPredicateStat{.condition = condition, .mode = mode});
+    if (mode == PlannedPredicateMode::Consume) {
+      num_where_clauses_inlined++;
+      inlined_conditions.push_back(planned_conditions[site].back().condition);
+    }
+  }
 };
 
 /** @brief Holds the output Arrow table and execution statistics from a query.

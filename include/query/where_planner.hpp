@@ -11,26 +11,6 @@ namespace tundradb {
 struct QueryState;
 
 /**
- * @brief Metadata describing how a planned predicate participates in the plan.
- *
- * This enum does not decide where or whether execution applies a predicate.
- * Execution is driven by the plan shape itself:
- * - predicates present in `root_filters` / `traverse_filters` are applied early
- * - predicates present in `residual_by_clause` are applied later
- *
- * `mode` exists to make the planner output explicit and to keep execution
- * statistics honest.
- *
- * `Consume` means the fragment appears only in the early phase of the plan.
- * `PrefilterOnly` means the fragment appears in an early phase and is also
- * retained in `residual_by_clause`.
- */
-enum class PlannedPredicateMode {
-  Consume,
-  PrefilterOnly,
-};
-
-/**
  * @brief One predicate fragment scheduled by the WHERE planner.
  *
  * The planner preserves the original query clause position so execution can

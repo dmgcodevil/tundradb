@@ -238,7 +238,6 @@ Database::execute_clauses(const Query& query, QueryState& query_state,
                   query_state.where_plan->residual_by_clause[i]) {
             post_where.push_back(residual);
             auto& stats = result.mutable_execution_stats();
-            stats.num_where_predicates_deferred++;
             stats.deferred_conditions.push_back(residual->toString());
           }
         } else {

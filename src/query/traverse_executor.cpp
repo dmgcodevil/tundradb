@@ -52,10 +52,17 @@ arrow::Status Database::execute_traverse(
     const auto& traverse_plan = where_plan.traverse_filters[traverse_index];
     where_clauses = extract_predicates(traverse_plan.target_filters);
     edge_where_clauses = extract_predicates(traverse_plan.edge_filters);
-    record_planned_predicates(result, traverse_plan.target_filters,
-                              PlannedPredicateSite::Traverse);
-    record_planned_predicates(result, traverse_plan.edge_filters,
-                              PlannedPredicateSite::Traverse);
+    auto& stats = result.mutable_execution_stats();
+    for (const auto& predicate : traverse_plan.target_filters) {
+      stats.record_planned_predicate(PlannedPredicateSite::Traverse,
+                                     predicate.expr->toString(),
+                                     predicate.mode);
+    }
+    for (const auto& predicate : traverse_plan.edge_filters) {
+      stats.record_planned_predicate(PlannedPredicateSite::Traverse,
+                                     predicate.expr->toString(),
+                                     predicate.mode);
+    }
   } else {
     where_clauses = get_where_to_inline(traverse->target().value(),
                                         clause_index + 1, query.clauses());

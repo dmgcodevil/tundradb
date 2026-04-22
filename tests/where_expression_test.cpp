@@ -1,6 +1,7 @@
 #include <arrow/pretty_print.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <vector>
@@ -20,6 +21,24 @@ using namespace std::string_literals;
 using namespace tundradb;
 
 namespace tundradb {
+
+namespace {
+
+size_t count_planned_predicates(const QueryExecutionStats& stats,
+                                PlannedPredicateSite site,
+                                PlannedPredicateMode mode) {
+  const auto it = stats.planned_conditions.find(site);
+  if (it == stats.planned_conditions.end()) {
+    return 0;
+  }
+
+  return static_cast<size_t>(std::ranges::count_if(
+      it->second,
+      [mode](const PlannedPredicateStat& stat) { return stat.mode == mode; }));
+}
+
+}  // namespace
+
 class WhereExpressionTest : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -603,9 +622,13 @@ TEST_F(WhereExpressionTest, TraversalWhereCombinations3) {
   const auto& stats = result.ValueOrDie()->execution_stats();
   EXPECT_EQ(stats.num_where_clauses_inlined, 4);
   EXPECT_EQ(stats.num_where_clauses_post_processed, 0);
-  EXPECT_EQ(stats.num_where_predicates_pushed_to_root, 2);
-  EXPECT_EQ(stats.num_where_predicates_pushed_to_traverse, 2);
-  EXPECT_EQ(stats.num_where_predicates_deferred, 0);
+  EXPECT_EQ(count_planned_predicates(stats, PlannedPredicateSite::Root,
+                                     PlannedPredicateMode::Consume),
+            2u);
+  EXPECT_EQ(count_planned_predicates(stats, PlannedPredicateSite::Traverse,
+                                     PlannedPredicateMode::Consume),
+            2u);
+  EXPECT_TRUE(stats.deferred_conditions.empty());
 }
 
 TEST_F(WhereExpressionTest, QueryMaterializesMapColumn) {

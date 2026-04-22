@@ -59,34 +59,6 @@ arrow::Status Database::init_query_state(const Query& query,
   return arrow::Status::OK();
 }
 
-void Database::record_planned_predicates(
-    QueryResult& result, const std::vector<PlannedPredicate>& predicates,
-    PlannedPredicateSite site) const {
-  auto& stats = result.mutable_execution_stats();
-  for (const auto& predicate : predicates) {
-    const auto text = predicate.expr->toString();
-    if (predicate.mode == PlannedPredicateMode::Consume) {
-      stats.num_where_clauses_inlined++;
-      stats.inlined_conditions.push_back(text);
-      if (site == PlannedPredicateSite::Root) {
-        stats.num_where_predicates_pushed_to_root++;
-        stats.root_pushdown_conditions.push_back(text);
-      } else {
-        stats.num_where_predicates_pushed_to_traverse++;
-        stats.traverse_pushdown_conditions.push_back(text);
-      }
-    } else {
-      if (site == PlannedPredicateSite::Root) {
-        stats.num_where_predicates_prefiltered_at_root++;
-        stats.root_prefilter_conditions.push_back(text);
-      } else {
-        stats.num_where_predicates_prefiltered_at_traverse++;
-        stats.traverse_prefilter_conditions.push_back(text);
-      }
-    }
-  }
-}
-
 /// Inline any WHERE expressions that can be applied directly to the root alias
 /// before later clauses run.
 arrow::Status Database::inline_root_where(const Query& query,
@@ -106,7 +78,11 @@ arrow::Status Database::inline_root_where(const Query& query,
     return arrow::Status::OK();
   }
 
-  record_planned_predicates(result, root_filters, PlannedPredicateSite::Root);
+  auto& stats = result.mutable_execution_stats();
+  for (const auto& predicate : root_filters) {
+    stats.record_planned_predicate(PlannedPredicateSite::Root,
+                                   predicate.expr->toString(), predicate.mode);
+  }
   return inline_where(query.root(), query_state.tables[query.root().value()],
                       query_state, extract_predicates(root_filters), false)
       .status();
