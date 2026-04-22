@@ -84,7 +84,7 @@ TEST_F(WherePushdownJoinTest, WhereInJoin) {
   auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
       end_time - start_time);
   create_companies({"google", "ibm", "piedpiper"});
-  Query query = Query::from("u:User").build();
+  Query query = Query::match("u:User").build();
   auto result = db_->query(query);
 
   std::cout << result.ValueOrDie()->table()->num_rows()
@@ -97,7 +97,7 @@ TEST_F(WherePushdownJoinTest, WhereInJoin) {
     db_->connect(i, "FRIEND", i + half).ValueOrDie();
   }
 
-  query = Query::from("u:User").traverse("u", "FRIEND", "f:User").build();
+  query = Query::match("u:User").traverse("u", "FRIEND", "f:User").build();
 
   result = db_->query(query);
 
@@ -119,7 +119,7 @@ TEST_F(WherePushdownJoinTest, WhereInJoin) {
             << std::endl;
 
   start_time = std::chrono::high_resolution_clock::now();
-  result = db_->query(Query::from("u:User")
+  result = db_->query(Query::match("u:User")
                           .traverse("u", "FRIEND", "f:User")
                           .where("f.age", CompareOp::Gt, 50)
                           .build());
@@ -134,7 +134,7 @@ TEST_F(WherePushdownJoinTest, WhereInJoin) {
   std::cout << "unoptimized size=" << unoptimized_size << std::endl;
 
   start_time = std::chrono::high_resolution_clock::now();
-  result = db_->query(Query::from("u:User")
+  result = db_->query(Query::match("u:User")
                           .traverse("u", "FRIEND", "f:User")
                           .where("f.age", CompareOp::Gt, 50)
                           .inline_where()

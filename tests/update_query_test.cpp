@@ -87,7 +87,7 @@ class UpdateQueryTest : public ::testing::Test {
   T get_field(const std::string& schema, int64_t id,
               const std::string& field_name) {
     const std::string alias = "_";
-    auto query = Query::from(alias + ":" + schema).build();
+    auto query = Query::match(alias + ":" + schema).build();
     auto result = db_->query(query).ValueOrDie();
     auto table = result->table();
     auto ids = get_column_values<int64_t>(table, alias + ".id").ValueOrDie();
@@ -142,12 +142,12 @@ TEST_F(UpdateQueryTest, BuilderDefaultUpdateTypeIsSET) {
 // =========================================================================
 
 TEST_F(UpdateQueryTest, MatchRequiresAtLeastOneSet) {
-  auto q = Query::from("u:User").build();
+  auto q = Query::match("u:User").build();
   EXPECT_THROW((UpdateQuery::match(q).build()), std::runtime_error);
 }
 
 TEST_F(UpdateQueryTest, MatchStoresQuery) {
-  auto q = Query::from("u:User")
+  auto q = Query::match("u:User")
                .where("u.city", CompareOp::Eq, Value("NYC"s))
                .build();
   auto uq = UpdateQuery::match(q).set("u.age", Value(31)).build();
@@ -156,7 +156,8 @@ TEST_F(UpdateQueryTest, MatchStoresQuery) {
 }
 
 TEST_F(UpdateQueryTest, MatchTargetAliasesFromSetFields) {
-  auto q = Query::from("u:User").traverse("u", "WORKS_AT", "c:Company").build();
+  auto q =
+      Query::match("u:User").traverse("u", "WORKS_AT", "c:Company").build();
   auto uq = UpdateQuery::match(q)
                 .set("u.salary", Value(int32_t(0)))
                 .set("c.size", Value(int32_t(9)))
@@ -247,7 +248,7 @@ TEST_F(UpdateQueryTest, UpdateByIdInvalidSchema) {
 
 TEST_F(UpdateQueryTest, UpdateByMatchSimpleWhere) {
   // All NYC users: Alice(0), Bob(1), Eve(4)
-  auto q = Query::from("u:User")
+  auto q = Query::match("u:User")
                .where("u.city", CompareOp::Eq, Value("NYC"s))
                .build();
   auto uq =
@@ -270,7 +271,7 @@ TEST_F(UpdateQueryTest, UpdateByMatchSimpleWhere) {
 }
 
 TEST_F(UpdateQueryTest, UpdateByMatchSingleResult) {
-  auto q = Query::from("u:User")
+  auto q = Query::match("u:User")
                .where("u.name", CompareOp::Eq, Value("Alice"s))
                .build();
   auto uq = UpdateQuery::match(q).set("u.age", Value(int32_t(26))).build();
@@ -283,7 +284,7 @@ TEST_F(UpdateQueryTest, UpdateByMatchSingleResult) {
 }
 
 TEST_F(UpdateQueryTest, UpdateByMatchNoResults) {
-  auto q = Query::from("u:User")
+  auto q = Query::match("u:User")
                .where("u.name", CompareOp::Eq, Value("Nobody"s))
                .build();
   auto uq = UpdateQuery::match(q).set("u.age", Value(int32_t(0))).build();
@@ -295,7 +296,7 @@ TEST_F(UpdateQueryTest, UpdateByMatchNoResults) {
 
 TEST_F(UpdateQueryTest, UpdateByMatchCompoundAnd) {
   // age > 30 AND city = "NYC" → Bob(35,NYC), Eve(55,NYC)
-  auto q = Query::from("u:User")
+  auto q = Query::match("u:User")
                .where("u.age", CompareOp::Gt, Value(int32_t(30)))
                .and_where("u.city", CompareOp::Eq, Value("NYC"s))
                .build();
@@ -311,7 +312,7 @@ TEST_F(UpdateQueryTest, UpdateByMatchCompoundAnd) {
 }
 
 TEST_F(UpdateQueryTest, UpdateByMatchMultipleSetFields) {
-  auto q = Query::from("u:User")
+  auto q = Query::match("u:User")
                .where("u.name", CompareOp::Eq, Value("Alice"s))
                .build();
   auto uq = UpdateQuery::match(q)
@@ -333,7 +334,7 @@ TEST_F(UpdateQueryTest, UpdateByMatchMultipleSetFields) {
 
 TEST_F(UpdateQueryTest, UpdateByMatchWithTraversal) {
   // Update users who work at TechCorp: Alice(0), Bob(1)
-  auto q = Query::from("u:User")
+  auto q = Query::match("u:User")
                .traverse("u", "WORKS_AT", "c:Company")
                .where("c.name", CompareOp::Eq, Value("TechCorp"s))
                .build();
@@ -357,7 +358,7 @@ TEST_F(UpdateQueryTest, UpdateByMatchWithTraversal) {
 
 TEST_F(UpdateQueryTest, UpdateMultiSchemaViaTraversal) {
   // UPDATE users who work at TechCorp AND update TechCorp itself
-  auto q = Query::from("u:User")
+  auto q = Query::match("u:User")
                .traverse("u", "WORKS_AT", "c:Company")
                .where("c.name", CompareOp::Eq, Value("TechCorp"s))
                .build();
@@ -384,7 +385,7 @@ TEST_F(UpdateQueryTest, UpdateMultiSchemaViaTraversal) {
 // =========================================================================
 
 TEST_F(UpdateQueryTest, UpdateByMatchBadAliasInSet) {
-  auto q = Query::from("u:User").build();
+  auto q = Query::match("u:User").build();
   auto uq = UpdateQuery::match(q)
                 .set("x.salary", Value(int32_t(0)))  // "x" not in MATCH
                 .build();
@@ -394,7 +395,7 @@ TEST_F(UpdateQueryTest, UpdateByMatchBadAliasInSet) {
 }
 
 TEST_F(UpdateQueryTest, UpdateByMatchUnqualifiedFieldFails) {
-  auto q = Query::from("u:User").build();
+  auto q = Query::match("u:User").build();
   auto uq = UpdateQuery::match(q)
                 .set("salary", Value(int32_t(0)))  // missing alias
                 .build();
@@ -469,7 +470,7 @@ TEST_F(UpdateQueryTest, UpdateByMatchSupportsMapKeySet) {
   db_->create_node("MapUser", {{"name", Value{"Nina"}}}).ValueOrDie();
   db_->create_node("MapUser", {{"name", Value{"Omar"}}}).ValueOrDie();
 
-  auto q = Query::from("m:MapUser")
+  auto q = Query::match("m:MapUser")
                .where("m.name", CompareOp::Eq, Value("Nina"s))
                .build();
   auto uq =
@@ -506,7 +507,7 @@ TEST_F(UpdateQueryTest,
   db_->get_schema_registry()->create("MapUserDepth", map_schema).ValueOrDie();
   db_->create_node("MapUserDepth", {{"name", Value{"Nina"}}}).ValueOrDie();
 
-  auto q = Query::from("m:MapUserDepth")
+  auto q = Query::match("m:MapUserDepth")
                .where("m.name", CompareOp::Eq, Value("Nina"s))
                .build();
   auto uq = UpdateQuery::match(q)

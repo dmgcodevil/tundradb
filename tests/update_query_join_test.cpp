@@ -84,7 +84,7 @@ class UpdateJoinCrossSchemaTest : public ::testing::Test {
   template <typename T>
   T get_field(const std::string& schema, int64_t id,
               const std::string& field_name) {
-    auto query = Query::from("_:" + schema).build();
+    auto query = Query::match("_:" + schema).build();
     auto result = db_->query(query).ValueOrDie();
     auto table = result->table();
     auto ids = get_column_values<int64_t>(table, "_.id").ValueOrDie();
@@ -112,7 +112,7 @@ TEST_F(UpdateJoinCrossSchemaTest, UpdateBothSidesOfTraversal) {
   // MATCH (u:User)-[:WORKS_AT]->(c:Company)
   //   WHERE c.name = "Acme"
   //   SET u.employed = true, c.size = 1
-  auto q = Query::from("u:User")
+  auto q = Query::match("u:User")
                .traverse("u", "WORKS_AT", "c:Company")
                .where("c.name", CompareOp::Eq, Value("Acme"s))
                .build();
@@ -144,7 +144,8 @@ TEST_F(UpdateJoinCrossSchemaTest, UpdateBothSidesOfTraversal) {
 
 TEST_F(UpdateJoinCrossSchemaTest, UpdateOnlyUserSide) {
   // Only update User.employed, leave Company untouched
-  auto q = Query::from("u:User").traverse("u", "WORKS_AT", "c:Company").build();
+  auto q =
+      Query::match("u:User").traverse("u", "WORKS_AT", "c:Company").build();
   auto uq = UpdateQuery::match(q).set("u.employed", Value(true)).build();
 
   auto result = db_->update(uq);
@@ -161,7 +162,7 @@ TEST_F(UpdateJoinCrossSchemaTest, UpdateOnlyUserSide) {
 
 TEST_F(UpdateJoinCrossSchemaTest, UpdateOnlyCompanySide) {
   // Only update Company.size, leave User untouched
-  auto q = Query::from("u:User")
+  auto q = Query::match("u:User")
                .traverse("u", "WORKS_AT", "c:Company")
                .where("c.name", CompareOp::Eq, Value("Acme"s))
                .build();
@@ -180,7 +181,7 @@ TEST_F(UpdateJoinCrossSchemaTest, UpdateOnlyCompanySide) {
 }
 
 TEST_F(UpdateJoinCrossSchemaTest, UpdateWithEdgeAliasTraversal) {
-  auto q = Query::from("u:User")
+  auto q = Query::match("u:User")
                .traverse("u", "WORKS_AT", "c:Company", TraverseType::Inner,
                          std::optional<std::string>{"e"})
                .where("c.name", CompareOp::Eq, Value("Acme"s))
@@ -197,7 +198,7 @@ TEST_F(UpdateJoinCrossSchemaTest, UpdateWithEdgeAliasTraversal) {
 }
 
 TEST_F(UpdateJoinCrossSchemaTest, FilterByEdgeFieldAndSelectEdgeFields) {
-  auto query = Query::from("u:User")
+  auto query = Query::match("u:User")
                    .traverse("u", "WORKS_AT", "c:Company", TraverseType::Inner,
                              std::optional<std::string>{"e"})
                    .where("e.since", CompareOp::Gte, Value(int64_t(2021)))
@@ -220,7 +221,7 @@ TEST_F(UpdateJoinCrossSchemaTest, FilterByEdgeFieldAndSelectEdgeFields) {
 }
 
 TEST_F(UpdateJoinCrossSchemaTest, UpdateEdgeFieldByMatchAlias) {
-  auto q = Query::from("u:User")
+  auto q = Query::match("u:User")
                .traverse("u", "WORKS_AT", "c:Company", TraverseType::Inner,
                          std::optional<std::string>{"e"})
                .where("u.name", CompareOp::Eq, Value("Alice"s))
@@ -232,7 +233,7 @@ TEST_F(UpdateJoinCrossSchemaTest, UpdateEdgeFieldByMatchAlias) {
   EXPECT_EQ(update_res.ValueOrDie().failed_count, 0);
   EXPECT_EQ(update_res.ValueOrDie().updated_count, 1);
 
-  auto verify = Query::from("u:User")
+  auto verify = Query::match("u:User")
                     .traverse("u", "WORKS_AT", "c:Company", TraverseType::Inner,
                               std::optional<std::string>{"e"})
                     .where("u.name", CompareOp::Eq, Value("Alice"s))
@@ -245,7 +246,7 @@ TEST_F(UpdateJoinCrossSchemaTest, UpdateEdgeFieldByMatchAlias) {
 }
 
 TEST_F(UpdateJoinCrossSchemaTest, SelectEdgeAliasReturnsOnlyUserDefinedFields) {
-  auto query = Query::from("u:User")
+  auto query = Query::match("u:User")
                    .traverse("u", "WORKS_AT", "c:Company", TraverseType::Inner,
                              std::optional<std::string>{"e"})
                    .select({"e"})
@@ -281,7 +282,7 @@ TEST_F(UpdateJoinCrossSchemaTest, SelectEdgeAliasReturnsOnlyUserDefinedFields) {
 
 TEST_F(UpdateJoinCrossSchemaTest, TraversalWithNoMatchUpdatesNothing) {
   // WHERE c.name = "NonExistent" → no rows
-  auto q = Query::from("u:User")
+  auto q = Query::match("u:User")
                .traverse("u", "WORKS_AT", "c:Company")
                .where("c.name", CompareOp::Eq, Value("NonExistent"s))
                .build();
@@ -302,7 +303,7 @@ TEST_F(UpdateJoinCrossSchemaTest, TraversalWithNoMatchUpdatesNothing) {
 TEST_F(UpdateJoinCrossSchemaTest, DuplicateAliasForNodeAndEdgeFails) {
   // "u" is already used as a node alias (u:User); reusing it as an edge alias
   // must fail during query preparation.
-  auto query = Query::from("u:User")
+  auto query = Query::match("u:User")
                    .traverse("u", "WORKS_AT", "c:Company", TraverseType::Inner,
                              std::optional<std::string>{"u"})
                    .build();
@@ -354,7 +355,7 @@ class UpdateJoinSameSchemaTest : public ::testing::Test {
   template <typename T>
   T get_field(const std::string& schema, int64_t id,
               const std::string& field_name) {
-    auto query = Query::from("_:" + schema).build();
+    auto query = Query::match("_:" + schema).build();
     auto result = db_->query(query).ValueOrDie();
     auto table = result->table();
     auto ids = get_column_values<int64_t>(table, "_.id").ValueOrDie();
@@ -382,7 +383,7 @@ TEST_F(UpdateJoinSameSchemaTest, UpdateBothSidesOfFriendship) {
 
   // MATCH (u:User)-[:FRIEND]->(f:User)
   //   SET u.has_friend = true, f.has_friend = true
-  auto q = Query::from("u:User").traverse("u", "FRIEND", "f:User").build();
+  auto q = Query::match("u:User").traverse("u", "FRIEND", "f:User").build();
   auto uq = UpdateQuery::match(q)
                 .set("u.has_friend", Value(true))
                 .set("f.has_friend", Value(true))
@@ -407,7 +408,7 @@ TEST_F(UpdateJoinSameSchemaTest, UpdateBothSidesOfFriendship) {
 
 TEST_F(UpdateJoinSameSchemaTest, UpdateOnlySourceSide) {
   // Only update the source alias "u"
-  auto q = Query::from("u:User").traverse("u", "FRIEND", "f:User").build();
+  auto q = Query::match("u:User").traverse("u", "FRIEND", "f:User").build();
   auto uq = UpdateQuery::match(q).set("u.has_friend", Value(true)).build();
 
   auto result = db_->update(uq);
@@ -424,7 +425,7 @@ TEST_F(UpdateJoinSameSchemaTest, UpdateOnlySourceSide) {
 
 TEST_F(UpdateJoinSameSchemaTest, UpdateOnlyTargetSide) {
   // Only update the target alias "f"
-  auto q = Query::from("u:User").traverse("u", "FRIEND", "f:User").build();
+  auto q = Query::match("u:User").traverse("u", "FRIEND", "f:User").build();
   auto uq = UpdateQuery::match(q).set("f.has_friend", Value(true)).build();
 
   auto result = db_->update(uq);
@@ -444,7 +445,7 @@ TEST_F(UpdateJoinSameSchemaTest, UpdateOnlyTargetSide) {
 
 TEST_F(UpdateJoinSameSchemaTest, UpdateWithWhereOnTarget) {
   // Only update friends named "Bob"
-  auto q = Query::from("u:User")
+  auto q = Query::match("u:User")
                .traverse("u", "FRIEND", "f:User")
                .where("f.name", CompareOp::Eq, Value("Bob"s))
                .build();

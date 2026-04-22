@@ -104,6 +104,10 @@ add_executable(join_test
         join_test.cpp
 )
 
+add_executable(join_where_test
+        join_where_test.cpp
+)
+
 # Add benchmark test
 add_executable(benchmark_test
     benchmark_test.cpp
@@ -115,6 +119,9 @@ add_executable(where_pushdown_join_test
 # Add WHERE expression test
 add_executable(where_expression_test
         where_expression_test.cpp)
+
+add_executable(where_planner_test
+        where_planner_test.cpp)
 
 add_executable(memory_arena_test
         memory_arena_test.cpp)
@@ -288,6 +295,18 @@ target_link_libraries(join_test
         LLVMSupport LLVMCore
 )
 
+target_link_libraries(join_where_test
+        PRIVATE
+        core
+        Arrow::arrow_shared
+        Parquet::parquet_shared
+        GTest::GTest
+        GTest::Main
+        pthread
+        TBB::tbb
+        LLVMSupport LLVMCore
+)
+
 # Link benchmark test with Google Benchmark and other dependencies
 target_link_libraries(benchmark_test
     PRIVATE
@@ -320,6 +339,17 @@ target_link_libraries(where_expression_test
         core
         Arrow::arrow_shared
         Parquet::parquet_shared
+        GTest::GTest
+        GTest::Main
+        pthread
+        TBB::tbb
+        LLVMSupport LLVMCore
+)
+
+target_link_libraries(where_planner_test
+        PRIVATE
+        core
+        Arrow::arrow_shared
         GTest::GTest
         GTest::Main
         pthread
@@ -539,9 +569,15 @@ if(ENABLE_SANITIZERS)
 
     target_compile_options(join_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
     target_link_options(join_test PRIVATE ${SANITIZER_LINK_FLAGS})
+
+    target_compile_options(join_where_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
+    target_link_options(join_where_test PRIVATE ${SANITIZER_LINK_FLAGS})
     
     target_compile_options(where_expression_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
     target_link_options(where_expression_test PRIVATE ${SANITIZER_LINK_FLAGS})
+
+    target_compile_options(where_planner_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
+    target_link_options(where_planner_test PRIVATE ${SANITIZER_LINK_FLAGS})
     
     target_compile_options(free_list_arena_test PRIVATE ${SANITIZER_COMPILE_FLAGS})
     target_link_options(free_list_arena_test PRIVATE ${SANITIZER_LINK_FLAGS})
@@ -587,7 +623,9 @@ add_test(NAME TableInfoTest COMMAND table_info_test)
 add_test(NAME SchemaUtilsTest COMMAND schema_utils_test)
 add_test(NAME DatabaseTest COMMAND database_test)
 add_test(NAME JoinTest COMMAND join_test)
+add_test(NAME JoinWhereTest COMMAND join_where_test)
 add_test(NAME WhereExpressionTest COMMAND where_expression_test)
+add_test(NAME WherePlannerTest COMMAND where_planner_test)
 add_test(NAME MemoryArenaTest COMMAND memory_arena_test)
 add_test(NAME FreeListArenaTest COMMAND free_list_arena_test)
 add_test(NAME NodeArenaTest COMMAND node_arena_test)
@@ -626,6 +664,7 @@ set_tests_properties(
         SchemaUtilsTest
         DatabaseTest
         JoinTest
+        JoinWhereTest
         WhereExpressionTest
         FreeListArenaTest
         UpdateQueryTest

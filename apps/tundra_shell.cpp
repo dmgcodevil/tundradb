@@ -28,11 +28,11 @@
 #include "TundraQLParser.h"
 #include "arrow/map_union_types.hpp"
 #include "common/constants.hpp"
-#include "main/database.hpp"
-#include "linenoise.h"
 #include "common/logger.hpp"
 #include "common/types.hpp"
 #include "common/utils.hpp"
+#include "linenoise.h"
+#include "main/database.hpp"
 
 // Tee stream class that outputs to both console and file
 class TeeStream : public std::ostream {
@@ -525,7 +525,7 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
       node_type = node_alias;
     }
 
-    auto query_builder = tundradb::Query::from(node_alias + ":" + node_type);
+    auto query_builder = tundradb::Query::match(node_alias + ":" + node_type);
 
     for (size_t i = 0; i < edges.size(); i++) {
       auto edge = edges[i];
@@ -807,7 +807,7 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
         schema_name = alias;
       }
 
-      auto query_builder = tundradb::Query::from(alias + ":" + schema_name);
+      auto query_builder = tundradb::Query::match(alias + ":" + schema_name);
 
       if (ctx->whereClause()) {
         processWhereClause(query_builder, ctx->whereClause());
@@ -1082,7 +1082,7 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
           return qb;
         }
         // Mode 2: single nodePattern → build a trivial query
-        return tundradb::Query::from(alias + ":" + schema_name);
+        return tundradb::Query::match(alias + ":" + schema_name);
       }();
 
       // Build alias→schema map from the query builder's pattern
@@ -1456,7 +1456,7 @@ class TundraQLVisitorImpl : public tundraql::TundraQLBaseVisitor {
 
     try {
       // Build a query to find matching nodes
-      auto query_builder = tundradb::Query::from("n:" + node_type);
+      auto query_builder = tundradb::Query::match("n:" + node_type);
 
       // Add WHERE conditions for each property
       for (const auto& [prop_name, prop_value] : properties) {
