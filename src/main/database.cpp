@@ -227,18 +227,35 @@ Database::execute_clauses(const Query& query, QueryState& query_state,
     auto clause = query.clauses()[i];
     switch (clause->type()) {
       case Clause::Type::WHERE: {
-        if (query.inline_where() && query_state.where_plan.has_value()) {
-          const auto residual = query_state.where_plan->residual_by_clause[i];
-          if (residual) {
+        if (query.inline_where()) {
+          // --------------------------------------------------
+          if (!query_state.where_plan.has_value()) {
+            return arrow::Status::Invalid(
+                "Missing WHERE plan during inline clause execution");
+          }
+          // --------------------------------------------------
+          if (const auto residual =
+                  query_state.where_plan->residual_by_clause[i]) {
             post_where.push_back(residual);
             auto& stats = result.mutable_execution_stats();
             stats.num_where_predicates_deferred++;
             stats.deferred_conditions.push_back(residual->toString());
           }
         } else {
-          ARROW_RETURN_NOT_OK(
-              apply_where_filter(std::dynamic_pointer_cast<WhereExpr>(clause),
-                                 query_state, post_where));
+          auto where = std::dynamic_pointer_cast<WhereExpr>(clause);
+          ARROW_ASSIGN_OR_RAISE(const auto disposition,
+                                classify_where_filter(where, query_state));
+          switch (disposition.kind) {
+            case WhereDisposition::Kind::Skip:
+              break;
+            case WhereDisposition::Kind::Defer:
+              post_where.push_back(where);
+              break;
+            case WhereDisposition::Kind::ApplyToAlias:
+              ARROW_RETURN_NOT_OK(
+                  apply_alias_where(where, disposition.alias, query_state));
+              break;
+          }
         }
         break;
       }

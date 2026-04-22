@@ -15,23 +15,6 @@ std::vector<std::shared_ptr<WhereExpr>> extract_predicates(
   return exprs;
 }
 
-void record_traverse_planned_predicates(
-    QueryResult& result, const std::vector<PlannedPredicate>& predicates) {
-  auto& stats = result.mutable_execution_stats();
-  for (const auto& predicate : predicates) {
-    const auto text = predicate.expr->toString();
-    if (predicate.mode == PlannedPredicateMode::Consume) {
-      stats.num_where_predicates_pushed_to_traverse++;
-      stats.num_where_clauses_inlined++;
-      stats.inlined_conditions.push_back(text);
-      stats.traverse_pushdown_conditions.push_back(text);
-    } else {
-      stats.num_where_predicates_prefiltered_at_traverse++;
-      stats.traverse_prefilter_conditions.push_back(text);
-    }
-  }
-}
-
 }  // namespace
 
 /// Execute one TRAVERSE clause by expanding the hop, applying the configured
@@ -55,7 +38,11 @@ arrow::Status Database::execute_traverse(
 
   std::vector<std::shared_ptr<WhereExpr>> where_clauses;
   std::vector<std::shared_ptr<WhereExpr>> edge_where_clauses;
-  if (query.inline_where() && query_state.where_plan.has_value()) {
+  if (query.inline_where()) {
+    if (!query_state.where_plan.has_value()) {
+      return arrow::Status::Invalid("Missing WHERE plan for inline traverse");
+    }
+
     const auto& where_plan = *query_state.where_plan;
     if (traverse_index >= where_plan.traverse_filters.size()) {
       return arrow::Status::Invalid("Missing WHERE traverse plan for index ",
@@ -65,13 +52,13 @@ arrow::Status Database::execute_traverse(
     const auto& traverse_plan = where_plan.traverse_filters[traverse_index];
     where_clauses = extract_predicates(traverse_plan.target_filters);
     edge_where_clauses = extract_predicates(traverse_plan.edge_filters);
-    record_traverse_planned_predicates(result, traverse_plan.target_filters);
-    record_traverse_planned_predicates(result, traverse_plan.edge_filters);
+    record_planned_predicates(result, traverse_plan.target_filters,
+                              PlannedPredicateSite::Traverse);
+    record_planned_predicates(result, traverse_plan.edge_filters,
+                              PlannedPredicateSite::Traverse);
   } else {
-    if (query.inline_where()) {
-      where_clauses = get_where_to_inline(traverse->target().value(),
-                                          clause_index + 1, query.clauses());
-    }
+    where_clauses = get_where_to_inline(traverse->target().value(),
+                                        clause_index + 1, query.clauses());
     if (traverse->edge_alias().has_value()) {
       edge_where_clauses = get_where_to_inline(
           traverse->edge_alias().value(), clause_index + 1, query.clauses());

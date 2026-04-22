@@ -199,10 +199,37 @@ class Database {
       const Query &query, size_t clause_index, size_t traverse_index,
       QueryResult &result) const;
 
-  /** Apply a single-variable WHERE filter, or defer to post_where. */
-  [[nodiscard]] arrow::Status apply_where_filter(
-      const std::shared_ptr<WhereExpr> &where, QueryState &query_state,
-      std::vector<std::shared_ptr<WhereExpr>> &post_where) const;
+  /** High-level action chosen for one WHERE clause in legacy execution mode. */
+  struct WhereDisposition {
+    enum class Kind {
+      Skip,
+      Defer,
+      ApplyToAlias,
+    };
+
+    Kind kind = Kind::Skip;
+    std::string alias;
+  };
+
+  enum class PlannedPredicateSite {
+    Root,
+    Traverse,
+  };
+
+  /** Classify a WHERE clause as skipped, deferred, or directly applicable. */
+  [[nodiscard]] arrow::Result<WhereDisposition> classify_where_filter(
+      const std::shared_ptr<WhereExpr> &where,
+      const QueryState &query_state) const;
+
+  /** Record planner-driven WHERE stats for one execution site. */
+  void record_planned_predicates(
+      QueryResult &result, const std::vector<PlannedPredicate> &predicates,
+      PlannedPredicateSite site) const;
+
+  /** Apply a single-alias WHERE clause to an already materialized alias. */
+  [[nodiscard]] arrow::Status apply_alias_where(
+      const std::shared_ptr<WhereExpr> &where, const std::string &alias,
+      QueryState &query_state) const;
 
   /** Build the final output table: denormalize, populate rows, apply
    *  deferred WHERE filters, and project via SELECT. */
