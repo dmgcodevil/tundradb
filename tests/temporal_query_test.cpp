@@ -115,7 +115,7 @@ TEST_F(TemporalQueryTest, NodeUpdateAtDifferentTimes) {
   ASSERT_TRUE(update_result2.ok()) << update_result2.status();
 
   // Query current version (at t2): should see age=27
-  auto query_current = Query::from("u:User")
+  auto query_current = Query::match("u:User")
                            .where("u.name", CompareOp::Eq, Value("Alice"))
                            .build();
   auto result_current = db_->query(query_current);
@@ -135,7 +135,7 @@ TEST_F(TemporalQueryTest, NodeUpdateAtDifferentTimes) {
   // ========================================================================
 
   // Query AS OF t0: should see age=25 (original version)
-  auto query_t0 = Query::from("u:User")
+  auto query_t0 = Query::match("u:User")
                       .as_of_valid_time(t0_)
                       .where("u.name", CompareOp::Eq, Value("Alice"))
                       .build();
@@ -150,7 +150,7 @@ TEST_F(TemporalQueryTest, NodeUpdateAtDifferentTimes) {
   EXPECT_EQ(age_array_t0->Value(0), 25);  // Versioning enabled!
 
   // Query AS OF t1: should see age=26 (first update)
-  auto query_t1 = Query::from("u:User")
+  auto query_t1 = Query::match("u:User")
                       .as_of_valid_time(t1_)
                       .where("u.name", CompareOp::Eq, Value("Alice"))
                       .build();
@@ -165,7 +165,7 @@ TEST_F(TemporalQueryTest, NodeUpdateAtDifferentTimes) {
   EXPECT_EQ(age_array_t1->Value(0), 26);  // Versioning enabled!
 
   // Query AS OF t2: should see age=27 (second update)
-  auto query_t2 = Query::from("u:User")
+  auto query_t2 = Query::match("u:User")
                       .as_of_valid_time(t2_)
                       .where("u.name", CompareOp::Eq, Value("Alice"))
                       .build();
@@ -196,7 +196,7 @@ TEST_F(TemporalQueryTest, MultipleFieldUpdateAtSameTime) {
   ASSERT_TRUE(update2.ok());
 
   // Query at current time: should see age=31, active=false
-  auto query = Query::from("u:User")
+  auto query = Query::match("u:User")
                    .where("u.name", CompareOp::Eq, Value("Bob"))
                    .build();
 
@@ -237,7 +237,7 @@ TEST_F(TemporalQueryTest, ClockAdvanceAndQuery) {
   ASSERT_TRUE(update2.ok());
 
   // Query current: should see age=37
-  auto query = Query::from("u:User")
+  auto query = Query::match("u:User")
                    .where("u.name", CompareOp::Eq, Value("Charlie"))
                    .build();
 
@@ -256,7 +256,7 @@ TEST_F(TemporalQueryTest, ClockAdvanceAndQuery) {
   // ========================================================================
 
   // Query AS OF creation_time: should see age=35
-  auto query_creation = Query::from("u:User")
+  auto query_creation = Query::match("u:User")
                             .as_of_valid_time(creation_time)
                             .where("u.name", CompareOp::Eq, Value("Charlie"))
                             .build();
@@ -269,7 +269,7 @@ TEST_F(TemporalQueryTest, ClockAdvanceAndQuery) {
   EXPECT_EQ(age_creation->Value(0), 35);
 
   // Query AS OF update1_time: should see age=36
-  auto query_update1 = Query::from("u:User")
+  auto query_update1 = Query::match("u:User")
                            .as_of_valid_time(update1_time)
                            .where("u.name", CompareOp::Eq, Value("Charlie"))
                            .build();
@@ -282,7 +282,7 @@ TEST_F(TemporalQueryTest, ClockAdvanceAndQuery) {
   EXPECT_EQ(age_update1->Value(0), 36);
 
   // Query AS OF update2_time: should see age=37
-  auto query_update2 = Query::from("u:User")
+  auto query_update2 = Query::match("u:User")
                            .as_of_valid_time(update2_time)
                            .where("u.name", CompareOp::Eq, Value("Charlie"))
                            .build();
@@ -317,7 +317,7 @@ TEST_F(TemporalQueryTest, BitemporalQueryWithUpdates) {
   // ========================================================================
 
   // Query AS OF (valid=t0, tx=t0): should see age=40
-  auto query_t0_t0 = Query::from("u:User")
+  auto query_t0_t0 = Query::match("u:User")
                          .as_of(t0_, t0_)
                          .where("u.name", CompareOp::Eq, Value("Diana"))
                          .build();
@@ -329,7 +329,7 @@ TEST_F(TemporalQueryTest, BitemporalQueryWithUpdates) {
   EXPECT_EQ(age_t0_t0->Value(0), 40);
 
   // Query AS OF (valid=t1, tx=t1): should see age=41
-  auto query_t1_t1 = Query::from("u:User")
+  auto query_t1_t1 = Query::match("u:User")
                          .as_of(t1_, t1_)
                          .where("u.name", CompareOp::Eq, Value("Diana"))
                          .build();
@@ -341,7 +341,7 @@ TEST_F(TemporalQueryTest, BitemporalQueryWithUpdates) {
   EXPECT_EQ(age_t1_t1->Value(0), 41);
 
   // Query AS OF (valid=t2, tx=t2): should see age=42
-  auto query_t2_t2 = Query::from("u:User")
+  auto query_t2_t2 = Query::match("u:User")
                          .as_of(t2_, t2_)
                          .where("u.name", CompareOp::Eq, Value("Diana"))
                          .build();
@@ -354,7 +354,7 @@ TEST_F(TemporalQueryTest, BitemporalQueryWithUpdates) {
 
   // Query AS OF (valid=t0, tx=t2): "What did we know at t2 about t0?"
   // Should see age=40 (the value that was true at t0)
-  auto query_t0_tx_t2 = Query::from("u:User")
+  auto query_t0_tx_t2 = Query::match("u:User")
                             .as_of(t0_, t2_)
                             .where("u.name", CompareOp::Eq, Value("Diana"))
                             .build();
@@ -382,7 +382,7 @@ TEST_F(TemporalQueryTest, TemporalQueryBetweenUpdateTimes) {
   uint64_t t_mid = (t0_ + t1_) / 2;
 
   // Query AS OF t_mid (between t0 and t1): should see age=50 (the t0 version)
-  auto query_mid = Query::from("u:User")
+  auto query_mid = Query::match("u:User")
                        .as_of_valid_time(t_mid)
                        .where("u.name", CompareOp::Eq, Value("Eve"))
                        .build();
@@ -400,7 +400,7 @@ TEST_F(TemporalQueryTest, CurrentVersionQuery) {
   int64_t user_id = create_simple_user("Alice", 27);
 
   // Query current version (no AS OF clause)
-  auto query = Query::from("u:User")
+  auto query = Query::match("u:User")
                    .where("u.name", CompareOp::Eq, Value("Alice"))
                    .build();
 
@@ -423,7 +423,7 @@ TEST_F(TemporalQueryTest, AsOfValidTimeQuery) {
   int64_t user_id = create_simple_user("Alice", 25);
 
   // Query at t1
-  auto query = Query::from("u:User")
+  auto query = Query::match("u:User")
                    .as_of_valid_time(t1_)
                    .where("u.name", CompareOp::Eq, Value("Alice"))
                    .build();
@@ -445,7 +445,7 @@ TEST_F(TemporalQueryTest, AsOfTxTimeQuery) {
   int64_t user_id = create_simple_user("Alice", 26);
 
   // Query as of transaction time t1
-  auto query = Query::from("u:User")
+  auto query = Query::match("u:User")
                    .as_of_tx_time(t1_)
                    .where("u.name", CompareOp::Eq, Value("Alice"))
                    .build();
@@ -467,7 +467,7 @@ TEST_F(TemporalQueryTest, BitemporalQuery) {
   int64_t user_id = create_simple_user("Alice", 26);
 
   // Query both dimensions: valid_time=t1, tx_time=t1
-  auto query = Query::from("u:User")
+  auto query = Query::match("u:User")
                    .as_of(t1_, t1_)
                    .where("u.name", CompareOp::Eq, Value("Alice"))
                    .build();
@@ -490,7 +490,7 @@ TEST_F(TemporalQueryTest, TemporalQueryWithWhereClause) {
   create_simple_user("Bob", 30);
 
   // Query at t0 where age > 26 (should find only Bob)
-  auto query = Query::from("u:User")
+  auto query = Query::match("u:User")
                    .as_of_valid_time(t0_)
                    .where("u.age", CompareOp::Gt, Value(26))
                    .build();
@@ -517,7 +517,7 @@ TEST_F(TemporalQueryTest, TemporalSnapshotInQueryState) {
   int64_t user_id = create_simple_user("Alice", 25);
 
   // Create query with temporal snapshot
-  auto query = Query::from("u:User")
+  auto query = Query::match("u:User")
                    .as_of_valid_time(t1_)
                    .where("u.name", CompareOp::Eq, Value("Alice"))
                    .build();
@@ -539,7 +539,7 @@ TEST_F(TemporalQueryTest, QueryBeforeFirstVersion) {
   // Query before t0 (should return current data as versioning not fully enabled
   // yet)
   uint64_t before_t0 = t0_ - 1000000000ULL;  // 1 second before t0
-  auto query = Query::from("u:User")
+  auto query = Query::match("u:User")
                    .as_of_valid_time(before_t0)
                    .where("u.name", CompareOp::Eq, Value("Alice"))
                    .build();
@@ -555,28 +555,28 @@ TEST_F(TemporalQueryTest, QueryBeforeFirstVersion) {
 
 TEST_F(TemporalQueryTest, AsOfBuilderMethods) {
   // Test as_of_valid_time()
-  auto query1 = Query::from("u:User").as_of_valid_time(t1_).build();
+  auto query1 = Query::match("u:User").as_of_valid_time(t1_).build();
   ASSERT_TRUE(query1.temporal_snapshot().has_value());
   EXPECT_EQ(query1.temporal_snapshot()->valid_time, t1_);
   EXPECT_EQ(query1.temporal_snapshot()->tx_time,
             std::numeric_limits<uint64_t>::max());
 
   // Test as_of_tx_time()
-  auto query2 = Query::from("u:User").as_of_tx_time(t2_).build();
+  auto query2 = Query::match("u:User").as_of_tx_time(t2_).build();
   ASSERT_TRUE(query2.temporal_snapshot().has_value());
   EXPECT_EQ(query2.temporal_snapshot()->valid_time,
             std::numeric_limits<uint64_t>::max());
   EXPECT_EQ(query2.temporal_snapshot()->tx_time, t2_);
 
   // Test as_of() with both dimensions
-  auto query3 = Query::from("u:User").as_of(t1_, t2_).build();
+  auto query3 = Query::match("u:User").as_of(t1_, t2_).build();
   ASSERT_TRUE(query3.temporal_snapshot().has_value());
   EXPECT_EQ(query3.temporal_snapshot()->valid_time, t1_);
   EXPECT_EQ(query3.temporal_snapshot()->tx_time, t2_);
 
   // Test chaining: as_of_valid_time() then as_of_tx_time()
   auto query4 =
-      Query::from("u:User").as_of_valid_time(t1_).as_of_tx_time(t2_).build();
+      Query::match("u:User").as_of_valid_time(t1_).as_of_tx_time(t2_).build();
   ASSERT_TRUE(query4.temporal_snapshot().has_value());
   EXPECT_EQ(query4.temporal_snapshot()->valid_time, t1_);
   EXPECT_EQ(query4.temporal_snapshot()->tx_time, t2_);
@@ -600,7 +600,7 @@ TEST_F(TemporalQueryTest, NullFieldInVersionChain) {
   ASSERT_TRUE(update2.ok());
 
   // Query at t0: should see age=25
-  auto query_t0 = Query::from("u:User")
+  auto query_t0 = Query::match("u:User")
                       .as_of_valid_time(t0_)
                       .where("u.name", CompareOp::Eq, Value("Alice"))
                       .build();
@@ -616,7 +616,7 @@ TEST_F(TemporalQueryTest, NullFieldInVersionChain) {
   EXPECT_EQ(age_array_t0->Value(0), 25);
 
   // Query at t1: should see age=30
-  auto query_t1 = Query::from("u:User")
+  auto query_t1 = Query::match("u:User")
                       .as_of_valid_time(t1_)
                       .where("u.name", CompareOp::Eq, Value("Alice"))
                       .build();
@@ -632,7 +632,7 @@ TEST_F(TemporalQueryTest, NullFieldInVersionChain) {
   EXPECT_EQ(age_array_t1->Value(0), 30);
 
   // Query at t2: should see age=NULL
-  auto query_t2 = Query::from("u:User")
+  auto query_t2 = Query::match("u:User")
                       .as_of_valid_time(t2_)
                       .where("u.name", CompareOp::Eq, Value("Alice"))
                       .build();
@@ -655,7 +655,7 @@ TEST_F(TemporalQueryTest, NodeNotVisibleBeforeCreation) {
 
   // Query at t0 (before node creation): should return 0 rows
   // Because the node's valid_from = t1, it shouldn't be visible at t0
-  auto query_before = Query::from("u:User")
+  auto query_before = Query::match("u:User")
                           .as_of_valid_time(t0_)
                           .build();  // No WHERE clause - get all users at t0
   auto result_before = db_->query(query_before);
@@ -667,7 +667,7 @@ TEST_F(TemporalQueryTest, NodeNotVisibleBeforeCreation) {
   EXPECT_EQ(table_before->num_rows(), 0);
 
   // Query at t1 (at creation): should return 1 row
-  auto query_at_creation = Query::from("u:User")
+  auto query_at_creation = Query::match("u:User")
                                .as_of_valid_time(t1_)
                                .where("u.name", CompareOp::Eq, Value("Alice"))
                                .build();
@@ -676,7 +676,7 @@ TEST_F(TemporalQueryTest, NodeNotVisibleBeforeCreation) {
   EXPECT_EQ(result_at.ValueOrDie()->table()->num_rows(), 1);
 
   // Query at t2 (after creation): should also return 1 row
-  auto query_after = Query::from("u:User")
+  auto query_after = Query::match("u:User")
                          .as_of_valid_time(t2_)
                          .where("u.name", CompareOp::Eq, Value("Alice"))
                          .build();
@@ -711,7 +711,7 @@ TEST_F(TemporalQueryTest, MultipleNodesIndependentVersions) {
 
   // Query at t0: should see only Alice (age=25)
   // Bob's valid_from = t1 > t0, so Bob should NOT be visible at t0
-  auto query_t0 = Query::from("u:User").as_of_valid_time(t0_).build();
+  auto query_t0 = Query::match("u:User").as_of_valid_time(t0_).build();
   auto result_t0 = db_->query(query_t0);
   ASSERT_TRUE(result_t0.ok());
   auto table_t0 = result_t0.ValueOrDie()->table();
@@ -730,14 +730,14 @@ TEST_F(TemporalQueryTest, MultipleNodesIndependentVersions) {
   EXPECT_EQ(age_array_t0->Value(0), 25);
 
   // Query at t1: should see Alice (age=26) and Bob (age=30)
-  auto query_t1 = Query::from("u:User").as_of_valid_time(t1_).build();
+  auto query_t1 = Query::match("u:User").as_of_valid_time(t1_).build();
   auto result_t1 = db_->query(query_t1);
   ASSERT_TRUE(result_t1.ok());
   auto table_t1 = result_t1.ValueOrDie()->table();
   EXPECT_EQ(table_t1->num_rows(), 2);
 
   // Query at t2: should see Alice (age=26) and Bob (age=31)
-  auto query_t2 = Query::from("u:User").as_of_valid_time(t2_).build();
+  auto query_t2 = Query::match("u:User").as_of_valid_time(t2_).build();
   auto result_t2 = db_->query(query_t2);
   ASSERT_TRUE(result_t2.ok());
   auto table_t2 = result_t2.ValueOrDie()->table();
@@ -789,7 +789,7 @@ TEST_F(TemporalQueryTest, VersioningDisabledFallback) {
 
   // Temporal query at t0 (should return CURRENT version, not historical)
   // Because versioning is disabled, no history is kept
-  auto query_past = Query::from("u:User")
+  auto query_past = Query::match("u:User")
                         .as_of_valid_time(t0_)
                         .where("u.name", CompareOp::Eq, Value("Alice"))
                         .build();
@@ -807,7 +807,7 @@ TEST_F(TemporalQueryTest, VersioningDisabledFallback) {
   EXPECT_EQ(age_array->Value(0), 26);  // Current value, not historical
 
   // Current query should also return age=26
-  auto query_current = Query::from("u:User")
+  auto query_current = Query::match("u:User")
                            .where("u.name", CompareOp::Eq, Value("Alice"))
                            .build();
   auto result_current = db_no_version->query(query_current);
@@ -870,7 +870,7 @@ TEST_F(TemporalQueryTest, NoOpUpdateDoesNotCreateNewVersion) {
   EXPECT_EQ(version_count_after, version_count_before + 1);
 
   // Query at t0: should see age=25
-  auto query_t0 = Query::from("u:User")
+  auto query_t0 = Query::match("u:User")
                       .as_of_valid_time(t0_)
                       .where("u.name", CompareOp::Eq, Value("Alice"))
                       .build();
@@ -885,7 +885,7 @@ TEST_F(TemporalQueryTest, NoOpUpdateDoesNotCreateNewVersion) {
   EXPECT_EQ(age_array_t0->Value(0), 25);
 
   // Query at t1: should also see age=25 (no change)
-  auto query_t1 = Query::from("u:User")
+  auto query_t1 = Query::match("u:User")
                       .as_of_valid_time(t1_)
                       .where("u.name", CompareOp::Eq, Value("Alice"))
                       .build();

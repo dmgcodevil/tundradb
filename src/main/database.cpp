@@ -205,7 +205,7 @@ arrow::Result<std::shared_ptr<QueryResult>> Database::query(
   auto result = std::make_shared<QueryResult>();
 
   ARROW_RETURN_NOT_OK(init_query_state(query, query_state));
-  ARROW_RETURN_NOT_OK(inline_from_where(query, query_state, *result));
+  ARROW_RETURN_NOT_OK(inline_root_where(query, query_state, *result));
   ARROW_ASSIGN_OR_RAISE(const auto post_where,
                         execute_clauses(query, query_state, *result));
   ARROW_ASSIGN_OR_RAISE(
@@ -222,18 +222,47 @@ arrow::Result<std::vector<std::shared_ptr<WhereExpr>>>
 Database::execute_clauses(const Query& query, QueryState& query_state,
                           QueryResult& result) const {
   std::vector<std::shared_ptr<WhereExpr>> post_where;
+  size_t traverse_index = 0;
   for (size_t i = 0; i < query.clauses().size(); ++i) {
     auto clause = query.clauses()[i];
     switch (clause->type()) {
-      case Clause::Type::WHERE:
-        ARROW_RETURN_NOT_OK(
-            apply_where_filter(std::dynamic_pointer_cast<WhereExpr>(clause),
-                               query_state, post_where));
+      case Clause::Type::WHERE: {
+        if (query.inline_where()) {
+          // --------------------------------------------------
+          if (!query_state.where_plan.has_value()) {
+            return arrow::Status::Invalid(
+                "Missing WHERE plan during inline clause execution");
+          }
+          // --------------------------------------------------
+          if (const auto residual =
+                  query_state.where_plan->residual_by_clause[i]) {
+            post_where.push_back(residual);
+            auto& stats = result.mutable_execution_stats();
+            stats.deferred_conditions.push_back(residual->toString());
+          }
+        } else {
+          auto where = std::dynamic_pointer_cast<WhereExpr>(clause);
+          ARROW_ASSIGN_OR_RAISE(const auto disposition,
+                                classify_where_filter(where, query_state));
+          switch (disposition.kind) {
+            case WhereDisposition::Kind::Skip:
+              break;
+            case WhereDisposition::Kind::Defer:
+              post_where.push_back(where);
+              break;
+            case WhereDisposition::Kind::ApplyToAlias:
+              ARROW_RETURN_NOT_OK(
+                  apply_alias_where(where, disposition.alias, query_state));
+              break;
+          }
+        }
         break;
+      }
       case Clause::Type::TRAVERSE:
         ARROW_RETURN_NOT_OK(
             execute_traverse(std::static_pointer_cast<Traverse>(clause),
-                             query_state, query, i, result));
+                             query_state, query, i, traverse_index, result));
+        ++traverse_index;
         break;
       default:
         return arrow::Status::NotImplemented(

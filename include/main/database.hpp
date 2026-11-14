@@ -150,7 +150,7 @@ class Database {
    *
    * Mode 2 - by MATCH query (alias-qualified SET, multi-schema):
    *   db.update(UpdateQuery::match(
-   *       Query::from("u:User")
+   *       Query::match("u:User")
    *           .traverse("u", "WORKS_AT", "c:Company")
    *           .where("c.name", CompareOp::Eq, Value("Google"))
    *           .build()
@@ -177,13 +177,13 @@ class Database {
                      const std::vector<FieldUpdate> &fields,
                      UpdateType update_type, UpdateResult &result);
 
-  /** Initialize QueryState from query: temporal context, FROM table, prepare.
+  /** Initialize QueryState from query: temporal context, root table, prepare.
    */
   [[nodiscard]] arrow::Status init_query_state(const Query &query,
                                                QueryState &query_state) const;
 
-  /** Inline WHERE clauses applicable to the FROM alias. */
-  [[nodiscard]] arrow::Status inline_from_where(const Query &query,
+  /** Inline WHERE clauses applicable to the root alias. */
+  [[nodiscard]] arrow::Status inline_root_where(const Query &query,
                                                 QueryState &query_state,
                                                 QueryResult &result) const;
 
@@ -196,12 +196,30 @@ class Database {
   /** Execute a single TRAVERSE clause, updating query_state in-place. */
   [[nodiscard]] arrow::Status execute_traverse(
       const std::shared_ptr<Traverse> &traverse, QueryState &query_state,
-      const Query &query, size_t clause_index, QueryResult &result) const;
+      const Query &query, size_t clause_index, size_t traverse_index,
+      QueryResult &result) const;
 
-  /** Apply a single-variable WHERE filter, or defer to post_where. */
-  [[nodiscard]] arrow::Status apply_where_filter(
-      const std::shared_ptr<WhereExpr> &where, QueryState &query_state,
-      std::vector<std::shared_ptr<WhereExpr>> &post_where) const;
+  /** High-level action chosen for one WHERE clause in legacy execution mode. */
+  struct WhereDisposition {
+    enum class Kind {
+      Skip,
+      Defer,
+      ApplyToAlias,
+    };
+
+    Kind kind = Kind::Skip;
+    std::string alias;
+  };
+
+  /** Classify a WHERE clause as skipped, deferred, or directly applicable. */
+  [[nodiscard]] arrow::Result<WhereDisposition> classify_where_filter(
+      const std::shared_ptr<WhereExpr> &where,
+      const QueryState &query_state) const;
+
+  /** Apply a single-alias WHERE clause to an already materialized alias. */
+  [[nodiscard]] arrow::Status apply_alias_where(
+      const std::shared_ptr<WhereExpr> &where, const std::string &alias,
+      QueryState &query_state) const;
 
   /** Build the final output table: denormalize, populate rows, apply
    *  deferred WHERE filters, and project via SELECT. */

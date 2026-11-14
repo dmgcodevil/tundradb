@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "query/query.hpp"
+#include "query/where_planner.hpp"
 #include "schema/schema.hpp"
 
 namespace tundradb {
@@ -448,8 +449,9 @@ struct QueryState {
   /// Arrow tables keyed by schema alias.
   std::unordered_map<std::string, std::shared_ptr<arrow::Table>> tables;
 
-  SchemaRef from;                    ///< Source schema from the FROM clause.
+  SchemaRef root;                    ///< Root schema for query execution.
   std::vector<Traverse> traversals;  ///< Traverse clauses in query order.
+  std::optional<WhereExecutionPlan> where_plan;  ///< Planned WHERE execution.
 
   std::shared_ptr<SchemaRegistry> schema_registry;  ///< Node schema registry.
   std::shared_ptr<NodeManager> node_manager;        ///< Node storage.
@@ -724,7 +726,8 @@ std::vector<std::shared_ptr<WhereExpr>> get_where_to_inline(
 arrow::Result<std::shared_ptr<arrow::Table>> inline_where(
     const SchemaRef& ref, std::shared_ptr<arrow::Table> table,
     QueryState& query_state,
-    const std::vector<std::shared_ptr<WhereExpr>>& where_exprs);
+    const std::vector<std::shared_ptr<WhereExpr>>& where_exprs,
+    bool mark_inlined = true);
 
 /**
  * @brief Prepares a query for execution: registers aliases, resolves fields,

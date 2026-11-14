@@ -242,7 +242,7 @@ void BM_FullScan(::benchmark::State& state) {
   fixture->createUsers(node_count);
 
   for (auto _ : state) {
-    Query query = Query::from("u:User").build();
+    Query query = Query::match("u:User").build();
     auto result = fixture->db()->query(query);
     if (!result.ok() ||
         result.ValueOrDie()->table()->num_rows() != node_count) {
@@ -268,7 +268,7 @@ void BM_SimpleJoin(::benchmark::State& state) {
 
   for (auto _ : state) {
     Query query =
-        Query::from("u:User")
+        Query::match("u:User")
             .traverse("u", "WORKS_AT", "c:Company", TraverseType::Inner)
             .build();
     auto result = fixture->db()->query(query);
@@ -308,7 +308,7 @@ void BM_ComplexJoin(::benchmark::State& state) {
   for (auto _ : state) {
     // Complex 3-way join: Users -> Friends -> Companies
     Query query =
-        Query::from("u:User")
+        Query::match("u:User")
             .traverse("u", "FRIEND", "f:User", TraverseType::Inner)
             .traverse("f", "WORKS_AT", "c:Company", TraverseType::Inner)
             .build();
@@ -329,7 +329,7 @@ void BM_FilteredQuery(::benchmark::State& state) {
   for (auto _ : state) {
     // Query with WHERE clause - users over 50
     Query query =
-        Query::from("u:User").where("u.age", CompareOp::Gt, Value(50)).build();
+        Query::match("u:User").where("u.age", CompareOp::Gt, Value(50)).build();
     auto result = fixture->db()->query(query);
     if (!result.ok()) {
       state.SkipWithError("Filtered query failed");
@@ -341,14 +341,14 @@ void BM_FilteredQuery(::benchmark::State& state) {
 
 // Google Test cases for correctness verification
 TEST_F(SmallDatasetTest, NodeCreationCorrectness) {
-  Query query = Query::from("u:User").build();
+  Query query = Query::match("u:User").build();
   auto result = fixture->db()->query(query);
   ASSERT_TRUE(result.ok());
   EXPECT_EQ(result.ValueOrDie()->table()->num_rows(), 100);
 }
 
 TEST_F(SmallDatasetTest, SimpleJoinCorrectness) {
-  Query query = Query::from("u:User")
+  Query query = Query::match("u:User")
                     .traverse("u", "WORKS_AT", "c:Company", TraverseType::Inner)
                     .build();
   auto result = fixture->db()->query(query);
@@ -366,7 +366,7 @@ TEST_F(SmallDatasetTest, SimpleJoinCorrectness) {
 }
 
 TEST_F(SmallDatasetTest, ComplexJoinCorrectness) {
-  Query query = Query::from("u:User")
+  Query query = Query::match("u:User")
                     .traverse("u", "FRIEND", "f:User", TraverseType::Inner)
                     .traverse("f", "WORKS_AT", "c:Company", TraverseType::Inner)
                     .build();
@@ -380,7 +380,7 @@ TEST_F(SmallDatasetTest, ComplexJoinCorrectness) {
 
 TEST_F(SmallDatasetTest, FilteredQueryCorrectness) {
   Query query =
-      Query::from("u:User").where("u.age", CompareOp::Gt, Value(50)).build();
+      Query::match("u:User").where("u.age", CompareOp::Gt, Value(50)).build();
   auto result = fixture->db()->query(query);
   ASSERT_TRUE(result.ok());
 
@@ -404,7 +404,7 @@ TEST_F(SmallDatasetTest, FilteredQueryCorrectness) {
 TEST_F(MediumDatasetTest, ScalabilityTest) {
   auto start_time = std::chrono::high_resolution_clock::now();
 
-  Query query = Query::from("u:User")
+  Query query = Query::match("u:User")
                     .traverse("u", "WORKS_AT", "c:Company", TraverseType::Inner)
                     .build();
   auto result = fixture->db()->query(query);
@@ -429,7 +429,7 @@ TEST_F(LargeDatasetTest, PerformanceBaseline) {
     auto start = std::chrono::high_resolution_clock::now();
 
     Query query =
-        Query::from("u:User")
+        Query::match("u:User")
             .traverse("u", "WORKS_AT", "c:Company", TraverseType::Inner)
             //.parallel(true)
             //.parallel_thread_count(4)

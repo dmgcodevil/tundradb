@@ -88,8 +88,8 @@ arrow::Result<UpdateResult> Database::update_by_match(const UpdateQuery& uq) {
 
   // 1. Build alias -> schema from node declarations
   std::unordered_map<std::string, std::string> alias_to_schema;
-  if (match_query.from().is_declaration())
-    alias_to_schema[match_query.from().value()] = match_query.from().schema();
+  if (match_query.root().is_declaration())
+    alias_to_schema[match_query.root().value()] = match_query.root().schema();
   for (const auto& clause : match_query.clauses()) {
     if (clause->type() != Clause::Type::TRAVERSE) continue;
     auto t = std::static_pointer_cast<Traverse>(clause);
@@ -151,7 +151,7 @@ arrow::Result<UpdateResult> Database::update_by_match(const UpdateQuery& uq) {
       id_column_set.insert(alias + ".id");
     }
   }
-  Query id_query(match_query.from(), match_query.clauses(),
+  Query id_query(match_query.root(), match_query.clauses(),
                  std::make_shared<Select>(std::vector<std::string>(
                      id_column_set.begin(), id_column_set.end())),
                  match_query.inline_where(), match_query.execution_config(),

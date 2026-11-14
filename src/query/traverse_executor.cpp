@@ -3,11 +3,26 @@
 
 namespace tundradb {
 
+namespace {
+
+std::vector<std::shared_ptr<WhereExpr>> extract_predicates(
+    const std::vector<PlannedPredicate>& predicates) {
+  std::vector<std::shared_ptr<WhereExpr>> exprs;
+  exprs.reserve(predicates.size());
+  for (const auto& predicate : predicates) {
+    exprs.push_back(predicate.expr);
+  }
+  return exprs;
+}
+
+}  // namespace
+
 /// Execute one TRAVERSE clause by expanding the hop, applying the configured
 /// join semantics, and refreshing the affected alias tables in QueryState.
 arrow::Status Database::execute_traverse(
     const std::shared_ptr<Traverse>& traverse, QueryState& query_state,
-    const Query& query, size_t clause_index, QueryResult& result) const {
+    const Query& query, size_t clause_index, size_t traverse_index,
+    QueryResult& result) const {
   ARROW_ASSIGN_OR_RAISE(const auto source_schema,
                         query_state.resolve_schema(traverse->source()));
   ARROW_ASSIGN_OR_RAISE(const auto target_schema,
@@ -24,17 +39,42 @@ arrow::Status Database::execute_traverse(
   std::vector<std::shared_ptr<WhereExpr>> where_clauses;
   std::vector<std::shared_ptr<WhereExpr>> edge_where_clauses;
   if (query.inline_where()) {
+    if (!query_state.where_plan.has_value()) {
+      return arrow::Status::Invalid("Missing WHERE plan for inline traverse");
+    }
+
+    const auto& where_plan = *query_state.where_plan;
+    if (traverse_index >= where_plan.traverse_filters.size()) {
+      return arrow::Status::Invalid("Missing WHERE traverse plan for index ",
+                                    traverse_index);
+    }
+
+    const auto& traverse_plan = where_plan.traverse_filters[traverse_index];
+    where_clauses = extract_predicates(traverse_plan.target_filters);
+    edge_where_clauses = extract_predicates(traverse_plan.edge_filters);
+    auto& stats = result.mutable_execution_stats();
+    for (const auto& predicate : traverse_plan.target_filters) {
+      stats.record_planned_predicate(PlannedPredicateSite::Traverse,
+                                     predicate.expr->toString(),
+                                     predicate.mode);
+    }
+    for (const auto& predicate : traverse_plan.edge_filters) {
+      stats.record_planned_predicate(PlannedPredicateSite::Traverse,
+                                     predicate.expr->toString(),
+                                     predicate.mode);
+    }
+  } else {
     where_clauses = get_where_to_inline(traverse->target().value(),
                                         clause_index + 1, query.clauses());
+    if (traverse->edge_alias().has_value()) {
+      edge_where_clauses = get_where_to_inline(
+          traverse->edge_alias().value(), clause_index + 1, query.clauses());
+    }
+    for (const auto& wc : where_clauses) wc->set_inlined(true);
+    for (const auto& wc : edge_where_clauses) wc->set_inlined(true);
+    result.mutable_execution_stats().num_where_clauses_inlined +=
+        where_clauses.size() + edge_where_clauses.size();
   }
-  if (traverse->edge_alias().has_value()) {
-    edge_where_clauses = get_where_to_inline(traverse->edge_alias().value(),
-                                             clause_index + 1, query.clauses());
-  }
-  for (const auto& wc : where_clauses) wc->set_inlined(true);
-  for (const auto& wc : edge_where_clauses) wc->set_inlined(true);
-  result.mutable_execution_stats().num_where_clauses_inlined +=
-      where_clauses.size() + edge_where_clauses.size();
 
   IF_DEBUG_ENABLED {
     log_debug("Processing TRAVERSE {}-({})->{}", traverse->source().toString(),
@@ -61,11 +101,14 @@ arrow::Status Database::execute_traverse(
   llvm::DenseSet<int64_t> all_target_ids;
   if (traverse->traverse_type() == TraverseType::Right ||
       traverse->traverse_type() == TraverseType::Full) {
-    all_target_ids =
-        get_ids_from_table(
-            get_table(target_schema, query_state.temporal_context.get())
-                .ValueOrDie())
-            .ValueOrDie();
+    ARROW_ASSIGN_OR_RAISE(
+        auto all_target_table,
+        get_table(target_schema, query_state.temporal_context.get()));
+    for (const auto& predicate : where_clauses) {
+      ARROW_ASSIGN_OR_RAISE(all_target_table,
+                            filter(all_target_table, *predicate, true));
+    }
+    ARROW_ASSIGN_OR_RAISE(all_target_ids, get_ids_from_table(all_target_table));
   }
 
   const bool is_self_join = source_schema == target_schema;

@@ -22,6 +22,8 @@
 
 namespace tundradb {
 
+namespace {}  // namespace
+
 /// Starting from one root node, walk the prepared query graph and emit the
 /// denormalized row variants reachable from that node.
 arrow::Result<std::shared_ptr<std::vector<std::shared_ptr<Row>>>>
@@ -260,26 +262,26 @@ arrow::Result<std::shared_ptr<std::vector<std::shared_ptr<Row>>>> populate_rows(
   std::unordered_map<std::string, TraverseType> schema_join_types;
   schema_join_types.reserve(traverses.size());
   if (traverses.empty()) {
-    schema_join_types[query_state.from.value()] = TraverseType::Left;
+    schema_join_types[query_state.root.value()] = TraverseType::Left;
   } else {
-    // FROM is always inner by default
-    schema_join_types[query_state.from.value()] = TraverseType::Inner;
+    // The root alias is always inner by default.
+    schema_join_types[query_state.root.value()] = TraverseType::Inner;
   }
 
-  // Only apply LEFT JOIN to FROM schema if the FROM schema is directly involved
-  // in a LEFT JOIN traversal
+  // Only apply LEFT JOIN to the root alias if it is directly involved in a
+  // LEFT JOIN traversal.
   for (const auto& traverse : traverses) {
-    if (traverse.source().value() == query_state.from.value() &&
+    if (traverse.source().value() == query_state.root.value() &&
         (traverse.traverse_type() == TraverseType::Left ||
          traverse.traverse_type() == TraverseType::Full)) {
-      schema_join_types[query_state.from.value()] = traverse.traverse_type();
+      schema_join_types[query_state.root.value()] = traverse.traverse_type();
       break;
     }
   }
 
   // Build ordered list of schema references to process
   std::vector<SchemaRef> ordered_schemas;
-  ordered_schemas.push_back(query_state.from);
+  ordered_schemas.push_back(query_state.root);
 
   // Add schemas from traversals in order
   for (const auto& traverse : traverses) {
@@ -456,6 +458,8 @@ arrow::Result<std::shared_ptr<arrow::Table>> Database::build_result_table(
 
   for (const auto& expr : post_where) {
     result.mutable_execution_stats().num_where_clauses_post_processed++;
+    result.mutable_execution_stats().post_processed_conditions.push_back(
+        expr->toString());
     IF_DEBUG_ENABLED { log_debug("post process where: {}", expr->toString()); }
     ARROW_ASSIGN_OR_RAISE(table, filter(table, *expr, false));
   }

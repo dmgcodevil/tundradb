@@ -276,6 +276,8 @@ std::string ComparisonExpr::toString() const {
     case ValueType::STRING:
       ss << "'" << value_.to_string() << "'";
       break;
+    default:
+      ss << "UNKNOWN";
   }
 
   if (inlined_) {
@@ -362,10 +364,12 @@ std::string ComparisonExpr::extract_first_variable() const {
   return field_ref_.variable();
 }
 
-std::set<std::string> ComparisonExpr::get_all_variables() const {
-  std::set<std::string> variables;
-  variables.insert(field_ref_.variable());
-  return variables;
+const std::set<std::string>& ComparisonExpr::get_all_variables() const {
+  if (!vars_.empty()) {
+    return vars_;
+  }
+  vars_.insert(field_ref_.variable());
+  return vars_;
 }
 
 /**
@@ -596,7 +600,10 @@ std::ostream& operator<<(std::ostream& os, const LogicalExpr& expr) {
   return os;
 }
 
-std::set<std::string> LogicalExpr::get_all_variables() const {
+const std::set<std::string>& LogicalExpr::get_all_variables() const {
+  if (!this->vars_.empty()) {
+    return this->vars_;
+  }
   std::set<std::string> variables;
   if (left_) {
     auto left_variables = left_->get_all_variables();
@@ -606,7 +613,8 @@ std::set<std::string> LogicalExpr::get_all_variables() const {
     auto right_variables = right_->get_all_variables();
     variables.insert(right_variables.begin(), right_variables.end());
   }
-  return variables;
+  this->vars_.insert(variables.begin(), variables.end());
+  return this->vars_;
 }
 
 bool LogicalExpr::can_inline(const std::string& variable) const {

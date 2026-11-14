@@ -96,7 +96,7 @@ std::shared_ptr<Database> setup_test_db() {
 
 TEST(JoinTest, MatchAll) {
   auto db = setup_test_db();
-  Query query = Query::from("u:users").build();
+  Query query = Query::match("u:users").build();
   auto query_result = db->query(query);
   ASSERT_TRUE(query_result.ok());
 
@@ -116,7 +116,7 @@ TEST(JoinTest, UserFriendCompanyInnerJoin) {
   db->connect(1, "works-at", 1).ValueOrDie();
 
   Query query =
-      Query::from("u:users")
+      Query::match("u:users")
           .traverse("u", "friend", "f:users", TraverseType::Inner)
           .traverse("f", "works-at", "c:companies", TraverseType::Inner)
           .build();
@@ -179,7 +179,7 @@ TEST(JoinTest, JoinFromSameNode) {
   db->connect(0, "friend", 1).ValueOrDie();  // alex -> bob
   db->connect(0, "friend", 2).ValueOrDie();  // alex -> jeff
 
-  Query query = Query::from("u:users")
+  Query query = Query::match("u:users")
                     .traverse("u", "friend", "f:users", TraverseType::Inner)
                     .build();
 
@@ -252,7 +252,7 @@ TEST(JoinTest, InnerJoinFromSameNodeMultiTarget) {
   db->connect(0, "works-at", 1).ValueOrDie();  // alex -> google
 
   Query query =
-      Query::from("u:users")
+      Query::match("u:users")
           .traverse("u", "friend", "f:users", TraverseType::Inner)
           .traverse("u", "works-at", "c:companies", TraverseType::Inner)
           .build();
@@ -340,7 +340,7 @@ TEST(JoinTest, InnerJoinFromSameNodeAndEndConnections) {
   db->connect(2, "works-at", 2).ValueOrDie();  // jeff -> aws
 
   Query query =
-      Query::from("u:users")
+      Query::match("u:users")
           .traverse("u", "friend", "f:users", TraverseType::Inner)
           .traverse("u", "works-at", "c:companies", TraverseType::Inner)
           .build();
@@ -430,7 +430,7 @@ TEST(JoinTest, EmptyResultFromInnerJoin) {
 
   // Query that will return no results because jeff doesn't work anywhere
   Query query =
-      Query::from("u:users")
+      Query::match("u:users")
           .traverse("u", "friend", "f1:users", TraverseType::Inner)
           .traverse("f1", "friend", "f2:users", TraverseType::Inner)
           .traverse("f2", "works-at", "c:companies", TraverseType::Inner)
@@ -465,7 +465,7 @@ TEST(JoinTest, MultiPathToSameTarget) {
 
   // Query: Find all friends of alex who work at the same company as alex
   Query query =
-      Query::from("u:users")
+      Query::match("u:users")
           .traverse("u", "friend", "f:users", TraverseType::Inner)
           .traverse("u", "works-at", "c1:companies", TraverseType::Inner)
           .traverse("f", "works-at", "c2:companies", TraverseType::Inner)
@@ -474,6 +474,7 @@ TEST(JoinTest, MultiPathToSameTarget) {
           .where(
               "c2.id", CompareOp::Eq,
               Value((int64_t)0))  // Filter for friend's company (also IBM ID 0)
+          .inline_where()
           .build();
 
   auto query_result = db->query(query);
@@ -540,7 +541,7 @@ TEST(JoinTest, CartesianProductExplosion) {
   // Query: Friends of alex and where they work
   // Results in 3 friends × ~2 companies each = ~6 rows total
   Query query =
-      Query::from("u:users")
+      Query::match("u:users")
           .traverse("u", "friend", "f:users", TraverseType::Inner)
           .traverse("f", "works-at", "c:companies", TraverseType::Inner)
           .build();
@@ -588,7 +589,7 @@ TEST(JoinTest, LeftJoin) {
 
   // LEFT JOIN: Keep all users even if they don't work at any company
   Query query =
-      Query::from("u:users")
+      Query::match("u:users")
           .traverse("u", "friend", "f:users", TraverseType::Inner)
           .traverse("f", "works-at", "c:companies", TraverseType::Left)
           .build();
@@ -688,6 +689,49 @@ TEST(JoinTest, LeftJoin) {
       << "Expected NULL for c.size in jeff's row";
 }
 
+TEST(JoinTest, LeftJoinTargetWhereFiltersFinalRows) {
+  auto db = setup_test_db();
+  db->connect(0, "friend", 1).ValueOrDie();    // alex -> bob
+  db->connect(0, "friend", 2).ValueOrDie();    // alex -> jeff
+  db->connect(1, "works-at", 1).ValueOrDie();  // bob -> google
+  db->connect(2, "works-at", 0).ValueOrDie();  // jeff -> ibm
+
+  Query query =
+      Query::match("u:users")
+          .traverse("u", "friend", "f:users", TraverseType::Inner)
+          .traverse("f", "works-at", "c:companies", TraverseType::Left)
+          .where("c.name", CompareOp::Eq, Value("google"))
+          .inline_where()
+          .build();
+
+  auto query_result = db->query(query);
+  ASSERT_TRUE(query_result.ok());
+  auto result_table = query_result.ValueOrDie()->table();
+  ASSERT_NE(result_table, nullptr);
+  ASSERT_EQ(result_table->num_rows(), 1);
+
+  auto friend_name_col = result_table->GetColumnByName("f.name");
+  auto company_name_col = result_table->GetColumnByName("c.name");
+  ASSERT_NE(friend_name_col, nullptr);
+  ASSERT_NE(company_name_col, nullptr);
+
+  int bob_index = -1;
+  for (int64_t i = 0; i < result_table->num_rows(); ++i) {
+    auto friend_name_scalar = std::static_pointer_cast<arrow::StringScalar>(
+        friend_name_col->GetScalar(i).ValueOrDie());
+    if (friend_name_scalar->view() == "bob") {
+      bob_index = static_cast<int>(i);
+    }
+  }
+
+  ASSERT_NE(bob_index, -1);
+
+  auto bob_company = std::static_pointer_cast<arrow::StringScalar>(
+      company_name_col->GetScalar(bob_index).ValueOrDie());
+  ASSERT_TRUE(bob_company->is_valid);
+  EXPECT_EQ(bob_company->ToString(), "google");
+}
+
 TEST(JoinTest, RightJoin) {
   auto db = setup_test_db();
   // Create relationships where some targets don't have matching sources
@@ -700,7 +744,7 @@ TEST(JoinTest, RightJoin) {
 
   // RIGHT JOIN: Keep all companies even if no users work there
   Query query =
-      Query::from("u:users")
+      Query::match("u:users")
           .traverse("u", "friend", "f:users", TraverseType::Inner)
           .traverse("f", "works-at", "c:companies", TraverseType::Right)
           .build();
@@ -751,7 +795,7 @@ TEST(JoinTest, CombinedJoinTypes) {
 
   // Query that combines INNER, LEFT and RIGHT joins
   Query query =
-      Query::from("u:users")
+      Query::match("u:users")
           .traverse("u", "friend", "f:users", TraverseType::Left)
           .traverse("f", "works-at", "c:companies", TraverseType::Right)
           .build();
@@ -885,7 +929,7 @@ TEST(JoinTest, MultiLevelLeftJoin) {
 
   // Multi-level LEFT JOINs: Keep all users at each level
   Query query =
-      Query::from("u:users")
+      Query::match("u:users")
           .traverse("u", "friend", "f:users", TraverseType::Left)
           .traverse("f", "works-at", "c:companies", TraverseType::Left)
           .traverse("f", "likes", "l:companies", TraverseType::Left)
@@ -1018,7 +1062,7 @@ TEST(JoinTest, SelfJoinWithLeftJoin) {
   // LEFT JOIN with self: Find all management chains, including users with no
   // manager or subordinates
   Query query =
-      Query::from("manager:users")
+      Query::match("manager:users")
           .traverse("manager", "manages", "employee:users", TraverseType::Left)
           .build();
 
@@ -1140,7 +1184,7 @@ TEST(JoinTest, FullOuterJoin) {
 
   // FULL OUTER JOIN: Keep all records from both sides
   Query query =
-      Query::from("u:users")
+      Query::match("u:users")
           .traverse("u", "friend", "f:users", TraverseType::Full)
           .traverse("f", "works-at", "c:companies", TraverseType::Full)
           .build();
@@ -1290,7 +1334,7 @@ TEST(JoinTest, SelectClauseFiltering) {
 
   // Query with SELECT - only get user (u) and friend (f) columns
   Query query =
-      Query::from("u:users")
+      Query::match("u:users")
           .traverse("u", "friend", "f:users", TraverseType::Inner)
           .traverse("f", "works-at", "c:companies", TraverseType::Inner)
           .select({"u", "f"})  // Only select u.* and f.* columns
@@ -1369,7 +1413,7 @@ TEST(JoinTest, SelectSpecificColumns) {
 
   // Query with SELECT for specific columns
   Query query =
-      Query::from("u:users")
+      Query::match("u:users")
           .traverse("u", "friend", "f:users", TraverseType::Inner)
           .select({"u.name", "f.age"})  // Only select specific columns
           .build();
@@ -1533,7 +1577,7 @@ TEST(JoinTest, MultiPatternPathThroughFriends) {
   // Run the query: MATCH (u:User)-[:FRIEND INNER]->(f:User), (f)-[:WORKS_AT
   // INNER]->(c:Company)
   Query query_custom =
-      Query::from("u:User")
+      Query::match("u:User")
           .traverse("u", "FRIEND", "f:User", TraverseType::Inner)
           .traverse("f", "WORKS_AT", "c:Company", TraverseType::Inner)
           .build();
@@ -1651,7 +1695,7 @@ TEST(JoinTest, MultiPatternWithSharedVars) {
   db->connect(2, "WORKS_AT", 1).ValueOrDie();  // Jeff -> Google (Company ID 1)
   db->connect(1, "WORKS_AT", 0).ValueOrDie();  // Bob -> IBM (Company ID 0)
 
-  Query query = Query::from("u:users")
+  Query query = Query::match("u:users")
                     .traverse("u", "FRIEND", "f:users")
                     .traverse("f", "WORKS_AT", "c:companies")
                     .traverse("u", "WORKS_AT", "c")
@@ -1727,7 +1771,7 @@ TEST(JoinTest, FullJoinFriendRelationship) {
   db->connect(0, "friend", 1).ValueOrDie();  // alex -> bob
   db->connect(0, "friend", 2).ValueOrDie();  // alex -> jeff
 
-  Query query = Query::from("u:users")
+  Query query = Query::match("u:users")
                     .traverse("u", "friend", "f:users", TraverseType::Full)
                     .build();
 

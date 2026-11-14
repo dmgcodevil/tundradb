@@ -79,7 +79,7 @@ class ArrayQueryTest : public ::testing::Test {
 
   /// Query the "Item" table and return the full Arrow table.
   std::shared_ptr<arrow::Table> query_items() {
-    auto query = Query::from("i:Item").build();
+    auto query = Query::match("i:Item").build();
     auto result = db_->query(query).ValueOrDie();
     return result->table();
   }
@@ -336,7 +336,7 @@ TEST_F(ArrayQueryTest, SequentialArrayUpdatesAccumulate) {
 }
 
 TEST_F(ArrayQueryTest, UpdateByMatchSetsArray) {
-  auto q = Query::from("i:Item")
+  auto q = Query::match("i:Item")
                .where("i.name", CompareOp::Eq, Value("Bob"s))
                .build();
   std::vector<Value> new_tags = {Value{"matched"s}};
@@ -488,7 +488,7 @@ TEST_F(ArrayQueryTest, AppendEmptyVectorIsNoop) {
 
 TEST_F(ArrayQueryTest, AppendByMatchQuery) {
   // Append "matched" to all Items where name = "Bob"
-  auto q = Query::from("i:Item")
+  auto q = Query::match("i:Item")
                .where("i.name", CompareOp::Eq, Value("Bob"s))
                .build();
   std::vector<Value> to_append = {Value{"matched"s}};
@@ -569,12 +569,12 @@ class VersionedArrayTest : public ::testing::Test {
   }
 
   std::shared_ptr<arrow::Table> query_items() {
-    auto query = Query::from("i:Item").build();
+    auto query = Query::match("i:Item").build();
     return db_->query(query).ValueOrDie()->table();
   }
 
   std::shared_ptr<arrow::Table> query_items_as_of(uint64_t valid_time) {
-    auto query = Query::from("i:Item").as_of_valid_time(valid_time).build();
+    auto query = Query::match("i:Item").as_of_valid_time(valid_time).build();
     return db_->query(query).ValueOrDie()->table();
   }
 
